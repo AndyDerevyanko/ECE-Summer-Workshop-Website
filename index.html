@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hardware &amp; Robotics Workshop · UofT</title>
+  <meta name="description" content="A free two-week UofT ECE workshop where first-years learn electronics, embedded systems, and robotics through hands-on projects." />
+
+  <!-- set the saved theme before paint so there's no flash -->
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("theme");
+        if (t) document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body class="mono">
+
+  <!-- ===== nav ===== -->
+  <nav class="nav">
+    <div class="wrap nav-inner">
+      <a href="index.html" class="brand"><img src="assets/uoft-crest.svg" class="brand-logo" alt="University of Toronto" /> Hardware &amp; Robotics Workshop</a>
+      <div class="nav-links">
+        <a href="#about">About</a>
+        <a href="#learn">What you'll learn</a>
+        <a href="#schedule">Schedule</a>
+        <a href="#prizes">Prizes</a>
+        <a href="login.html">Login</a>
+      </div>
+      <div class="nav-right">
+        <button id="themeBtn" class="theme-btn" type="button" aria-label="Toggle theme">&#9788;</button>
+        <a class="btn btn-primary" href="#" onclick="return false;">Apply now</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ===== hero ===== -->
+  <header class="hero">
+    <div class="wrap">
+      <p class="eyebrow">University of Toronto · ECE</p>
+      <h1>Design, Build and <span class="grad">Compete</span></h1>
+      <p class="lead">
+        A free, two-week workshop where UofT ECE first-year students learn analog
+        and digital electronics, embedded systems, robotics, and more through
+        hands-on projects.
+      </p>
+      <div class="hero-btns">
+        <a class="btn btn-primary apply-bob" href="#" onclick="return false;">Apply now</a>
+        <a class="btn btn-ghost" href="#learn">See what you'll build</a>
+      </div>
+
+      <!-- countdown -->
+      <div class="countdown" id="countdown">
+        <span class="cd-label">Workshop begins in</span>
+        <div class="cd-clock">
+          <div class="cd-unit"><b id="cd-d">00</b><span>days</span></div>
+          <div class="cd-unit"><b id="cd-h">00</b><span>hrs</span></div>
+          <div class="cd-unit"><b id="cd-m">00</b><span>min</span></div>
+          <div class="cd-unit"><b id="cd-s">00</b><span>sec</span></div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ===== about ===== -->
+  <section class="section" id="about">
+    <div class="wrap split">
+      <div class="reveal">
+        <h2>From circuits to robots&hellip;</h2>
+        <p class="sub">
+          Over the span of two weeks, you will go from only knowing how to build
+          basic resistor circuits from ECE110 to working with transistors, op-amps,
+          and microcontrollers to build your own line-tracing robot. Led by
+          Professor Hamid Shokrollah-Timorabadi and upper-year ECE students, you'll
+          gain hands-on experience with many of the topics covered in second year,
+          giving you a head start before the fall semester.
+        </p>
+      </div>
+      <div class="reveal grid">
+        <img class="media tall" src="assets/group_photo.jpg" alt="Students at the workshop" />
+      </div>
+    </div>
+
+    <div class="wrap grid grid-3" style="margin-top:34px">
+      <div class="ph">PHOTO: soldering a board</div>
+      <div class="ph">PHOTO: a finished robot</div>
+      <img class="media photo" src="assets/workshop_happening.jpg" alt="The workshop in action" />
+    </div>
+  </section>
+
+  <!-- ===== what you'll learn ===== -->
+  <section class="section" id="learn" style="background:var(--bg-2)">
+    <div class="reveal wrap" style="text-align:center;margin-bottom:34px">
+      <h2>You will learn about:</h2>
+      <p class="sub" style="margin:0 auto">No textbooks. You learn it by building it.</p>
+    </div>
+
+    <div class="wrap grid grid-3 reveal">
+      <div class="card">
+        <svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12h3"/><path d="M19 12h3"/><path d="M5 12c2-7 4-7 6 0s4 7 6 0"/></svg>
+        <h3>Electronics &amp; Circuit Design</h3>
+        <p class="muted">Build and debug real circuits using oscilloscopes, multimeters, function generators, and soldering equipment.</p>
+      </div>
+      <div class="card">
+        <svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h6"/><path d="M21 12h-6"/><path d="M9 7l6 5-6 5z"/><path d="M15 7v10"/></svg>
+        <h3>Transistors, Diodes, Capacitors &amp; Inductors</h3>
+        <p class="muted">Learn how fundamental electronic components work, giving you a head start in 2nd-year courses like ECE231 and ECE212.</p>
+      </div>
+      <div class="card">
+        <svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5"/><path d="M9 3v3M12 3v3M15 3v3M9 18v3M12 18v3M15 18v3M3 9h3M3 12h3M3 15h3M18 9h3M18 12h3M18 15h3"/></svg>
+        <h3>Embedded Systems</h3>
+        <p class="muted">Program an Arduino-compatible microcontroller to read sensors, generate signals, control motors, and talk to external hardware.</p>
+      </div>
+      <div class="card">
+        <svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2l9 5v10l-9 5-9-5V7z"/><path d="M12 12l9-5M12 12v10M12 12L3 7"/></svg>
+        <h3>CAD &amp; 3D Printing</h3>
+        <p class="muted">Learn the basics of Fusion 360 and 3D printing to design, manufacture, and assemble your own robot.</p>
+      </div>
+      <div class="card">
+        <svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3v18"/><path d="M6 4h13v8H6z"/><path d="M6 4h4.3v4H6zM14.7 4H19v4h-4.3zM10.3 8h4.4v4h-4.4z" fill="currentColor" stroke="none"/></svg>
+        <h3>Robotics Competition</h3>
+        <p class="muted">Bring your robot to life and race it head-to-head against the rest.</p>
+      </div>
+    </div>
+
+    <div class="wrap grid grid-2 reveal" style="margin-top:34px">
+      <video class="media video" src="assets/hand_cranK_joule_thief.MOV" autoplay muted loop playsinline preload="auto"></video>
+      <video class="media video" src="assets/robot_in_action.MOV" autoplay muted loop playsinline preload="auto"></video>
+    </div>
+  </section>
+
+  <!-- ===== schedule ===== -->
+  <section class="section" id="schedule">
+    <div class="wrap">
+      <div class="reveal" style="margin-bottom:26px">
+        <h2>ECE Workshop Schedule:</h2>
+        <p class="sub">We're keeping the details a surprise &#9786;</p>
+      </div>
+
+      <h3 style="margin-bottom:14px">Hardware</h3>
+      <div class="timeline reveal" style="margin-bottom:30px">
+        <div class="day-row"><span class="daytag">Day 1</span><div><h4>Circuit Foundations</h4><p>4 activities</p></div></div>
+        <div class="day-row"><span class="daytag">Day 2</span><div><h4>Wave Manipulation &amp; Flashing Circuits</h4><p>3 activities</p></div></div>
+        <div class="day-row"><span class="daytag">Day 3</span><div><h4>Signal Amplification</h4><p>2 activities</p></div></div>
+        <div class="day-row"><span class="daytag">Day 4</span><div><h4>Motors &amp; Magnetic Induction</h4><p>2 activities</p></div></div>
+        <div class="day-row"><span class="daytag">Day 5</span><div><h4>Power Harvesting &amp; Competition</h4><p>3 activities</p></div></div>
+      </div>
+
+      <h3 style="margin-bottom:14px">Robotics</h3>
+      <div class="timeline reveal">
+        <div class="day-row"><span class="daytag">Day 1</span><div><h4>Design &amp; 3D Modeling</h4><p>2 activities</p></div></div>
+        <div class="day-row"><span class="daytag">Day 2</span><div><h4>Mechanical Assembly &amp; Microcontrollers</h4><p>2 activities</p></div></div>
+        <div class="day-row"><span class="daytag">Day 3</span><div><h4>Electrical Integration</h4><p>2 activities</p></div></div>
+        <div class="day-row"><span class="daytag">Day 4</span><div><h4>Logic &amp; Programming</h4><p>2 activities</p></div></div>
+        <div class="day-row"><span class="daytag">Day 5</span><div><h4>Calibration &amp; Track Competition</h4><p>2 activities</p></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== logistics ===== -->
+  <section class="section-sm" style="background:var(--bg-2)">
+    <div class="wrap grid grid-4 reveal">
+      <div class="card stat"><div class="big">2 weeks</div><div class="lbl">XXX</div></div>
+      <div class="card stat"><div class="big">4 hours</div><div class="lbl">1:30pm&ndash;5:30pm</div></div>
+      <div class="card stat"><div class="big">SFB520</div><div class="lbl">Sandford Fleming</div></div>
+      <div class="card stat"><div class="big">&#10003;</div><div class="lbl">Certificate of completion</div></div>
+    </div>
+  </section>
+
+  <!-- ===== prizes ===== -->
+  <section class="section" id="prizes">
+    <div class="wrap">
+      <div class="banner reveal">
+        <h2>Race your robot on the last day
+          <svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3v18"/><path d="M6 4h13v8H6z"/><path d="M6 4h4.3v4H6zM14.7 4H19v4h-4.3zM10.3 8h4.4v4h-4.4z" fill="currentColor" stroke="none"/></svg>
+        </h2>
+        <p class="sub">
+          Everyone leaves with a certificate, and winners leave with prizes
+          <svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="9" cy="10" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="10" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="15.5" r="2"/></svg>
+        </p>
+        <a class="btn btn-primary apply-bob" href="#" onclick="return false;" style="margin-top:10px">Apply now</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== footer ===== -->
+  <footer class="footer">
+    <div class="wrap foot-grid">
+      <div>
+        <div class="brand" style="margin-bottom:6px"><img src="assets/uoft-crest.svg" class="brand-logo" alt="University of Toronto" /> Hardware &amp; Robotics Workshop</div>
+        <div>University of Toronto ECE</div>
+      </div>
+      <div>
+        <div><a href="login.html">Student login</a></div>
+        <div><a href="instructor.html">Instructor portal</a></div>
+        <div>Questions? hardware.robotics@utoronto.ca</div>
+      </div>
+    </div>
+  </footer>
+
+  <script src="js/theme.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>

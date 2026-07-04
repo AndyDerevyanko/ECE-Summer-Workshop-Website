@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Login · Hardware &amp; Robotics Workshop</title>
+
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("theme");
+        if (t) document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body class="mono">
+
+  <nav class="nav">
+    <div class="wrap nav-inner">
+      <a href="index.html" class="brand"><img src="assets/uoft-crest.svg" class="brand-logo" alt="University of Toronto" /> Hardware &amp; Robotics Workshop</a>
+      <div class="nav-links">
+        <a href="index.html#about">About</a>
+        <a href="index.html#schedule">Schedule</a>
+      </div>
+      <div class="nav-right">
+        <button id="themeBtn" class="theme-btn" type="button" aria-label="Toggle theme">&#9788;</button>
+        <a class="nav-back" href="index.html">Home</a>
+      </div>
+    </div>
+  </nav>
+
+  <main class="auth-wrap">
+    <div class="auth-card">
+      <h1>Welcome back :)</h1>
+      <p class="sub">Log in to get to your workshop dashboard.</p>
+
+      <!-- accounts removed for now, login goes straight in -->
+      <!-- ===== signup (disabled for now) =====
+      <form id="signupForm" style="display:none">
+        <div class="note">
+          Anyone can make an account, but workshop content stays locked until we
+          approve your spot. We'll email you once you're in.
+        </div>
+        <div class="field">
+          <label for="suName">Full name</label>
+          <input id="suName" type="text" autocomplete="name" placeholder="Ada Lovelace" />
+        </div>
+        <div class="field">
+          <label for="suEmail">Email</label>
+          <input id="suEmail" type="email" autocomplete="email" placeholder="you@mail.utoronto.ca" />
+        </div>
+        <div class="field">
+          <label for="suPass">Password</label>
+          <input id="suPass" type="password" autocomplete="new-password" placeholder="6+ characters" />
+        </div>
+        <button class="btn btn-primary" type="submit">Create account</button>
+        <p class="form-msg" id="signupMsg"></p>
+      </form>
+      ===== end signup ===== -->
+
+      <!-- ===== login ===== -->
+      <form id="loginForm">
+        <div class="field">
+          <label for="liEmail">Email</label>
+          <input id="liEmail" type="email" autocomplete="email" placeholder="you@mail.utoronto.ca" />
+        </div>
+        <div class="field">
+          <label for="liPass">Password</label>
+          <input id="liPass" type="password" autocomplete="current-password" placeholder="••••••" />
+        </div>
+        <button class="btn btn-primary" type="submit">Log in</button>
+        <p class="form-msg" id="loginMsg"></p>
+      </form>
+
+      <p class="auth-switch">Don't have an account? <a href="#" onclick="return false;">Sign up</a></p>
+    </div>
+
+    <p class="auth-legal"><a href="#">Privacy Policy</a> · <a href="#">Terms of Service</a></p>
+  </main>
+
+  <script src="js/theme.js"></script>
+  <script src="js/login.js"></script>
+</body>
+</html>

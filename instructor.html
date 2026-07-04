@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Instructor Portal · Hardware &amp; Robotics Workshop</title>
+
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("theme");
+        if (t) document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body class="mono">
+
+  <nav class="nav">
+    <div class="wrap nav-inner">
+      <a href="index.html" class="brand"><img src="assets/uoft-crest.svg" class="brand-logo" alt="University of Toronto" /> Hardware &amp; Robotics Workshop</a>
+      <div class="nav-right">
+        <button id="themeBtn" class="theme-btn" type="button" aria-label="Toggle theme">&#9788;</button>
+        <a class="nav-back" href="index.html">Home</a>
+      </div>
+    </div>
+  </nav>
+
+  <main class="wrap">
+    <div class="filler">
+      <svg class="big-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin:0 auto"><path d="M12 3l9 16H3z"/><path d="M12 9v5"/><path d="M12 17h.01"/></svg>
+      <p class="eyebrow">Instructor portal</p>
+      <h1 style="font-size:1.9rem">Content manager, coming soon</h1>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div class="wrap">Hardware &amp; Robotics Workshop · instructor area (placeholder)</div>
+  </footer>
+
+  <script src="js/theme.js"></script>
+</body>
+</html>

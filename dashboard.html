@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>My Dashboard · Hardware &amp; Robotics Workshop</title>
+
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("theme");
+        if (t) document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body class="mono">
+
+  <nav class="nav">`
+    <div class="wrap nav-inner">
+      <a href="index.html" class="brand"><img src="assets/uoft-crest.svg" class="brand-logo" alt="University of Toronto" /> Hardware &amp; Robotics Workshop</a>
+      <div class="nav-links">
+        <a href="#days">My week</a>
+        <a href="#resources">Resources</a>
+      </div>
+      <div class="nav-right">
+        <button id="themeBtn" class="theme-btn" type="button" aria-label="Toggle theme">&#9788;</button>`
+        <button class="btn btn-ghost" id="logoutBtn" type="button">Log out</button>
+      </div>
+    </div>
+  </nav>
+
+  <!-- shown if you're not "logged in" -->
+  <div class="gate" id="dashGate" style="display:none">
+    <div class="big-emoji" style="font-size:1.5rem;font-family:var(--font-mono)">[ locked ]</div>
+    <h2>You need to log in</h2>
+    <p class="muted">This page is only for approved workshop students.</p>
+    <a class="btn btn-primary" href="login.html">Go to login</a>
+  </div>
+
+  <!-- the actual dashboard -->
+  <main id="dashApp" style="display:none">
+    <section class="dash-head">
+      <div class="wrap">
+        <p class="eyebrow">Your dashboard</p>
+        <h1>Let's get to work.</h1>
+        <p class="muted">New content reveals every morning. Show up to see what's next!</p>
+
+        <div class="progress-wrap">
+          <div class="progress-bar"><i id="progFill"></i></div>
+          <div class="progress-label" id="progLabel">Loading your progress&hellip;</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section-sm" id="days">
+      <div class="wrap">
+        <h2 style="font-size:1.4rem;margin-bottom:18px">The week</h2>
+        <div class="grid grid-3" id="dayGrid">
+          <!-- filled in by dashboard.js -->
+        </div>
+      </div>
+    </section>
+
+    <section class="section-sm" id="resources" style="background:var(--bg-2)">
+      <div class="wrap">
+        <h2 style="font-size:1.4rem;margin-bottom:6px"><svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg> Resources</h2>
+        <p class="muted" style="margin-top:0;margin-bottom:18px">
+          All your downloads in one place. New files appear as each day unlocks.
+        </p>
+        <div class="res-list" id="resList">
+          <!-- filled in by dashboard.js -->
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="wrap">Hardware &amp; Robotics Workshop · University of Toronto</div>
+  </footer>
+
+  <script src="js/theme.js"></script>
+  <script src="js/dashboard.js"></script>
+</body>
+</html>

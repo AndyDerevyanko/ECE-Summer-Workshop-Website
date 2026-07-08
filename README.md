@@ -15,8 +15,6 @@
 - [Features](#-features)
 - [Pages](#-pages)
 - [Built With](#-built-with)
-- [Getting Started](#-getting-started)
-- [Status](#-status)
 
 ## ❓ About
 

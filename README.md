@@ -18,7 +18,7 @@
 
 ## ❓ About
 
-<img src="assets/uoft-crest.svg" width="120" align="left">
+<img src="assets/logo.png" width="120" align="left">
 
 ECE Workshops is a University of Toronto ECE program where first-year students go from basic resistor circuits to building their own line-tracing robot. Over two weeks they work with transistors, op-amps, and microcontrollers, pick up CAD and 3D printing, and finish by racing their robots.
 

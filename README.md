@@ -1,7 +1,7 @@
-<h1 align="center">🤖 Hardware & Robotics Workshop 🔌</h1>
+<h1 align="center">🤖 ECE Workshops 🔌</h1>
 
 <p align="center">
-  A website for the University of Toronto's summer Hardware & Robotics Workshop, a free two-week program where ECE first-years learn analog and digital electronics, embedded systems, and robotics through hands-on projects. This is the coded version of a design that started as a Canva sketch.
+  A website for the University of Toronto's summer ECE Workshops, a free two-week program where ECE first-years learn analog and digital electronics, embedded systems, and robotics through hands-on projects. This is the coded version of a design that started as a Canva sketch.
   <br />
   <br />
   <a href="https://github.com/AndyDerevyanko/ECE-Summer-Workshop-Website/issues">Report Bug</a>
@@ -20,7 +20,7 @@
 
 <img src="assets/uoft-crest.svg" width="120" align="left">
 
-The Hardware & Robotics Workshop is a University of Toronto ECE program where first-year students go from basic resistor circuits to building their own line-tracing robot. Over two weeks they work with transistors, op-amps, and microcontrollers, pick up CAD and 3D printing, and finish by racing their robots.
+ECE Workshops is a University of Toronto ECE program where first-year students go from basic resistor circuits to building their own line-tracing robot. Over two weeks they work with transistors, op-amps, and microcontrollers, pick up CAD and 3D printing, and finish by racing their robots.
 
 This repository is the front-end for that workshop: a landing page to explain the program, a student login, and a dashboard template for daily content.
 

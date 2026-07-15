@@ -1,5 +1,5 @@
 ﻿/* ============================================================
-   hardware & robotics workshop - main stylesheet
+   ece workshops - main stylesheet
    one file for the whole site
    theme: uoft institutional navy
    fonts: archivo (headings/brand), inter (ui)
@@ -142,7 +142,7 @@ h1, h2, h3 {
   position: sticky;
   top: 0;
   z-index: 50;
-  background: var(--surface);
+  background: var(--surface-2);
 }
 .nav-inner {
   display: flex;

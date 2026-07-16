@@ -218,6 +218,11 @@ h1, h2, h3 {
   transition: transform .2s ease;
 }
 .theme-btn:hover { color: var(--accent); }
+/* sun shows in dark mode, moon in light, swapped by [data-theme] */
+.tic { width: 18px; height: 18px; }
+.tic.moon { display: none; }
+[data-theme="light"] .tic.sun { display: none; }
+[data-theme="light"] .tic.moon { display: block; }
 
 /* ---------- hero ---------- */
 .hero {
@@ -362,6 +367,18 @@ h1, h2, h3 {
   margin: 0 auto;
   justify-self: center;
   object-fit: contain;
+}
+/* learn section clip row: verticals at their natural width on the outer
+   edges (lined up with the cards above), the landscape middle clip
+   stretches to fill the space between them at full height, sides cropped.
+   the mobile breakpoints below still collapse this via .grid-3 */
+.vid-row { grid-template-columns: auto 1fr auto; }
+.vid-row .media.video:first-child { margin: 0; justify-self: start; }
+.vid-row .media.video:last-child  { margin: 0; justify-self: end; }
+.vid-row .media.video.wide {
+  width: 100%;
+  justify-self: stretch;
+  object-fit: cover;
 }
 
 /* ---------- about / text + image ---------- */

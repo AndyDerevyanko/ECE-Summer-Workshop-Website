@@ -14,8 +14,7 @@
   function updateIcon(t) {
     var btn = document.getElementById("themeBtn");
     if (!btn) return;
-    //theme icon
-    btn.textContent = t === "dark" ? "☼" : "☾";
+    /* css swaps the sun/moon svg via [data-theme] */
     btn.setAttribute("aria-label", t === "dark" ? "Switch to light mode" : "Switch to dark mode");
   }
 

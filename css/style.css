@@ -76,6 +76,22 @@ body {
 
 img { max-width: 100%; display: block; }
 
+/* huge faint logo behind the hero, scrolls with the page.
+   pulled up so the visible part starts a bit below the 64px nav
+   (the top of the png is a soft glow you can't see at this opacity) */
+.bg-logo {
+  position: absolute;
+  top: -100px;
+  left: 50%;
+  width: min(1400px, 100%);
+  max-width: none;
+  transform: translateX(-50%);
+  opacity: .05;
+  pointer-events: none;
+  user-select: none;
+  z-index: 0;
+}
+
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 

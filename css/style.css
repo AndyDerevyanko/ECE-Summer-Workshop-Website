@@ -312,6 +312,16 @@ h1, h2, h3 {
   text-transform: uppercase;
   color: var(--muted);
 }
+/* tba variant shown while dates aren't set */
+.cd-tba { flex-direction: row; align-items: center; gap: 20px; }
+.cd-cal { width: 44px; height: 44px; color: var(--accent); flex: none; }
+.cd-tba .cd-label.accent { color: var(--accent); }
+.cd-tba-txt {
+  display: block;
+  font-family: var(--font-head);
+  font-size: 1.45rem;
+  margin-top: 2px;
+}
 
 /* ---------- generic cards / grids ---------- */
 .grid { display: grid; gap: 22px; }

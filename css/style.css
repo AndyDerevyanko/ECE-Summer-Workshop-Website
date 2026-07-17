@@ -880,6 +880,11 @@ h1, h2, h3 {
 .ta-file button:hover { color: var(--text); }
 .ta-file button svg { width: 12px; height: 12px; }
 .ta-upload { cursor: pointer; }
+.tf-ic { width: 12px; height: 12px; flex: none; color: var(--muted); }
+.ta-link-row { display: flex; gap: 8px; margin-top: 10px; }
+.ta-link-row input { flex: 1; padding: 10px 12px; border-radius: 9px; border: none; background: var(--surface-2); color: var(--text); font-family: var(--font-body); font-size: .88rem; }
+.ta-link-row input:focus { outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
+.ta-link-row .btn { padding: 10px 16px; }
 /* .field label/input rules hit these too, needs the extra specificity */
 .field .ta-radio {
   display: flex;
@@ -896,6 +901,15 @@ h1, h2, h3 {
   flex-wrap: wrap;
   margin-top: 10px;
 }
+.ta-live {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 22px;
+  margin-bottom: 14px;
+}
+.ta-live .countdown { margin: 0; }
+.ta-live-stat { max-width: 220px; margin-top: 14px; padding: 18px; }
 @media (max-width: 700px) {
   .ta-row { grid-template-columns: 1fr; }
 }

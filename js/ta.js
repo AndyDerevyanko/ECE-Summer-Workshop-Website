@@ -29,6 +29,26 @@ var X_SVG =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
   'stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
 
+var LINK_SVG_BTN =
+  '<svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M9 17H7a5 5 0 0 1 0-10h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8"/></svg>';
+
+var LINK_SVG_CHIP =
+  '<svg class="tf-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M9 17H7a5 5 0 0 1 0-10h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8"/></svg>';
+
+var FILE_SVG_CHIP =
+  '<svg class="tf-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v5h5"/></svg>';
+
+/* attachments are either a plain filename string or a {type:"link", value} object */
+function isLink(item) { return item && typeof item === "object" && item.type === "link"; }
+function itemLabel(item) { return isLink(item) ? item.value : item; }
+function itemIcon(item) { return isLink(item) ? LINK_SVG_CHIP : FILE_SVG_CHIP; }
+
 /* only ta keys get in here */
 function gateCheck() {
   var ok = localStorage.getItem("session") && localStorage.getItem("role") === "ta";
@@ -46,7 +66,7 @@ function renderPanels() {
 
   STATE.days.forEach(function (d, i) {
     var chips = d.files.map(function (f, j) {
-      return '<span class="ta-file">' + f +
+      return '<span class="ta-file">' + itemIcon(f) + itemLabel(f) +
         '<button class="p-frm" data-f="' + j + '" type="button" aria-label="Remove file">' +
         X_SVG + '</button></span>';
     }).join("");
@@ -68,7 +88,8 @@ function renderPanels() {
           '<div class="field"><label>Opens at</label>' +
             '<input type="datetime-local" class="p-open" value="' + d.opens_at + '"></div>' +
           '<div class="field"><label>&nbsp;</label>' +
-            '<button class="btn btn-primary p-now" type="button">Open right now</button></div>' +
+            '<button class="btn btn-primary p-now" type="button">' +
+              (d.unlocked ? 'Close right now' : 'Open right now') + '</button></div>' +
         '</div>' +
         '<div class="field"><label>Title</label>' +
           '<input type="text" class="p-title" value="' + d.title + '"></div>' +
@@ -79,7 +100,12 @@ function renderPanels() {
           '<label class="btn btn-ghost ta-upload">' +
             '<svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
             'stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>' +
-            ' Add file<input type="file" class="p-file" multiple hidden></label>' +
+            ' Add file<input type="file" class="p-file" multiple hidden></label> ' +
+          '<button class="btn btn-ghost p-link-btn" type="button">' + LINK_SVG_BTN + ' Add link</button>' +
+          '<div class="ta-link-row p-link-row" style="display:none">' +
+            '<input type="url" class="p-link-input" placeholder="https://...">' +
+            '<button class="btn btn-primary p-link-add" type="button">Add</button>' +
+          '</div>' +
         '</div>' +
       '</div>';
   });
@@ -98,9 +124,14 @@ function renderPanels() {
     p.querySelector(".p-blurb").addEventListener("input", function () { d.blurb = this.value; });
 
     p.querySelector(".p-now").addEventListener("click", function () {
-      if (!confirm("Open Day " + d.day + " for students right now?")) return;
-      d.unlocked = true;
-      d.opens_at = nowLocal();
+      if (d.unlocked) {
+        if (!confirm("Close Day " + d.day + " for students right now?")) return;
+        d.unlocked = false;
+      } else {
+        if (!confirm("Open Day " + d.day + " for students right now?")) return;
+        d.unlocked = true;
+        d.opens_at = nowLocal();
+      }
       renderPanels();
     });
 
@@ -121,6 +152,23 @@ function renderPanels() {
         renderPanels();
       });
     });
+
+    var linkRow = p.querySelector(".p-link-row");
+    var linkInput = p.querySelector(".p-link-input");
+    p.querySelector(".p-link-btn").addEventListener("click", function () {
+      linkRow.style.display = "flex";
+      linkInput.focus();
+    });
+    function addPanelLink() {
+      var v = linkInput.value.trim();
+      if (!v) return;
+      d.files.push({ type: "link", value: v });
+      renderPanels();
+    }
+    p.querySelector(".p-link-add").addEventListener("click", addPanelLink);
+    linkInput.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); addPanelLink(); }
+    });
   });
 }
 
@@ -135,7 +183,8 @@ function renderExtras() {
   STATE.extras.forEach(function (f, i) {
     rows +=
       '<div class="res-row">' +
-        '<span><span class="rname">' + f + '</span></span>' +
+        itemIcon(f) +
+        '<span class="rname">' + itemLabel(f) + '</span>' +
         '<button class="btn btn-ghost e-rm" data-f="' + i + '" type="button">Remove</button>' +
       '</div>';
   });
@@ -180,6 +229,25 @@ document.addEventListener("DOMContentLoaded", function () {
     for (var k = 0; k < this.files.length; k++) STATE.extras.push(this.files[k].name);
     this.value = "";
     renderExtras();
+  });
+
+  var extraLinkRow = document.getElementById("extraLinkRow");
+  var extraLinkInput = document.getElementById("extraLinkInput");
+  document.getElementById("extraLinkBtn").addEventListener("click", function () {
+    extraLinkRow.style.display = "flex";
+    extraLinkInput.focus();
+  });
+  function addExtraLink() {
+    var v = extraLinkInput.value.trim();
+    if (!v) return;
+    STATE.extras.push({ type: "link", value: v });
+    extraLinkInput.value = "";
+    extraLinkRow.style.display = "none";
+    renderExtras();
+  }
+  document.getElementById("extraLinkAdd").addEventListener("click", addExtraLink);
+  extraLinkInput.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); addExtraLink(); }
   });
 
   document.querySelectorAll('input[name="cdMode"]').forEach(function (r) {

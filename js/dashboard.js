@@ -1,19 +1,26 @@
-/* dashboard: renders day panels from the vars below */
-/* no backend yet, but these vars are shaped the way the backend will feed us */
+/* dashboard: renders day panels from content fetched off /api/content */
 
-/* full length of the workshop, drives the progress denominator */
+/* full length of the workshop, drives the progress denominator. fixed by
+   the workshop schedule, not something the ta portal edits. */
 var TOTAL_DAYS = 10;
 
-/* one entry per panel the tas have made so far. panels with no content */
-/* render as a locked "available soon" card. opens_at is an iso datetime */
-/* the backend will fill in, unlocked flips true once it passes. */
-var DAYS = [
-  { day: 1, date: "", opens_at: "", unlocked: false, title: "", blurb: "", files: [] },
-  { day: 2, date: "", opens_at: "", unlocked: false, title: "", blurb: "", files: [] }
-];
-
-/* extra attachments section, tas manage this list from their portal */
+/* filled in by loadContent() before renderDays()/renderExtras() run */
+var DAYS = [];
 var EXTRAS = [];
+
+/* attachments are a plain filename string (legacy), a {type:"link", value}
+   object, or a {type:"file", name, url} object for an uploaded file */
+function isLink(item) { return item && typeof item === "object" && item.type === "link"; }
+function itemHref(item) {
+  if (isLink(item)) return item.value;
+  if (item && typeof item === "object") return item.url;
+  return "#";
+}
+function itemLabel(item) {
+  if (isLink(item)) return item.value;
+  if (item && typeof item === "object") return item.name;
+  return item;
+}
 
 var LOCK_SVG =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
@@ -65,7 +72,7 @@ function renderDays() {
     }
     unlockedCount++;
     var chips = day.files.map(function (f) {
-      return '<a class="chip" href="#" onclick="return false;">&darr; ' + f + '</a>';
+      return '<a class="chip" href="' + itemHref(f) + '" target="_blank" rel="noopener">&darr; ' + itemLabel(f) + '</a>';
     }).join("");
     html +=
       '<div class="day-card">' +
@@ -108,8 +115,10 @@ function renderExtras() {
   EXTRAS.forEach(function (f) {
     rows +=
       '<div class="res-row">' +
-        '<span><span class="rname">' + f + '</span></span>' +
-        '<a class="btn btn-ghost" href="#" onclick="return false;">Download</a>' +
+        '<span><span class="rname">' + itemLabel(f) + '</span></span>' +
+        '<a class="btn btn-ghost" href="' + itemHref(f) + '" target="_blank" rel="noopener">' +
+          (isLink(f) ? "Open" : "Download") +
+        '</a>' +
       '</div>';
   });
   list.innerHTML = rows;
@@ -118,6 +127,7 @@ function renderExtras() {
 function logout() {
   localStorage.removeItem("session");
   localStorage.removeItem("role");
+  localStorage.removeItem("token");
   window.location.href = "login.html";
 }
 
@@ -127,7 +137,13 @@ document.addEventListener("DOMContentLoaded", function () {
   if (logoutBtn) logoutBtn.addEventListener("click", logout);
   if (!session) return;
 
-  var unlocked = renderDays();
-  renderProgress(unlocked);
-  renderExtras();
+  fetch("/api/content")
+    .then(function (res) { return res.json(); })
+    .then(function (data) {
+      DAYS = data.days;
+      EXTRAS = data.extras;
+      var unlocked = renderDays();
+      renderProgress(unlocked);
+      renderExtras();
+    });
 });

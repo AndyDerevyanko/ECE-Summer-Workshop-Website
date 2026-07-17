@@ -1,13 +1,82 @@
-// landing page countdown, disabled while the start date is tbd
-// (hero shows the "to be announced" box instead, see index.html.
-//  uncomment this and the countdown markup when dates are locked)
+/* landing page: countdown + workshop dates, both driven by whatever the
+   ta portal last saved (see /api/content). scroll-reveal and the hero
+   floaties were removed earlier, this file is countdown-only now. */
 
-// function setCountdown() {
-//   var ids = ["cd-d", "cd-h", "cd-m", "cd-s"];
-//   for (var i = 0; i < ids.length; i++) {
-//     var el = document.getElementById(ids[i]);
-//     if (el) el.textContent = "99";
-//   }
-// }
-//
-// document.addEventListener("DOMContentLoaded", setCountdown);
+var CD_TBA_HTML =
+  '<div class="countdown cd-tba">' +
+    '<svg class="cd-cal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<rect x="3" y="5" width="18" height="16" rx="2" /><path d="M3 9h18M8 3v4M16 3v4" /></svg>' +
+    '<div><span class="cd-label accent">Date and time</span>' +
+    '<b class="cd-tba-txt">To be announced</b></div>' +
+  '</div>';
+
+var CD_CLOCK_HTML =
+  '<div class="countdown" id="countdown">' +
+    '<span class="cd-label">Workshop begins in</span>' +
+    '<div class="cd-clock">' +
+      '<div class="cd-unit"><b id="cd-d">00</b><span>days</span></div>' +
+      '<div class="cd-unit"><b id="cd-h">00</b><span>hrs</span></div>' +
+      '<div class="cd-unit"><b id="cd-m">00</b><span>min</span></div>' +
+      '<div class="cd-unit"><b id="cd-s">00</b><span>sec</span></div>' +
+    '</div>' +
+  '</div>';
+
+function formatDateRange(start, end) {
+  var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  var s = new Date(start + "T00:00:00");
+  var e = new Date(end + "T00:00:00");
+  return months[s.getMonth()] + " " + s.getDate() + " to " +
+    months[e.getMonth()] + " " + e.getDate() + ", " + e.getFullYear();
+}
+
+/* counts down to target (an iso datetime string), updates the clock digits every second */
+function startCountdown(target) {
+  var targetMs = new Date(target).getTime();
+
+  function tick() {
+    var diff = targetMs - Date.now();
+    if (diff < 0) diff = 0;
+    var d = Math.floor(diff / 86400000);
+    var h = Math.floor((diff % 86400000) / 3600000);
+    var m = Math.floor((diff % 3600000) / 60000);
+    var s = Math.floor((diff % 60000) / 1000);
+    var p = function (x) { return (x < 10 ? "0" : "") + x; };
+    var dEl = document.getElementById("cd-d");
+    var hEl = document.getElementById("cd-h");
+    var mEl = document.getElementById("cd-m");
+    var sEl = document.getElementById("cd-s");
+    if (dEl) dEl.textContent = p(d);
+    if (hEl) hEl.textContent = p(h);
+    if (mEl) mEl.textContent = p(m);
+    if (sEl) sEl.textContent = p(s);
+  }
+
+  tick();
+  setInterval(tick, 1000);
+}
+
+document.addEventListener("DOMContentLoaded", function () {
+  var slot = document.getElementById("heroCountdown");
+  var datesLbl = document.getElementById("datesLbl");
+  if (!slot) return;
+
+  fetch("/api/content")
+    .then(function (res) { return res.json(); })
+    .then(function (data) {
+      if (data.timer_mode === "actual" && data.timer_target) {
+        slot.innerHTML = CD_CLOCK_HTML;
+        startCountdown(data.timer_target);
+      } else {
+        slot.innerHTML = CD_TBA_HTML;
+      }
+
+      if (datesLbl) {
+        datesLbl.textContent = (data.date_mode === "confirmed" && data.start_date && data.end_date) ?
+          formatDateRange(data.start_date, data.end_date) : "Tentative start date";
+      }
+    })
+    .catch(function () {
+      slot.innerHTML = CD_TBA_HTML;
+    });
+});

@@ -1,5 +1,5 @@
-/* ta portal. everything edits the STATE object below and nothing else. */
-/* the backend will eventually read STATE, for now it just lives in memory. */
+/* ta portal. everything edits the in-memory STATE object below; loaded from
+   and saved to /api/content, which is the single source of truth. */
 
 function seed() {
   return {
@@ -295,6 +295,7 @@ document.addEventListener("DOMContentLoaded", function () {
   if (logoutBtn) logoutBtn.addEventListener("click", function () {
     localStorage.removeItem("session");
     localStorage.removeItem("role");
+    localStorage.removeItem("token");
     window.location.href = "login.html";
   });
   if (!gateCheck()) return;
@@ -367,16 +368,36 @@ document.addEventListener("DOMContentLoaded", function () {
   document.getElementById("dateStart").addEventListener("input", function () { STATE.start_date = this.value; renderPreview(); });
   document.getElementById("dateEnd").addEventListener("input", function () { STATE.end_date = this.value; renderPreview(); });
 
-  /* apply and save don't go anywhere yet, the backend will take STATE later */
-  document.getElementById("taApply").addEventListener("click", function () {});
-  document.getElementById("taSave").addEventListener("click", function () {});
+  function saveContent() {
+    showMsg("Saving...", true);
+    fetch("/api/content", {
+      method: "POST",
+      headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+      body: JSON.stringify(STATE)
+    })
+      .then(function (res) {
+        if (!res.ok) throw new Error("save failed");
+        showMsg("Saved. Students will see this now.", true);
+      })
+      .catch(function () {
+        showMsg("Couldn't save. Check you're still logged in and try again.", false);
+      });
+  }
+
+  document.getElementById("taApply").addEventListener("click", saveContent);
+  document.getElementById("taSave").addEventListener("click", saveContent);
 
   document.getElementById("taReset").addEventListener("click", function () {
-    if (!confirm("Reset everything back to how it was? This throws away your edits.")) return;
-    STATE = seed();
-    renderPanels();
-    renderExtras();
-    syncLanding();
-    renderPreview();
+    if (!confirm("Reset everything back to how it was last saved? This throws away your edits.")) return;
+    fetch("/api/content")
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        STATE = data;
+        renderPanels();
+        renderExtras();
+        syncLanding();
+        renderPreview();
+        showMsg("Reset to the last saved version.", true);
+      });
   });
 });

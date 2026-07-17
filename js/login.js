@@ -24,6 +24,7 @@
       .then(function (data) {
         localStorage.setItem("session", data.username);
         localStorage.setItem("role", data.role);
+        localStorage.setItem("token", data.token);
         window.location.href = data.role === "ta" ? "instructor.html" : "dashboard.html";
       })
       .catch(function () {

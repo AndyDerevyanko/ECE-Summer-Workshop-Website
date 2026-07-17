@@ -3,8 +3,13 @@
 import hashlib
 import hmac
 import os
+import secrets
 
 ITERATIONS = 200_000
+
+
+def generate_token():
+    return secrets.token_hex(24)
 
 
 def hash_password(password):

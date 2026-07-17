@@ -18,6 +18,31 @@ function seed() {
 
 var STATE = seed();
 
+function authHeaders() {
+  return { "Authorization": "Bearer " + (localStorage.getItem("token") || "") };
+}
+
+function showMsg(text, ok) {
+  var el = document.getElementById("taMsg");
+  if (!el) return;
+  el.textContent = text;
+  el.className = "form-msg " + (ok ? "ok" : "err");
+}
+
+/* uploads one file, resolves to the {type:"file", name, url} attachment entry */
+function uploadFile(file) {
+  var fd = new FormData();
+  fd.append("file", file);
+  return fetch("/api/upload", { method: "POST", headers: authHeaders(), body: fd })
+    .then(function (res) {
+      if (!res.ok) throw new Error("upload failed");
+      return res.json();
+    })
+    .then(function (data) {
+      return { type: "file", name: data.name, url: data.url };
+    });
+}
+
 /* datetime-local wants local time, toISOString gives utc */
 function nowLocal() {
   var n = new Date();
@@ -45,9 +70,14 @@ var FILE_SVG_CHIP =
   'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
   '<path d="M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v5h5"/></svg>';
 
-/* attachments are either a plain filename string or a {type:"link", value} object */
+/* attachments are a plain filename string (legacy), a {type:"link", value}
+   object, or a {type:"file", name, url} object for an uploaded file */
 function isLink(item) { return item && typeof item === "object" && item.type === "link"; }
-function itemLabel(item) { return isLink(item) ? item.value : item; }
+function itemLabel(item) {
+  if (isLink(item)) return item.value;
+  if (item && typeof item === "object") return item.name;
+  return item;
+}
 function itemIcon(item) { return isLink(item) ? LINK_SVG_CHIP : FILE_SVG_CHIP; }
 
 /* same markup as the hero on index.html, tba box vs the (still stubbed) real clock */
@@ -184,8 +214,18 @@ function renderPanels() {
     });
 
     p.querySelector(".p-file").addEventListener("change", function () {
-      for (var k = 0; k < this.files.length; k++) d.files.push(this.files[k].name);
-      renderPanels();
+      var files = Array.prototype.slice.call(this.files);
+      if (!files.length) return;
+      showMsg("Uploading...", true);
+      Promise.all(files.map(uploadFile))
+        .then(function (items) {
+          items.forEach(function (it) { d.files.push(it); });
+          showMsg("Uploaded. Don't forget to save your changes.", true);
+          renderPanels();
+        })
+        .catch(function () {
+          showMsg("Couldn't upload one of the files. Try again.", false);
+        });
     });
 
     p.querySelectorAll(".p-frm").forEach(function (btn) {
@@ -259,10 +299,22 @@ document.addEventListener("DOMContentLoaded", function () {
   });
   if (!gateCheck()) return;
 
-  renderPanels();
-  renderExtras();
-  syncLanding();
-  renderPreview();
+  fetch("/api/content")
+    .then(function (res) { return res.json(); })
+    .then(function (data) {
+      STATE = data;
+      renderPanels();
+      renderExtras();
+      syncLanding();
+      renderPreview();
+    })
+    .catch(function () {
+      showMsg("Couldn't load saved content, showing defaults.", false);
+      renderPanels();
+      renderExtras();
+      syncLanding();
+      renderPreview();
+    });
 
   document.getElementById("addPanel").addEventListener("click", function () {
     var next = STATE.days.length ? STATE.days[STATE.days.length - 1].day + 1 : 1;
@@ -271,9 +323,19 @@ document.addEventListener("DOMContentLoaded", function () {
   });
 
   document.getElementById("extraFile").addEventListener("change", function () {
-    for (var k = 0; k < this.files.length; k++) STATE.extras.push(this.files[k].name);
+    var files = Array.prototype.slice.call(this.files);
     this.value = "";
-    renderExtras();
+    if (!files.length) return;
+    showMsg("Uploading...", true);
+    Promise.all(files.map(uploadFile))
+      .then(function (items) {
+        items.forEach(function (it) { STATE.extras.push(it); });
+        showMsg("Uploaded. Don't forget to save your changes.", true);
+        renderExtras();
+      })
+      .catch(function () {
+        showMsg("Couldn't upload one of the files. Try again.", false);
+      });
   });
 
   var extraLinkRow = document.getElementById("extraLinkRow");

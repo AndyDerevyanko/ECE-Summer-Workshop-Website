@@ -460,6 +460,112 @@ h1, h2, h3 {
   border-radius: 12px;
 }
 
+/* ---------- 2026 gallery ---------- */
+/* gallery cta on the landing page, burst lines flank the button */
+.gal-cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+.cta-lines {
+  width: 26px;
+  height: 26px;
+  color: var(--accent);
+  flex: none;
+}
+.cta-lines.flip { transform: scaleX(-1); }
+
+/* ---------- gallery viewer ---------- */
+.gv {
+  display: flex;
+  gap: 16px;
+  align-items: stretch;
+}
+.gv-years {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.gv-year {
+  border: none;
+  padding: 12px 18px;
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--muted);
+  font-family: var(--font-head);
+  font-weight: 600;
+  font-size: .95rem;
+  cursor: pointer;
+}
+.gv-year:hover { color: var(--text); }
+.gv-year.active {
+  background: var(--accent);
+  color: #fff;
+}
+.gv-stage {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: min(66vh, 600px);
+  background: var(--surface);
+  border-radius: var(--radius);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.gv-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  cursor: pointer;
+}
+/* the img reset above sets display:block, which beats the ua hidden rule */
+.gv-img[hidden] { display: none; }
+.gv-arrow {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: none;
+  background: var(--surface-2);
+  color: var(--text);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  z-index: 2;
+}
+.gv-arrow svg { width: 20px; height: 20px; }
+.gv-arrow:hover {
+  background: var(--accent);
+  color: #fff;
+}
+.gv-prev { left: 14px; }
+.gv-next { right: 14px; }
+.gv-count {
+  position: absolute;
+  right: 14px;
+  bottom: 12px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: .85rem;
+  z-index: 2;
+}
+.gv-hint {
+  margin-top: 12px;
+  font-size: .88rem;
+}
+@media (max-width: 700px) {
+  .gv { flex-direction: column; }
+  .gv-years { flex-direction: row; }
+  .gv-stage { height: 55vh; }
+}
+
 /* ---------- footer ---------- */
 .footer {
   border-top: 1px solid var(--border);

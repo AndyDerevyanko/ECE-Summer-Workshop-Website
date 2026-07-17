@@ -113,27 +113,29 @@
 
         <div class="ta-live">
           <span class="badge today">Live view</span>
-          <p class="muted" style="margin:8px 0 14px">What's currently showing on the main page:</p>
-          <div class="countdown cd-tba">
-            <svg class="cd-cal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
-              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <rect x="3" y="5" width="18" height="16" rx="2" />
-              <path d="M3 9h18M8 3v4M16 3v4" />
-            </svg>
-            <div>
-              <span class="cd-label accent">Date and time</span>
-              <b class="cd-tba-txt">To be announced</b>
+          <p class="muted" style="margin:8px 0 14px">Students will see this when changes applied.</p>
+          <div class="ta-live-preview">
+            <div class="countdown cd-tba">
+              <svg class="cd-cal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="3" y="5" width="18" height="16" rx="2" />
+                <path d="M3 9h18M8 3v4M16 3v4" />
+              </svg>
+              <div>
+                <span class="cd-label accent">Date and time</span>
+                <b class="cd-tba-txt">To be announced</b>
+              </div>
             </div>
-          </div>
-          <div class="card stat ta-live-stat">
-            <div class="big">2 weeks</div>
-            <div class="lbl">Tentative start date</div>
+            <div class="card stat ta-live-stat">
+              <div class="big">2 weeks</div>
+              <div class="lbl">Tentative start date</div>
+            </div>
           </div>
         </div>
 
         <div class="ta-card">
           <div class="field">
-            <label>Hero timer</label>
+            <label>Countdown timer</label>
             <label class="ta-radio"><input type="radio" name="cdMode" value="tentative" checked>
               Tentative, shows "To be announced"</label>
             <label class="ta-radio"><input type="radio" name="cdMode" value="actual">
@@ -144,6 +146,13 @@
               <label for="cdTarget">Counts down to</label>
               <input id="cdTarget" type="datetime-local">
             </div>
+          </div>
+          <div class="field">
+            <label>Workshop dates</label>
+            <label class="ta-radio"><input type="radio" name="dateMode" value="tentative" checked>
+              Tentative, shows "Tentative start date"</label>
+            <label class="ta-radio"><input type="radio" name="dateMode" value="confirmed">
+              Confirmed, shows the date range</label>
           </div>
           <div class="ta-row">
             <div class="field">

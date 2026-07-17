@@ -10,6 +10,7 @@ function seed() {
     extras: [],
     timer_mode: "tentative", /* tentative | actual */
     timer_target: "",
+    date_mode: "tentative", /* tentative | confirmed */
     start_date: "",
     end_date: ""
   };
@@ -202,6 +203,8 @@ function syncLanding() {
   var radios = document.querySelectorAll('input[name="cdMode"]');
   radios.forEach(function (r) { r.checked = r.value === STATE.timer_mode; });
   document.getElementById("cdTarget").value = STATE.timer_target;
+  var dateRadios = document.querySelectorAll('input[name="dateMode"]');
+  dateRadios.forEach(function (r) { r.checked = r.value === STATE.date_mode; });
   document.getElementById("dateStart").value = STATE.start_date;
   document.getElementById("dateEnd").value = STATE.end_date;
 }
@@ -254,6 +257,9 @@ document.addEventListener("DOMContentLoaded", function () {
     r.addEventListener("change", function () { STATE.timer_mode = this.value; });
   });
   document.getElementById("cdTarget").addEventListener("input", function () { STATE.timer_target = this.value; });
+  document.querySelectorAll('input[name="dateMode"]').forEach(function (r) {
+    r.addEventListener("change", function () { STATE.date_mode = this.value; });
+  });
   document.getElementById("dateStart").addEventListener("input", function () { STATE.start_date = this.value; });
   document.getElementById("dateEnd").addEventListener("input", function () { STATE.end_date = this.value; });
 

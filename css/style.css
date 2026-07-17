@@ -908,8 +908,9 @@ h1, h2, h3 {
   padding: 22px;
   margin-bottom: 14px;
 }
-.ta-live .countdown { margin: 0; }
-.ta-live-stat { max-width: 220px; margin-top: 14px; padding: 18px; }
+.ta-live-preview { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+.ta-live-preview .countdown { margin: 0; flex: none; }
+.ta-live-stat { max-width: 220px; margin-top: 0; padding: 18px; }
 @media (max-width: 700px) {
   .ta-row { grid-template-columns: 1fr; }
 }

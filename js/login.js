@@ -1,5 +1,4 @@
-/* login checks username + password against the pregenerated pairs in keys.js */
-/* all local, no server. which list you're in decides student vs ta. */
+/* login posts to /api/login, which checks the hashed credentials in the database */
 
 (function () {
   var loginForm = document.getElementById("loginForm");
@@ -13,25 +12,22 @@
     var user = (userEl && userEl.value.trim()) || "";
     var pass = (passEl && passEl.value) || "";
 
-    /* keys.js is gitignored, so a fresh clone won't have it */
-    if (typeof STUDENTS === "undefined" || typeof TAS === "undefined") {
-      if (msg) msg.textContent = "Login list missing, ask the coordinator for keys.js.";
-      return;
-    }
-
-    if (TAS[user] === pass) {
-      localStorage.setItem("session", user);
-      localStorage.setItem("role", "ta");
-      window.location.href = "instructor.html";
-      return;
-    }
-    if (STUDENTS[user] === pass) {
-      localStorage.setItem("session", user);
-      localStorage.setItem("role", "student");
-      window.location.href = "dashboard.html";
-      return;
-    }
-
-    if (msg) msg.textContent = "Wrong username or password. Check with your TA.";
+    fetch("/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: user, password: pass })
+    })
+      .then(function (res) {
+        if (!res.ok) throw new Error("bad login");
+        return res.json();
+      })
+      .then(function (data) {
+        localStorage.setItem("session", data.username);
+        localStorage.setItem("role", data.role);
+        window.location.href = data.role === "ta" ? "instructor.html" : "dashboard.html";
+      })
+      .catch(function () {
+        if (msg) msg.textContent = "Wrong username or password. Check with your TA.";
+      });
   });
 })();

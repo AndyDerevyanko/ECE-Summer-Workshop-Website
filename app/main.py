@@ -1,12 +1,13 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 
-from app.db import init_db
+from app.db import init_db, verify_login
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -24,6 +25,19 @@ app.mount("/js", StaticFiles(directory=BASE_DIR / "js"), name="js")
 app.mount("/assets", StaticFiles(directory=BASE_DIR / "assets"), name="assets")
 
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/api/login")
+def api_login(payload: LoginRequest):
+    role = verify_login(payload.username, payload.password)
+    if role is None:
+        raise HTTPException(status_code=401, detail="Wrong username or password.")
+    return {"username": payload.username, "role": role}
 
 
 @app.get("/")

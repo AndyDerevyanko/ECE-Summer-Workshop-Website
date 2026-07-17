@@ -2,3 +2,9 @@ CLAUDE.md
 
 # pregenerated access keys, never commit these
 js/keys.js
+
+# backend
+.venv/
+__pycache__/
+*.pyc
+data/

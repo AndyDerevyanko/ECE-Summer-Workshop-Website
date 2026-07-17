@@ -50,6 +50,47 @@ function isLink(item) { return item && typeof item === "object" && item.type ===
 function itemLabel(item) { return isLink(item) ? item.value : item; }
 function itemIcon(item) { return isLink(item) ? LINK_SVG_CHIP : FILE_SVG_CHIP; }
 
+/* same markup as the hero on index.html, tba box vs the (still stubbed) real clock */
+var CD_TBA_HTML =
+  '<div class="countdown cd-tba">' +
+    '<svg class="cd-cal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<rect x="3" y="5" width="18" height="16" rx="2" /><path d="M3 9h18M8 3v4M16 3v4" /></svg>' +
+    '<div><span class="cd-label accent">Date and time</span>' +
+    '<b class="cd-tba-txt">To be announced</b></div>' +
+  '</div>';
+
+var CD_CLOCK_HTML =
+  '<div class="countdown">' +
+    '<span class="cd-label">Workshop begins in</span>' +
+    '<div class="cd-clock">' +
+      '<div class="cd-unit"><b>99</b><span>days</span></div>' +
+      '<div class="cd-unit"><b>99</b><span>hrs</span></div>' +
+      '<div class="cd-unit"><b>99</b><span>min</span></div>' +
+      '<div class="cd-unit"><b>99</b><span>sec</span></div>' +
+    '</div>' +
+  '</div>';
+
+function formatDateRange(start, end) {
+  if (!start || !end) return "No dates set yet";
+  var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  var s = new Date(start + "T00:00:00");
+  var e = new Date(end + "T00:00:00");
+  return months[s.getMonth()] + " " + s.getDate() + " to " +
+    months[e.getMonth()] + " " + e.getDate() + ", " + e.getFullYear();
+}
+
+/* mirrors STATE back into the "current selection" preview box */
+function renderPreview() {
+  var slot = document.getElementById("previewCountdown");
+  if (!slot) return;
+  slot.innerHTML = STATE.timer_mode === "actual" ? CD_CLOCK_HTML : CD_TBA_HTML;
+
+  var lbl = document.getElementById("previewStatLbl");
+  lbl.textContent = STATE.date_mode === "confirmed" ?
+    formatDateRange(STATE.start_date, STATE.end_date) : "Tentative start date";
+}
+
 /* only ta keys get in here */
 function gateCheck() {
   var ok = localStorage.getItem("session") && localStorage.getItem("role") === "ta";
@@ -221,6 +262,7 @@ document.addEventListener("DOMContentLoaded", function () {
   renderPanels();
   renderExtras();
   syncLanding();
+  renderPreview();
 
   document.getElementById("addPanel").addEventListener("click", function () {
     var next = STATE.days.length ? STATE.days[STATE.days.length - 1].day + 1 : 1;
@@ -254,14 +296,14 @@ document.addEventListener("DOMContentLoaded", function () {
   });
 
   document.querySelectorAll('input[name="cdMode"]').forEach(function (r) {
-    r.addEventListener("change", function () { STATE.timer_mode = this.value; });
+    r.addEventListener("change", function () { STATE.timer_mode = this.value; renderPreview(); });
   });
   document.getElementById("cdTarget").addEventListener("input", function () { STATE.timer_target = this.value; });
   document.querySelectorAll('input[name="dateMode"]').forEach(function (r) {
-    r.addEventListener("change", function () { STATE.date_mode = this.value; });
+    r.addEventListener("change", function () { STATE.date_mode = this.value; renderPreview(); });
   });
-  document.getElementById("dateStart").addEventListener("input", function () { STATE.start_date = this.value; });
-  document.getElementById("dateEnd").addEventListener("input", function () { STATE.end_date = this.value; });
+  document.getElementById("dateStart").addEventListener("input", function () { STATE.start_date = this.value; renderPreview(); });
+  document.getElementById("dateEnd").addEventListener("input", function () { STATE.end_date = this.value; renderPreview(); });
 
   /* apply and save don't go anywhere yet, the backend will take STATE later */
   document.getElementById("taApply").addEventListener("click", function () {});
@@ -273,5 +315,6 @@ document.addEventListener("DOMContentLoaded", function () {
     renderPanels();
     renderExtras();
     syncLanding();
+    renderPreview();
   });
 });

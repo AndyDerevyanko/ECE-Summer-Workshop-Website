@@ -112,23 +112,12 @@
         </p>
 
         <div class="ta-live">
-          <span class="badge today">Live view</span>
-          <p class="muted" style="margin:8px 0 14px">Students will see this when changes applied.</p>
+          <p class="muted" style="margin:0 0 14px;font-weight:600">This is what your current selection looks like:</p>
           <div class="ta-live-preview">
-            <div class="countdown cd-tba">
-              <svg class="cd-cal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
-                stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <rect x="3" y="5" width="18" height="16" rx="2" />
-                <path d="M3 9h18M8 3v4M16 3v4" />
-              </svg>
-              <div>
-                <span class="cd-label accent">Date and time</span>
-                <b class="cd-tba-txt">To be announced</b>
-              </div>
-            </div>
+            <div id="previewCountdown"></div>
             <div class="card stat ta-live-stat">
               <div class="big">2 weeks</div>
-              <div class="lbl">Tentative start date</div>
+              <div class="lbl" id="previewStatLbl">Tentative start date</div>
             </div>
           </div>
         </div>

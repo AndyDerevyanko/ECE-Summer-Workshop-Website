@@ -1,1 +1,4 @@
 CLAUDE.md
+
+# pregenerated access keys, never commit these
+js/keys.js

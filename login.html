@@ -53,12 +53,12 @@
       <!-- accounts removed for now, login goes straight in -->
       <form id="loginForm">
         <div class="field">
-          <label for="liEmail">Email</label>
-          <input id="liEmail" type="email" autocomplete="email" placeholder="you@mail.utoronto.ca" />
+          <label for="liUser">Username</label>
+          <input id="liUser" type="text" autocomplete="username" placeholder="the username you were given" />
         </div>
         <div class="field">
           <label for="liPass">Password</label>
-          <input id="liPass" type="password" autocomplete="current-password" placeholder="••••••" />
+          <input id="liPass" type="password" autocomplete="current-password" placeholder="and its password" />
         </div>
         <button class="btn btn-primary" type="submit">Log in</button>
         <p class="form-msg" id="loginMsg"></p>
@@ -71,6 +71,7 @@
   </main>
 
   <script src="js/theme.js"></script>
+  <script src="js/keys.js"></script>
   <script src="js/login.js"></script>
 </body>
 </html>

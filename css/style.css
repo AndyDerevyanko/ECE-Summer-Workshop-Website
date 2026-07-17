@@ -658,8 +658,9 @@ h1, h2, h3 {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
 }
 .auth-card .btn { width: 100%; justify-content: center; margin-top: 4px; }
-.auth-switch { text-align: center; margin-top: 20px; font-size: .88rem; color: var(--muted); }
-.auth-switch a { font-weight: 600; }
+.auth-note { text-align: center; margin: 20px 0 0; }
+.auth-note a { color: var(--accent); font-weight: 600; }
+.auth-note a:hover { text-decoration: underline; }
 /* tiny official-looking legal line under the card */
 .auth-legal {
   text-align: center;

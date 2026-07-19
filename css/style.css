@@ -817,6 +817,7 @@ h1, h2, h3 {
   border-radius: 12px;
 }
 .res-row .ricon { font-size: 1.3rem; }
+.res-row .iic { width: 18px; height: 18px; color: var(--muted); flex: none; }
 .res-row .rname { font-weight: 600; }
 .res-row .rmeta { color: var(--muted); font-size: .82rem; }
 .res-row .btn { margin-left: auto; }
@@ -836,6 +837,10 @@ h1, h2, h3 {
   padding: 22px;
   margin-bottom: 14px;
 }
+/* a couple of cards (total workshop days, the landing-page live preview)
+   are settings/summary boxes rather than editable fields like the rest,
+   shade them a step lighter so they stand out from the surrounding cards */
+.ta-card-hl { background: var(--surface-2); }
 .ta-panel-head {
   display: flex;
   align-items: center;
@@ -927,7 +932,7 @@ h1, h2, h3 {
 .prof-btns .btn { margin-left: 0; }
 .prof-btns .btn[disabled] { opacity: .5; cursor: default; }
 .ta-live {
-  background: var(--surface);
+  background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 22px;

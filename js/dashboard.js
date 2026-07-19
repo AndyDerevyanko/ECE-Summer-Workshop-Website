@@ -23,6 +23,51 @@ function itemLabel(item) {
   return item;
 }
 
+var LINK_SVG =
+  '<svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M9 17H7a5 5 0 0 1 0-10h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8"/></svg>';
+
+var IMAGE_SVG =
+  '<svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/>' +
+  '<path d="M21 15l-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></svg>';
+
+var DOC_SVG =
+  '<svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>' +
+  '<path d="M14 2v6h6"/><path d="M8 13h8M8 17h8"/></svg>';
+
+var SLIDES_SVG =
+  '<svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M2 3h20"/><path d="M21 3v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V3"/><path d="M7 21l5-5 5 5"/></svg>';
+
+var FILE_SVG =
+  '<svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v5h5"/></svg>';
+
+var IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "avif", "tiff", "heic"];
+var DOC_EXTS = ["pdf", "doc", "docx", "txt", "rtf", "odt", "pages"];
+var SLIDES_EXTS = ["ppt", "pptx", "key", "odp"];
+
+/* picks an icon off the file extension in the attachment's name (or the
+   filename itself, for the legacy plain-string shape). falls back to a
+   generic file glyph for anything not recognized (zip, mp3, xlsx, etc). */
+function itemIcon(item) {
+  if (isLink(item)) return LINK_SVG;
+  var name = itemLabel(item) || "";
+  var m = /\.([a-z0-9]+)$/i.exec(name);
+  var ext = m ? m[1].toLowerCase() : "";
+  if (IMAGE_EXTS.indexOf(ext) !== -1) return IMAGE_SVG;
+  if (DOC_EXTS.indexOf(ext) !== -1) return DOC_SVG;
+  if (SLIDES_EXTS.indexOf(ext) !== -1) return SLIDES_SVG;
+  return FILE_SVG;
+}
+
 var LOCK_SVG =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
   'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
@@ -79,7 +124,7 @@ function renderDays() {
     }
     unlockedCount++;
     var chips = day.files.map(function (f) {
-      return '<a class="chip" href="' + itemHref(f) + '" target="_blank" rel="noopener">&darr; ' + itemLabel(f) + '</a>';
+      return '<a class="chip" href="' + itemHref(f) + '" target="_blank" rel="noopener">' + itemIcon(f) + ' ' + itemLabel(f) + '</a>';
     }).join("");
     html +=
       '<div class="day-card">' +
@@ -122,6 +167,7 @@ function renderExtras() {
   EXTRAS.forEach(function (f) {
     rows +=
       '<div class="res-row">' +
+        itemIcon(f) +
         '<span><span class="rname">' + itemLabel(f) + '</span></span>' +
         '<a class="btn btn-ghost" href="' + itemHref(f) + '" target="_blank" rel="noopener">' +
           (isLink(f) ? "Open" : "Download") +

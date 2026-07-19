@@ -101,6 +101,13 @@ var FILE_SVG_CHIP =
   'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
   '<path d="M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v5h5"/></svg>';
 
+/* three-node share glyph, next to "shared" on a profile row */
+var SHARE_SVG_CHIP =
+  '<svg class="tf-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<circle cx="6" cy="12" r="2.4"/><circle cx="18" cy="6" r="2.4"/><circle cx="18" cy="18" r="2.4"/>' +
+  '<path d="M8.2 10.8l7.6-3.6M8.2 13.2l7.6 3.6"/></svg>';
+
 /* attachments are a plain filename string (legacy), a {type:"link", value}
    object, or a {type:"file", name, url} object for an uploaded file */
 function isLink(item) { return item && typeof item === "object" && item.type === "link"; }
@@ -535,7 +542,7 @@ function renderProfiles() {
   var list = document.getElementById("profileList");
   if (!list) return;
   if (!PROFILES.length) {
-    list.innerHTML = '<p class="muted"><strong>No profiles yet.</strong> "Save to profile" above makes one out of whatever is in the editor.</p>';
+    list.innerHTML = '<p class="muted"><strong>No profiles yet.</strong></p>';
     return;
   }
 
@@ -548,7 +555,7 @@ function renderProfiles() {
     } else {
       html += '<span class="rname">' + profileLabel(p) + '</span>';
     }
-    if (p.shared) html += '<span class="badge today">Shared</span>';
+    if (p.shared) html += '<span class="shared-flag" title="Every TA can see and edit this profile">' + SHARE_SVG_CHIP + 'shared</span>';
     html += '<span class="prof-btns">' +
       '<button class="btn btn-ghost pr-edit" type="button"' + (open ? " disabled" : "") + '>' +
       (open ? "Editing" : "Edit") + '</button>';

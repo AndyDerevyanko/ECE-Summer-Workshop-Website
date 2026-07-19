@@ -108,20 +108,19 @@
       <div class="wrap">
         <h2 style="font-size:1.4rem;margin-bottom:6px">Landing page</h2>
         <p class="muted" style="margin-top:0;margin-bottom:18px">
-          Controls countdown timer and workshop date range shown on main page.
+          Controls the countdown timer, the info tiles, and the footer contact line shown on the main page.
         </p>
 
         <div class="ta-live">
           <p class="muted" style="margin:0 0 14px;font-weight:600">This is what your current selection looks like:</p>
           <div class="ta-live-preview">
             <div id="previewCountdown"></div>
-            <div class="card stat ta-live-stat">
-              <div class="big" id="previewWeeksBig">2 weeks</div>
-              <div class="lbl" id="previewStatLbl">Tentative start date</div>
-            </div>
           </div>
           <div class="grid grid-4" id="previewLogistics" style="margin-top:14px">
-            <!-- filled in by ta.js, mirrors the extra tiles below -->
+            <!-- filled in by ta.js, mirrors the tiles below -->
+          </div>
+          <div class="card ta-live-stat" style="margin-top:14px;max-width:none">
+            <div class="lbl" id="previewContact">Questions? hardware.robotics@utoronto.ca</div>
           </div>
         </div>
 
@@ -139,32 +138,11 @@
               <input id="cdTarget" type="datetime-local">
             </div>
           </div>
-          <div class="field">
-            <label>Workshop dates</label>
-            <label class="ta-radio"><input type="radio" name="dateMode" value="tentative" checked>
-              Tentative, shows "Tentative start date"</label>
-            <label class="ta-radio"><input type="radio" name="dateMode" value="confirmed">
-              Confirmed, shows the date range</label>
-          </div>
-          <div class="ta-row">
-            <div class="field">
-              <label for="dateStart">Workshop start date</label>
-              <input id="dateStart" type="date">
-            </div>
-            <div class="field">
-              <label for="dateEnd">Workshop end date</label>
-              <input id="dateEnd" type="date">
-            </div>
-          </div>
-          <div class="field">
-            <label for="weeksLabelInput">First tile big text</label>
-            <input id="weeksLabelInput" type="text" placeholder="2 weeks">
-          </div>
         </div>
 
         <div class="ta-card">
           <div class="field">
-            <label>Other info tiles</label>
+            <label>Info tiles</label>
           </div>
           <div id="logisticsList">
             <!-- filled in by ta.js -->
@@ -174,6 +152,13 @@
               stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
             New tile
           </button>
+        </div>
+
+        <div class="ta-card">
+          <div class="field">
+            <label for="contactInput">Footer contact line</label>
+            <input id="contactInput" type="text" placeholder="Questions? hardware.robotics@utoronto.ca">
+          </div>
         </div>
 
         <div class="ta-actions">

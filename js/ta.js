@@ -10,11 +10,9 @@ function seed() {
     extras: [],
     timer_mode: "tentative", /* tentative | actual */
     timer_target: "",
-    date_mode: "tentative", /* tentative | confirmed */
-    start_date: "",
-    end_date: "",
-    weeks_label: "2 weeks",
+    contact_text: "Questions? hardware.robotics@utoronto.ca",
     logistics: [
+      { big: "2 weeks", lbl: "Tentative start date", icon: false },
       { big: "4 hours", lbl: "1:30pm–5:30pm", icon: false },
       { big: "SFB520", lbl: "Sandford Fleming", icon: false },
       { big: "", lbl: "Certificate of completion", icon: true }
@@ -22,11 +20,28 @@ function seed() {
   };
 }
 
-/* fills in fields that may be missing from content saved before these
-   were added, so older saved blobs don't blow up the ta portal */
+/* fills in fields that may be missing from content saved before these were
+   added (or before the workshop-dates tile got folded into the generic
+   logistics list), so older saved blobs don't blow up the ta portal */
 function normalizeState() {
-  if (!STATE.weeks_label) STATE.weeks_label = "2 weeks";
-  if (!STATE.logistics) STATE.logistics = seed().logistics;
+  var oldDatesLbl = (STATE.date_mode === "confirmed" && STATE.start_date && STATE.end_date) ?
+    formatDateRange(STATE.start_date, STATE.end_date) : "Tentative start date";
+  var oldWeeksBig = STATE.weeks_label || "2 weeks";
+  var hadDateFields = STATE.weeks_label !== undefined || STATE.date_mode !== undefined;
+
+  if (!Array.isArray(STATE.logistics) || !STATE.logistics.length) {
+    STATE.logistics = seed().logistics;
+    STATE.logistics[0].big = oldWeeksBig;
+    STATE.logistics[0].lbl = oldDatesLbl;
+  } else if (hadDateFields) {
+    STATE.logistics.unshift({ big: oldWeeksBig, lbl: oldDatesLbl, icon: false });
+  }
+
+  delete STATE.weeks_label;
+  delete STATE.date_mode;
+  delete STATE.start_date;
+  delete STATE.end_date;
+  if (STATE.contact_text === undefined) STATE.contact_text = "Questions? hardware.robotics@utoronto.ca";
 }
 
 var STATE = seed();
@@ -179,18 +194,14 @@ function renderPreview() {
   slot.innerHTML = showClock ? CD_CLOCK_HTML : CD_TBA_HTML;
   if (showClock) tickPreviewCountdown(STATE.timer_target);
 
-  var lbl = document.getElementById("previewStatLbl");
-  lbl.textContent = STATE.date_mode === "confirmed" ?
-    formatDateRange(STATE.start_date, STATE.end_date) : "Tentative start date";
-
-  var weeksBig = document.getElementById("previewWeeksBig");
-  if (weeksBig) weeksBig.textContent = STATE.weeks_label || "2 weeks";
-
   var logisticsSlot = document.getElementById("previewLogistics");
   if (logisticsSlot) {
     logisticsSlot.innerHTML = "";
     STATE.logistics.forEach(function (t) { logisticsSlot.appendChild(logisticsPreviewTile(t)); });
   }
+
+  var contactPreview = document.getElementById("previewContact");
+  if (contactPreview) contactPreview.textContent = STATE.contact_text;
 }
 
 /* only ta keys get in here */
@@ -403,11 +414,7 @@ function syncLanding() {
   var radios = document.querySelectorAll('input[name="cdMode"]');
   radios.forEach(function (r) { r.checked = r.value === STATE.timer_mode; });
   document.getElementById("cdTarget").value = STATE.timer_target;
-  var dateRadios = document.querySelectorAll('input[name="dateMode"]');
-  dateRadios.forEach(function (r) { r.checked = r.value === STATE.date_mode; });
-  document.getElementById("dateStart").value = STATE.start_date;
-  document.getElementById("dateEnd").value = STATE.end_date;
-  document.getElementById("weeksLabelInput").value = STATE.weeks_label;
+  document.getElementById("contactInput").value = STATE.contact_text;
 }
 
 document.addEventListener("DOMContentLoaded", function () {
@@ -491,12 +498,7 @@ document.addEventListener("DOMContentLoaded", function () {
     r.addEventListener("change", function () { STATE.timer_mode = this.value; renderPreview(); });
   });
   document.getElementById("cdTarget").addEventListener("input", function () { STATE.timer_target = this.value; renderPreview(); });
-  document.querySelectorAll('input[name="dateMode"]').forEach(function (r) {
-    r.addEventListener("change", function () { STATE.date_mode = this.value; renderPreview(); });
-  });
-  document.getElementById("dateStart").addEventListener("input", function () { STATE.start_date = this.value; renderPreview(); });
-  document.getElementById("dateEnd").addEventListener("input", function () { STATE.end_date = this.value; renderPreview(); });
-  document.getElementById("weeksLabelInput").addEventListener("input", function () { STATE.weeks_label = this.value; renderPreview(); });
+  document.getElementById("contactInput").addEventListener("input", function () { STATE.contact_text = this.value; renderPreview(); });
 
   function saveContent() {
     showMsg("Saving...", true);

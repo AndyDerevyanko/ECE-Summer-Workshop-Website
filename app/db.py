@@ -27,11 +27,9 @@ DEFAULT_CONTENT = {
     "extras": [],
     "timer_mode": "tentative",
     "timer_target": "",
-    "date_mode": "tentative",
-    "start_date": "",
-    "end_date": "",
-    "weeks_label": "2 weeks",
+    "contact_text": "Questions? hardware.robotics@utoronto.ca",
     "logistics": [
+        {"big": "2 weeks", "lbl": "Tentative start date", "icon": False},
         {"big": "4 hours", "lbl": "1:30pm–5:30pm", "icon": False},
         {"big": "SFB520", "lbl": "Sandford Fleming", "icon": False},
         {"big": "", "lbl": "Certificate of completion", "icon": True},

@@ -15,8 +15,7 @@ var CHECK_ICON_SVG =
   '<svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" ' +
   'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12.5l5 5L20 6.5" /></svg>';
 
-/* builds one extra logistics tile (the "4 hours", "SFB520", certificate, etc
-   ones), same markup as the hardcoded first tile in the html */
+/* builds one logistics tile ("2 weeks", "4 hours", "SFB520", certificate, etc) */
 function logisticsTile(t) {
   var card = document.createElement("div");
   card.className = "card stat";
@@ -43,12 +42,34 @@ var CD_CLOCK_HTML =
     '</div>' +
   '</div>';
 
+/* used if /api/content can't be reached, same shape/values as DEFAULT_CONTENT in app/db.py */
+var DEFAULT_LOGISTICS = [
+  { big: "2 weeks", lbl: "Tentative start date", icon: false },
+  { big: "4 hours", lbl: "1:30pm–5:30pm", icon: false },
+  { big: "SFB520", lbl: "Sandford Fleming", icon: false },
+  { big: "", lbl: "Certificate of completion", icon: true }
+];
+var DEFAULT_CONTACT = "Questions? hardware.robotics@utoronto.ca";
+
 function formatDateRange(start, end) {
   var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   var s = new Date(start + "T00:00:00");
   var e = new Date(end + "T00:00:00");
   return months[s.getMonth()] + " " + s.getDate() + " to " +
     months[e.getMonth()] + " " + e.getDate() + ", " + e.getFullYear();
+}
+
+/* content saved before the workshop-dates tile got folded into the generic
+   logistics list has no "logistics" key at all, just the old date_mode/
+   weeks_label fields. build a first tile out of those so the real saved
+   dates don't disappear on students until a ta re-saves from the portal. */
+function resolveLogistics(data) {
+  if (data.logistics) return data.logistics;
+  var lbl = (data.date_mode === "confirmed" && data.start_date && data.end_date) ?
+    formatDateRange(data.start_date, data.end_date) : "Tentative start date";
+  var tiles = DEFAULT_LOGISTICS.slice();
+  tiles[0] = { big: data.weeks_label || "2 weeks", lbl: lbl, icon: false };
+  return tiles;
 }
 
 /* counts down to target (an iso datetime string), updates the clock digits every second */
@@ -79,10 +100,15 @@ function startCountdown(target) {
 
 document.addEventListener("DOMContentLoaded", function () {
   var slot = document.getElementById("heroCountdown");
-  var datesLbl = document.getElementById("datesLbl");
-  var weeksLbl = document.getElementById("weeksLbl");
   var grid = document.getElementById("logisticsGrid");
+  var contactLine = document.getElementById("contactLine");
   if (!slot) return;
+
+  function renderTiles(list) {
+    if (!grid) return;
+    grid.innerHTML = "";
+    list.forEach(function (t) { grid.appendChild(logisticsTile(t)); });
+  }
 
   fetch("/api/content")
     .then(function (res) { return res.json(); })
@@ -94,18 +120,12 @@ document.addEventListener("DOMContentLoaded", function () {
         slot.innerHTML = CD_TBA_HTML;
       }
 
-      if (datesLbl) {
-        datesLbl.textContent = (data.date_mode === "confirmed" && data.start_date && data.end_date) ?
-          formatDateRange(data.start_date, data.end_date) : "Tentative start date";
-      }
-
-      if (weeksLbl) weeksLbl.textContent = data.weeks_label || "2 weeks";
-
-      if (grid && data.logistics) {
-        data.logistics.forEach(function (t) { grid.appendChild(logisticsTile(t)); });
-      }
+      renderTiles(resolveLogistics(data));
+      if (contactLine) contactLine.textContent = data.contact_text || DEFAULT_CONTACT;
     })
     .catch(function () {
       slot.innerHTML = CD_TBA_HTML;
+      renderTiles(DEFAULT_LOGISTICS);
+      if (contactLine) contactLine.textContent = DEFAULT_CONTACT;
     });
 });

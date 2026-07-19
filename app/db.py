@@ -7,6 +7,12 @@ from pathlib import Path
 
 from app.security import generate_token, hash_password, verify_password
 
+try:
+    from app.seed_accounts import SEED_STUDENTS, SEED_TAS
+except ImportError:
+    # gitignored file missing (fresh clone), no accounts get seeded
+    SEED_STUDENTS, SEED_TAS = {}, {}
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = BASE_DIR / "data" / "app.db"
 UPLOAD_DIR = BASE_DIR / "data" / "uploads"
@@ -24,40 +30,12 @@ DEFAULT_CONTENT = {
     "date_mode": "tentative",
     "start_date": "",
     "end_date": "",
-}
-
-# seeded into the users table once, if it's empty. same accounts that used
-# to live in the gitignored js/keys.js, kept the same for now per the coordinator.
-SEED_STUDENTS = {
-    "student01": "mkq4-vd72",
-    "student02": "xh31-pw95",
-    "student03": "qn85-rj20",
-    "student04": "bt40-vs67",
-    "student05": "fc17-zk93",
-    "student06": "ky63-hg54",
-    "student07": "gw28-td81",
-    "student08": "dp54-cr36",
-    "student09": "rb09-nm72",
-    "student10": "mx71-sl48",
-    "student11": "lq36-fh25",
-    "student12": "hz82-jv60",
-    "student13": "vk47-dt19",
-    "student14": "tn93-yc84",
-    "student15": "cw15-qb37",
-    "student16": "bg60-ls52",
-    "student17": "sf24-vp78",
-    "student18": "pd78-gm41",
-    "student19": "mr35-xk96",
-    "student20": "kt81-aw03",
-    "student21": "wj46-un59",
-    "student22": "nc92-eq14",
-    "student23": "qh57-oz88",
-    "student24": "zl03-bf26",
-    "student25": "vf68-rk50",
-}
-SEED_TAS = {
-    "ta-1": "sfb520-mn84",
-    "ta-2": "sfb520-wd61",
+    "weeks_label": "2 weeks",
+    "logistics": [
+        {"big": "4 hours", "lbl": "1:30pm–5:30pm", "icon": False},
+        {"big": "SFB520", "lbl": "Sandford Fleming", "icon": False},
+        {"big": "", "lbl": "Certificate of completion", "icon": True},
+    ],
 }
 
 

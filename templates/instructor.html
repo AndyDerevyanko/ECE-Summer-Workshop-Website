@@ -116,9 +116,12 @@
           <div class="ta-live-preview">
             <div id="previewCountdown"></div>
             <div class="card stat ta-live-stat">
-              <div class="big">2 weeks</div>
+              <div class="big" id="previewWeeksBig">2 weeks</div>
               <div class="lbl" id="previewStatLbl">Tentative start date</div>
             </div>
+          </div>
+          <div class="grid grid-4" id="previewLogistics" style="margin-top:14px">
+            <!-- filled in by ta.js, mirrors the extra tiles below -->
           </div>
         </div>
 
@@ -153,6 +156,24 @@
               <input id="dateEnd" type="date">
             </div>
           </div>
+          <div class="field">
+            <label for="weeksLabelInput">First tile big text</label>
+            <input id="weeksLabelInput" type="text" placeholder="2 weeks">
+          </div>
+        </div>
+
+        <div class="ta-card">
+          <div class="field">
+            <label>Other info tiles</label>
+          </div>
+          <div id="logisticsList">
+            <!-- filled in by ta.js -->
+          </div>
+          <button class="btn btn-ghost" id="addLogistics" type="button">
+            <svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+            New tile
+          </button>
         </div>
 
         <div class="ta-actions">

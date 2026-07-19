@@ -12,8 +12,21 @@ function seed() {
     timer_target: "",
     date_mode: "tentative", /* tentative | confirmed */
     start_date: "",
-    end_date: ""
+    end_date: "",
+    weeks_label: "2 weeks",
+    logistics: [
+      { big: "4 hours", lbl: "1:30pm–5:30pm", icon: false },
+      { big: "SFB520", lbl: "Sandford Fleming", icon: false },
+      { big: "", lbl: "Certificate of completion", icon: true }
+    ]
   };
+}
+
+/* fills in fields that may be missing from content saved before these
+   were added, so older saved blobs don't blow up the ta portal */
+function normalizeState() {
+  if (!STATE.weeks_label) STATE.weeks_label = "2 weeks";
+  if (!STATE.logistics) STATE.logistics = seed().logistics;
 }
 
 var STATE = seed();
@@ -80,6 +93,26 @@ function itemLabel(item) {
 }
 function itemIcon(item) { return isLink(item) ? LINK_SVG_CHIP : FILE_SVG_CHIP; }
 
+var CHECK_ICON_SVG =
+  '<svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12.5l5 5L20 6.5" /></svg>';
+
+/* builds one read-only preview tile, same markup as the real one on index.html */
+function logisticsPreviewTile(t) {
+  var card = document.createElement("div");
+  card.className = "card stat ta-live-stat";
+  var big = document.createElement("div");
+  big.className = "big";
+  if (t.icon) big.innerHTML = CHECK_ICON_SVG;
+  else big.textContent = t.big;
+  var lbl = document.createElement("div");
+  lbl.className = "lbl";
+  lbl.textContent = t.lbl;
+  card.appendChild(big);
+  card.appendChild(lbl);
+  return card;
+}
+
 /* same markup as the hero on index.html, tba box vs the (still stubbed) real clock */
 var CD_TBA_HTML =
   '<div class="countdown cd-tba">' +
@@ -94,10 +127,10 @@ var CD_CLOCK_HTML =
   '<div class="countdown">' +
     '<span class="cd-label">Workshop begins in</span>' +
     '<div class="cd-clock">' +
-      '<div class="cd-unit"><b>99</b><span>days</span></div>' +
-      '<div class="cd-unit"><b>99</b><span>hrs</span></div>' +
-      '<div class="cd-unit"><b>99</b><span>min</span></div>' +
-      '<div class="cd-unit"><b>99</b><span>sec</span></div>' +
+      '<div class="cd-unit"><b id="pv-cd-d">00</b><span>days</span></div>' +
+      '<div class="cd-unit"><b id="pv-cd-h">00</b><span>hrs</span></div>' +
+      '<div class="cd-unit"><b id="pv-cd-m">00</b><span>min</span></div>' +
+      '<div class="cd-unit"><b id="pv-cd-s">00</b><span>sec</span></div>' +
     '</div>' +
   '</div>';
 
@@ -110,15 +143,54 @@ function formatDateRange(start, end) {
     months[e.getMonth()] + " " + e.getDate() + ", " + e.getFullYear();
 }
 
+var previewTickHandle = null;
+
+/* ticks the preview clock digits every second, same math as js/main.js */
+function tickPreviewCountdown(target) {
+  var targetMs = new Date(target).getTime();
+  function tick() {
+    var diff = targetMs - Date.now();
+    if (diff < 0) diff = 0;
+    var d = Math.floor(diff / 86400000);
+    var h = Math.floor((diff % 86400000) / 3600000);
+    var m = Math.floor((diff % 3600000) / 60000);
+    var s = Math.floor((diff % 60000) / 1000);
+    var p = function (x) { return (x < 10 ? "0" : "") + x; };
+    var dEl = document.getElementById("pv-cd-d");
+    var hEl = document.getElementById("pv-cd-h");
+    var mEl = document.getElementById("pv-cd-m");
+    var sEl = document.getElementById("pv-cd-s");
+    if (dEl) dEl.textContent = p(d);
+    if (hEl) hEl.textContent = p(h);
+    if (mEl) mEl.textContent = p(m);
+    if (sEl) sEl.textContent = p(s);
+  }
+  tick();
+  previewTickHandle = setInterval(tick, 1000);
+}
+
 /* mirrors STATE back into the "current selection" preview box */
 function renderPreview() {
   var slot = document.getElementById("previewCountdown");
   if (!slot) return;
-  slot.innerHTML = STATE.timer_mode === "actual" ? CD_CLOCK_HTML : CD_TBA_HTML;
+  if (previewTickHandle) { clearInterval(previewTickHandle); previewTickHandle = null; }
+
+  var showClock = STATE.timer_mode === "actual" && STATE.timer_target;
+  slot.innerHTML = showClock ? CD_CLOCK_HTML : CD_TBA_HTML;
+  if (showClock) tickPreviewCountdown(STATE.timer_target);
 
   var lbl = document.getElementById("previewStatLbl");
   lbl.textContent = STATE.date_mode === "confirmed" ?
     formatDateRange(STATE.start_date, STATE.end_date) : "Tentative start date";
+
+  var weeksBig = document.getElementById("previewWeeksBig");
+  if (weeksBig) weeksBig.textContent = STATE.weeks_label || "2 weeks";
+
+  var logisticsSlot = document.getElementById("previewLogistics");
+  if (logisticsSlot) {
+    logisticsSlot.innerHTML = "";
+    STATE.logistics.forEach(function (t) { logisticsSlot.appendChild(logisticsPreviewTile(t)); });
+  }
 }
 
 /* only ta keys get in here */
@@ -279,6 +351,53 @@ function renderExtras() {
   });
 }
 
+/* editable list of the "4 hours", "SFB520", certificate, etc tiles */
+function renderLogistics() {
+  var list = document.getElementById("logisticsList");
+  if (!list) return;
+  var html = "";
+
+  STATE.logistics.forEach(function (t, i) {
+    html +=
+      '<div class="ta-panel" data-i="' + i + '">' +
+        '<div class="ta-panel-head">' +
+          '<span class="daytag">Tile ' + (i + 1) + '</span>' +
+          '<button class="btn btn-ghost lg-del" type="button">Remove tile</button>' +
+        '</div>' +
+        '<div class="ta-row">' +
+          '<div class="field"><label>Big text</label>' +
+            '<input type="text" class="lg-big" value="' + t.big + '" ' + (t.icon ? "disabled" : "") + '></div>' +
+          '<div class="field"><label>Label text</label>' +
+            '<input type="text" class="lg-lbl" value="' + t.lbl + '"></div>' +
+        '</div>' +
+        '<label class="ta-radio"><input type="checkbox" class="lg-icon" ' + (t.icon ? "checked" : "") + '>' +
+          ' Show a checkmark icon instead of the big text</label>' +
+      '</div>';
+  });
+
+  list.innerHTML = html;
+
+  var panels = list.querySelectorAll(".ta-panel");
+  panels.forEach(function (p) {
+    var t = STATE.logistics[+p.getAttribute("data-i")];
+    var bigInput = p.querySelector(".lg-big");
+
+    bigInput.addEventListener("input", function () { t.big = this.value; renderPreview(); });
+    p.querySelector(".lg-lbl").addEventListener("input", function () { t.lbl = this.value; renderPreview(); });
+    p.querySelector(".lg-icon").addEventListener("change", function () {
+      t.icon = this.checked;
+      bigInput.disabled = t.icon;
+      renderPreview();
+    });
+    p.querySelector(".lg-del").addEventListener("click", function () {
+      if (!confirm("Remove this tile?")) return;
+      STATE.logistics.splice(STATE.logistics.indexOf(t), 1);
+      renderLogistics();
+      renderPreview();
+    });
+  });
+}
+
 /* push STATE into the landing page controls */
 function syncLanding() {
   var radios = document.querySelectorAll('input[name="cdMode"]');
@@ -288,6 +407,7 @@ function syncLanding() {
   dateRadios.forEach(function (r) { r.checked = r.value === STATE.date_mode; });
   document.getElementById("dateStart").value = STATE.start_date;
   document.getElementById("dateEnd").value = STATE.end_date;
+  document.getElementById("weeksLabelInput").value = STATE.weeks_label;
 }
 
 document.addEventListener("DOMContentLoaded", function () {
@@ -304,8 +424,10 @@ document.addEventListener("DOMContentLoaded", function () {
     .then(function (res) { return res.json(); })
     .then(function (data) {
       STATE = data;
+      normalizeState();
       renderPanels();
       renderExtras();
+      renderLogistics();
       syncLanding();
       renderPreview();
     })
@@ -313,6 +435,7 @@ document.addEventListener("DOMContentLoaded", function () {
       showMsg("Couldn't load saved content, showing defaults.", false);
       renderPanels();
       renderExtras();
+      renderLogistics();
       syncLanding();
       renderPreview();
     });
@@ -321,6 +444,12 @@ document.addEventListener("DOMContentLoaded", function () {
     var next = STATE.days.length ? STATE.days[STATE.days.length - 1].day + 1 : 1;
     STATE.days.push({ day: next, date: "", opens_at: "", unlocked: false, title: "", blurb: "", files: [] });
     renderPanels();
+  });
+
+  document.getElementById("addLogistics").addEventListener("click", function () {
+    STATE.logistics.push({ big: "", lbl: "", icon: false });
+    renderLogistics();
+    renderPreview();
   });
 
   document.getElementById("extraFile").addEventListener("change", function () {
@@ -361,12 +490,13 @@ document.addEventListener("DOMContentLoaded", function () {
   document.querySelectorAll('input[name="cdMode"]').forEach(function (r) {
     r.addEventListener("change", function () { STATE.timer_mode = this.value; renderPreview(); });
   });
-  document.getElementById("cdTarget").addEventListener("input", function () { STATE.timer_target = this.value; });
+  document.getElementById("cdTarget").addEventListener("input", function () { STATE.timer_target = this.value; renderPreview(); });
   document.querySelectorAll('input[name="dateMode"]').forEach(function (r) {
     r.addEventListener("change", function () { STATE.date_mode = this.value; renderPreview(); });
   });
   document.getElementById("dateStart").addEventListener("input", function () { STATE.start_date = this.value; renderPreview(); });
   document.getElementById("dateEnd").addEventListener("input", function () { STATE.end_date = this.value; renderPreview(); });
+  document.getElementById("weeksLabelInput").addEventListener("input", function () { STATE.weeks_label = this.value; renderPreview(); });
 
   function saveContent() {
     showMsg("Saving...", true);
@@ -393,8 +523,10 @@ document.addEventListener("DOMContentLoaded", function () {
       .then(function (res) { return res.json(); })
       .then(function (data) {
         STATE = data;
+        normalizeState();
         renderPanels();
         renderExtras();
+        renderLogistics();
         syncLanding();
         renderPreview();
         showMsg("Reset to the last saved version.", true);

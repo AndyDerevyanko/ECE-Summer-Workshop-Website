@@ -5,7 +5,7 @@
 var PHOTOS = {
   "2026": [
     "group-main-2026.png",
-    "runner-up.MOV",
+    "robots-moving.MOV",
     "robot-moving.MOV",
     "alumni-conference.png",
     "class-2.jpeg",
@@ -61,7 +61,8 @@ var PHOTOS = {
     "track-from-far-2.png",
     "track-from-far.png",
     "track-photo.png",
-    "wide-angle-room.png"
+    "wide-angle-room.png",
+    "runner-up.MOV"
   ],
   "2025": [
     "group_photo_2025.jpg",

@@ -11,6 +11,27 @@ var CD_TBA_HTML =
     '<b class="cd-tba-txt">To be announced</b></div>' +
   '</div>';
 
+var CHECK_ICON_SVG =
+  '<svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12.5l5 5L20 6.5" /></svg>';
+
+/* builds one extra logistics tile (the "4 hours", "SFB520", certificate, etc
+   ones), same markup as the hardcoded first tile in the html */
+function logisticsTile(t) {
+  var card = document.createElement("div");
+  card.className = "card stat";
+  var big = document.createElement("div");
+  big.className = "big";
+  if (t.icon) big.innerHTML = CHECK_ICON_SVG;
+  else big.textContent = t.big;
+  var lbl = document.createElement("div");
+  lbl.className = "lbl";
+  lbl.textContent = t.lbl;
+  card.appendChild(big);
+  card.appendChild(lbl);
+  return card;
+}
+
 var CD_CLOCK_HTML =
   '<div class="countdown" id="countdown">' +
     '<span class="cd-label">Workshop begins in</span>' +
@@ -59,6 +80,8 @@ function startCountdown(target) {
 document.addEventListener("DOMContentLoaded", function () {
   var slot = document.getElementById("heroCountdown");
   var datesLbl = document.getElementById("datesLbl");
+  var weeksLbl = document.getElementById("weeksLbl");
+  var grid = document.getElementById("logisticsGrid");
   if (!slot) return;
 
   fetch("/api/content")
@@ -74,6 +97,12 @@ document.addEventListener("DOMContentLoaded", function () {
       if (datesLbl) {
         datesLbl.textContent = (data.date_mode === "confirmed" && data.start_date && data.end_date) ?
           formatDateRange(data.start_date, data.end_date) : "Tentative start date";
+      }
+
+      if (weeksLbl) weeksLbl.textContent = data.weeks_label || "2 weeks";
+
+      if (grid && data.logistics) {
+        data.logistics.forEach(function (t) { grid.appendChild(logisticsTile(t)); });
       }
     })
     .catch(function () {

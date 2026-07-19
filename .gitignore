@@ -5,3 +5,4 @@ CLAUDE.md
 __pycache__/
 *.pyc
 data/
+app/seed_accounts.py

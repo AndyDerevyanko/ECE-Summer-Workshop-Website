@@ -78,6 +78,19 @@ def init_db():
         )
         """
     )
+    # saved drafts of the whole content blob, per ta. shared=1 makes a
+    # profile visible (and editable) to every ta, not just its owner.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner TEXT NOT NULL,
+            name TEXT NOT NULL,
+            data TEXT NOT NULL,
+            shared INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
     conn.commit()
     _seed_users(conn)
     _seed_content(conn)
@@ -156,5 +169,75 @@ def save_content(data):
     conn.execute(
         "UPDATE content SET data = ? WHERE id = 1", (json.dumps(data),)
     )
+    conn.commit()
+    conn.close()
+
+
+def list_profiles(username):
+    """your own profiles plus anything another ta has shared."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id, owner, name, data, shared FROM profiles"
+        " WHERE owner = ? OR shared = 1 ORDER BY id",
+        (username,),
+    ).fetchall()
+    conn.close()
+    return [
+        {
+            "id": r["id"],
+            "owner": r["owner"],
+            "name": r["name"],
+            "shared": bool(r["shared"]),
+            "mine": r["owner"] == username,
+            "data": json.loads(r["data"]),
+        }
+        for r in rows
+    ]
+
+
+def get_profile(profile_id):
+    conn = get_db()
+    row = conn.execute(
+        "SELECT id, owner, name, data, shared FROM profiles WHERE id = ?",
+        (profile_id,),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "id": row["id"],
+        "owner": row["owner"],
+        "name": row["name"],
+        "shared": bool(row["shared"]),
+        "data": json.loads(row["data"]),
+    }
+
+
+def create_profile(owner, name, data):
+    conn = get_db()
+    cur = conn.execute(
+        "INSERT INTO profiles (owner, name, data) VALUES (?, ?, ?)",
+        (owner, name, json.dumps(data)),
+    )
+    conn.commit()
+    conn.close()
+    return cur.lastrowid
+
+
+def update_profile(profile_id, name=None, data=None, shared=None):
+    conn = get_db()
+    if name is not None:
+        conn.execute("UPDATE profiles SET name = ? WHERE id = ?", (name, profile_id))
+    if data is not None:
+        conn.execute("UPDATE profiles SET data = ? WHERE id = ?", (json.dumps(data), profile_id))
+    if shared is not None:
+        conn.execute("UPDATE profiles SET shared = ? WHERE id = ?", (1 if shared else 0, profile_id))
+    conn.commit()
+    conn.close()
+
+
+def delete_profile(profile_id):
+    conn = get_db()
+    conn.execute("DELETE FROM profiles WHERE id = ?", (profile_id,))
     conn.commit()
     conn.close()

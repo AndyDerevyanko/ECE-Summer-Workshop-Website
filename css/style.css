@@ -901,6 +901,37 @@ h1, h2, h3 {
   flex-wrap: wrap;
   margin-top: 10px;
 }
+/* banner shown while a saved profile is open instead of the live content */
+.prof-bar { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.prof-bar-inner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 12px 0;
+  font-size: .92rem;
+  font-weight: 600;
+}
+.prof-bar-inner .btn { margin-left: auto; }
+/* profile rows reuse .res-row, buttons grouped so they don't each float right */
+.prof-row { flex-wrap: wrap; }
+.prof-row .pr-name {
+  flex: 1;
+  min-width: 160px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  border: none;
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: .92rem;
+  font-weight: 600;
+}
+.prof-row .pr-name:focus { outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
+.prof-row .rname { flex: 1; }
+.prof-btns { display: flex; gap: 8px; margin-left: auto; }
+.prof-btns .btn { margin-left: 0; }
+.prof-btns .btn[disabled] { opacity: .5; cursor: default; }
 .ta-live {
   background: var(--surface);
   border: 1px solid var(--border);

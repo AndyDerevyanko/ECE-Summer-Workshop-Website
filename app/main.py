@@ -12,11 +12,16 @@ from pydantic import BaseModel
 
 from app.db import (
     UPLOAD_DIR,
+    create_profile,
     create_session,
+    delete_profile,
     get_content,
+    get_profile,
     get_session,
     init_db,
+    list_profiles,
     save_content,
+    update_profile,
     verify_login,
 )
 
@@ -78,6 +83,50 @@ def api_get_content():
 @app.post("/api/content")
 def api_save_content(payload: dict[str, Any], _ta=Depends(require_ta)):
     save_content(payload)
+    return {"ok": True}
+
+
+@app.get("/api/profiles")
+def api_list_profiles(ta=Depends(require_ta)):
+    return list_profiles(ta["username"])
+
+
+@app.post("/api/profiles")
+def api_create_profile(payload: dict[str, Any], ta=Depends(require_ta)):
+    name = str(payload.get("name") or "Profile")
+    profile_id = create_profile(ta["username"], name, payload.get("data") or {})
+    return {"id": profile_id}
+
+
+@app.post("/api/profiles/{profile_id}")
+def api_update_profile(profile_id: int, payload: dict[str, Any], ta=Depends(require_ta)):
+    prof = get_profile(profile_id)
+    if not prof:
+        raise HTTPException(status_code=404, detail="No such profile.")
+    is_owner = prof["owner"] == ta["username"]
+    # anyone can save content into a shared profile, but only the owner
+    # can rename, share/unshare, or delete it
+    if ("name" in payload or "shared" in payload) and not is_owner:
+        raise HTTPException(status_code=403, detail="Only the owner can change that.")
+    if "data" in payload and not (is_owner or prof["shared"]):
+        raise HTTPException(status_code=403, detail="Not your profile.")
+    update_profile(
+        profile_id,
+        name=payload.get("name"),
+        data=payload.get("data"),
+        shared=payload.get("shared"),
+    )
+    return {"ok": True}
+
+
+@app.delete("/api/profiles/{profile_id}")
+def api_delete_profile(profile_id: int, ta=Depends(require_ta)):
+    prof = get_profile(profile_id)
+    if not prof:
+        raise HTTPException(status_code=404, detail="No such profile.")
+    if prof["owner"] != ta["username"]:
+        raise HTTPException(status_code=403, detail="Only the owner can delete a profile.")
+    delete_profile(profile_id)
     return {"ok": True}
 
 

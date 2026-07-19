@@ -46,6 +46,9 @@ function normalizeState() {
 
 var STATE = seed();
 
+var PROFILES = [];  /* saved drafts from /api/profiles */
+var EDITING = null; /* null = editing the live site, else the open profile */
+
 function authHeaders() {
   return { "Authorization": "Bearer " + (localStorage.getItem("token") || "") };
 }
@@ -417,6 +420,192 @@ function syncLanding() {
   document.getElementById("contactInput").value = STATE.contact_text;
 }
 
+function renderAll() {
+  renderPanels();
+  renderExtras();
+  renderLogistics();
+  syncLanding();
+  renderPreview();
+}
+
+/* fetch the live content into the editor */
+function loadLive(okMsg) {
+  return fetch("/api/content")
+    .then(function (res) { return res.json(); })
+    .then(function (data) {
+      STATE = data;
+      normalizeState();
+      renderAll();
+      if (okMsg) showMsg(okMsg, true);
+    })
+    .catch(function () {
+      showMsg("Couldn't load saved content, showing defaults.", false);
+      renderAll();
+    });
+}
+
+/* what a profile is called in the list. shared ones from another ta get
+   their owner's name in front. */
+function profileLabel(p) {
+  if (p.mine) return p.name;
+  if (/^Profile \d+$/.test(p.name)) return p.owner + "'s " + p.name;
+  return p.owner + "'s \"" + p.name + "\" profile";
+}
+
+/* next free default name for a new profile of mine */
+function nextProfileName() {
+  var n = 0;
+  PROFILES.forEach(function (p) {
+    var m = p.mine && p.name.match(/^Profile (\d+)$/);
+    if (m && +m[1] > n) n = +m[1];
+  });
+  return "Profile " + (n + 1);
+}
+
+function updateProfile(id, fields, onOk) {
+  fetch("/api/profiles/" + id, {
+    method: "POST",
+    headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+    body: JSON.stringify(fields)
+  })
+    .then(function (res) {
+      if (!res.ok) throw new Error("update failed");
+      if (onOk) onOk();
+    })
+    .catch(function () {
+      showMsg("Couldn't update the profile. Check you're still logged in.", false);
+    });
+}
+
+/* swaps the action buttons and the banner between live mode and profile mode */
+function syncProfileBar() {
+  var bar = document.getElementById("profileBar");
+  var txt = document.getElementById("profileBarText");
+  var apply = document.getElementById("taApply");
+  var save = document.getElementById("taSave");
+  if (EDITING) {
+    bar.style.display = "block";
+    txt.textContent = 'Editing "' + profileLabel(EDITING) + '". Students see none of this until you apply it.';
+    apply.textContent = "Apply this profile";
+    save.textContent = "Save profile";
+  } else {
+    bar.style.display = "none";
+    apply.textContent = "Apply changes";
+    save.textContent = "Save to profile";
+  }
+}
+
+/* loads a profile into the editor. edits stay on a local copy until saved */
+function openProfile(p) {
+  EDITING = p;
+  STATE = JSON.parse(JSON.stringify(p.data));
+  normalizeState();
+  renderAll();
+  syncProfileBar();
+  renderProfiles();
+  showMsg('Opened "' + profileLabel(p) + '".', true);
+  window.scrollTo(0, 0);
+}
+
+function backToLive(skipConfirm) {
+  if (!skipConfirm && !confirm("Go back to the live content? Unsaved profile edits are discarded.")) return;
+  EDITING = null;
+  loadLive();
+  syncProfileBar();
+  renderProfiles();
+}
+
+function fetchProfiles() {
+  return fetch("/api/profiles", { headers: authHeaders() })
+    .then(function (res) {
+      if (!res.ok) throw new Error("profiles failed");
+      return res.json();
+    })
+    .then(function (list) {
+      PROFILES = list;
+      renderProfiles();
+    })
+    .catch(function () {
+      var el = document.getElementById("profileList");
+      if (el) el.innerHTML = '<p class="muted"><strong>Couldn\'t load profiles.</strong></p>';
+    });
+}
+
+function renderProfiles() {
+  var list = document.getElementById("profileList");
+  if (!list) return;
+  if (!PROFILES.length) {
+    list.innerHTML = '<p class="muted"><strong>No profiles yet.</strong> "Save to profile" above makes one out of whatever is in the editor.</p>';
+    return;
+  }
+
+  var html = "";
+  PROFILES.forEach(function (p, i) {
+    var open = EDITING && EDITING.id === p.id;
+    html += '<div class="res-row prof-row" data-i="' + i + '">';
+    if (p.mine) {
+      html += '<input type="text" class="pr-name" value="' + p.name + '" aria-label="Profile name">';
+    } else {
+      html += '<span class="rname">' + profileLabel(p) + '</span>';
+    }
+    if (p.shared) html += '<span class="badge today">Shared</span>';
+    html += '<span class="prof-btns">' +
+      '<button class="btn btn-ghost pr-edit" type="button"' + (open ? " disabled" : "") + '>' +
+      (open ? "Editing" : "Edit") + '</button>';
+    if (p.mine) {
+      html += '<button class="btn btn-ghost pr-share" type="button">' + (p.shared ? "Unshare" : "Share") + '</button>' +
+        '<button class="btn btn-ghost pr-del" type="button">Delete</button>';
+    }
+    html += '</span></div>';
+  });
+  list.innerHTML = html;
+
+  list.querySelectorAll(".prof-row").forEach(function (row) {
+    var p = PROFILES[+row.getAttribute("data-i")];
+
+    var nameInput = row.querySelector(".pr-name");
+    if (nameInput) nameInput.addEventListener("change", function () {
+      var v = this.value.trim();
+      if (!v || v === p.name) { this.value = p.name; return; }
+      updateProfile(p.id, { name: v }, function () {
+        p.name = v;
+        if (EDITING && EDITING.id === p.id) syncProfileBar();
+      });
+    });
+
+    row.querySelector(".pr-edit").addEventListener("click", function () {
+      if (EDITING && EDITING.id === p.id) return;
+      if (!confirm('Open "' + profileLabel(p) + '" in the editor? Unsaved edits here are discarded.')) return;
+      openProfile(p);
+    });
+
+    var shareBtn = row.querySelector(".pr-share");
+    if (shareBtn) shareBtn.addEventListener("click", function () {
+      updateProfile(p.id, { shared: !p.shared }, function () {
+        p.shared = !p.shared;
+        renderProfiles();
+        showMsg(p.shared ? 'Shared. Every TA can see "' + p.name + '" now.' : "Unshared.", true);
+      });
+    });
+
+    var delBtn = row.querySelector(".pr-del");
+    if (delBtn) delBtn.addEventListener("click", function () {
+      if (!confirm('Delete "' + p.name + '"? This can\'t be undone.')) return;
+      fetch("/api/profiles/" + p.id, { method: "DELETE", headers: authHeaders() })
+        .then(function (res) {
+          if (!res.ok) throw new Error("delete failed");
+          PROFILES.splice(PROFILES.indexOf(p), 1);
+          if (EDITING && EDITING.id === p.id) backToLive(true);
+          renderProfiles();
+          showMsg("Profile deleted.", true);
+        })
+        .catch(function () {
+          showMsg("Couldn't delete that profile.", false);
+        });
+    });
+  });
+}
+
 document.addEventListener("DOMContentLoaded", function () {
   var logoutBtn = document.getElementById("logoutBtn");
   if (logoutBtn) logoutBtn.addEventListener("click", function () {
@@ -427,25 +616,12 @@ document.addEventListener("DOMContentLoaded", function () {
   });
   if (!gateCheck()) return;
 
-  fetch("/api/content")
-    .then(function (res) { return res.json(); })
-    .then(function (data) {
-      STATE = data;
-      normalizeState();
-      renderPanels();
-      renderExtras();
-      renderLogistics();
-      syncLanding();
-      renderPreview();
-    })
-    .catch(function () {
-      showMsg("Couldn't load saved content, showing defaults.", false);
-      renderPanels();
-      renderExtras();
-      renderLogistics();
-      syncLanding();
-      renderPreview();
-    });
+  loadLive();
+  fetchProfiles();
+
+  document.getElementById("profileBack").addEventListener("click", function () {
+    backToLive();
+  });
 
   document.getElementById("addPanel").addEventListener("click", function () {
     var next = STATE.days.length ? STATE.days[STATE.days.length - 1].day + 1 : 1;
@@ -500,38 +676,71 @@ document.addEventListener("DOMContentLoaded", function () {
   document.getElementById("cdTarget").addEventListener("input", function () { STATE.timer_target = this.value; renderPreview(); });
   document.getElementById("contactInput").addEventListener("input", function () { STATE.contact_text = this.value; renderPreview(); });
 
-  function saveContent() {
-    showMsg("Saving...", true);
+  /* apply = make what's on screen live for students. in profile mode it
+     also saves the profile first so the two can't drift apart. */
+  function applyContent() {
+    if (EDITING && !confirm('Apply "' + profileLabel(EDITING) + '" to the live site? Students will see it right away.')) return;
+    showMsg("Applying...", true);
     fetch("/api/content", {
       method: "POST",
       headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
       body: JSON.stringify(STATE)
     })
       .then(function (res) {
+        if (!res.ok) throw new Error("apply failed");
+        if (EDITING) {
+          EDITING.data = JSON.parse(JSON.stringify(STATE));
+          updateProfile(EDITING.id, { data: STATE });
+          showMsg("Profile applied. Students see it now.", true);
+        } else {
+          showMsg("Applied. Students see this now.", true);
+        }
+      })
+      .catch(function () {
+        showMsg("Couldn't apply. Check you're still logged in and try again.", false);
+      });
+  }
+
+  /* save = stash what's on screen in a profile, live site untouched */
+  function saveToProfile() {
+    if (EDITING) {
+      updateProfile(EDITING.id, { data: STATE }, function () {
+        EDITING.data = JSON.parse(JSON.stringify(STATE));
+        showMsg("Profile saved. The live site is unchanged.", true);
+      });
+      return;
+    }
+    var name = nextProfileName();
+    showMsg("Saving...", true);
+    fetch("/api/profiles", {
+      method: "POST",
+      headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+      body: JSON.stringify({ name: name, data: STATE })
+    })
+      .then(function (res) {
         if (!res.ok) throw new Error("save failed");
-        showMsg("Saved. Students will see this now.", true);
+        return fetchProfiles();
+      })
+      .then(function () {
+        showMsg('Saved as "' + name + '". The live site is unchanged.', true);
       })
       .catch(function () {
         showMsg("Couldn't save. Check you're still logged in and try again.", false);
       });
   }
 
-  document.getElementById("taApply").addEventListener("click", saveContent);
-  document.getElementById("taSave").addEventListener("click", saveContent);
+  document.getElementById("taApply").addEventListener("click", applyContent);
+  document.getElementById("taSave").addEventListener("click", saveToProfile);
 
   document.getElementById("taReset").addEventListener("click", function () {
     if (!confirm("Reset everything back to how it was last saved? This throws away your edits.")) return;
-    fetch("/api/content")
-      .then(function (res) { return res.json(); })
-      .then(function (data) {
-        STATE = data;
-        normalizeState();
-        renderPanels();
-        renderExtras();
-        renderLogistics();
-        syncLanding();
-        renderPreview();
-        showMsg("Reset to the last saved version.", true);
-      });
+    if (EDITING) {
+      STATE = JSON.parse(JSON.stringify(EDITING.data));
+      normalizeState();
+      renderAll();
+      showMsg("Reset to the profile's last saved version.", true);
+      return;
+    }
+    loadLive("Reset to the last saved version.");
   });
 });

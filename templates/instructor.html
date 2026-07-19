@@ -28,6 +28,7 @@
         <a href="#panels">Day panels</a>
         <a href="#extras">Extra attachments</a>
         <a href="#landing">Landing page</a>
+        <a href="#profiles">Profiles</a>
       </div>
       <div class="nav-right">
         <button id="themeBtn" class="theme-btn" type="button" aria-label="Toggle theme">
@@ -61,6 +62,14 @@
         <p class="muted">Day panels, attachments, and the landing page, all in one spot.</p>
       </div>
     </section>
+
+    <!-- shown while a saved profile is open in the editor instead of the live content -->
+    <div class="prof-bar" id="profileBar" style="display:none">
+      <div class="wrap prof-bar-inner">
+        <span id="profileBarText"></span>
+        <button class="btn btn-ghost" id="profileBack" type="button">Back to live content</button>
+      </div>
+    </div>
 
     <section class="section-sm" id="panels">
       <div class="wrap">
@@ -163,10 +172,23 @@
 
         <div class="ta-actions">
           <button class="btn btn-primary" id="taApply" type="button">Apply changes</button>
-          <button class="btn btn-ghost" id="taSave" type="button">Save changes</button>
+          <button class="btn btn-ghost" id="taSave" type="button">Save to profile</button>
           <button class="btn btn-ghost" id="taReset" type="button">Reset</button>
         </div>
         <p class="form-msg" id="taMsg"></p>
+      </div>
+    </section>
+
+    <section class="section-sm" id="profiles" style="background:var(--bg-2)">
+      <div class="wrap">
+        <h2 style="font-size:1.4rem;margin-bottom:6px">Profiles</h2>
+        <p class="muted" style="margin-top:0;margin-bottom:18px">
+          Saved copies of everything above. Edit one without changing what students
+          see, then apply it when it's ready. Sharing lets the other TAs open it too.
+        </p>
+        <div class="res-list" id="profileList">
+          <!-- filled in by ta.js -->
+        </div>
       </div>
     </section>
   </main>

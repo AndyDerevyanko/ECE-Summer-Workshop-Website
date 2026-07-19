@@ -50,6 +50,7 @@ var DEFAULT_LOGISTICS = [
   { big: "", lbl: "Certificate of completion", icon: true }
 ];
 var DEFAULT_CONTACT = "Questions? hardware.robotics@utoronto.ca";
+var DEFAULT_JOIN_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
 
 function formatDateRange(start, end) {
   var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -137,6 +138,10 @@ document.addEventListener("DOMContentLoaded", function () {
     list.forEach(function (t) { grid.appendChild(logisticsTile(t)); });
   }
 
+  function setJoinUrl(url) {
+    document.querySelectorAll(".join-link").forEach(function (a) { a.href = url; });
+  }
+
   fetch("/api/content")
     .then(function (res) { return res.json(); })
     .then(function (data) {
@@ -149,10 +154,12 @@ document.addEventListener("DOMContentLoaded", function () {
 
       renderTiles(resolveLogistics(data));
       if (contactLine) contactLine.textContent = data.contact_text || DEFAULT_CONTACT;
+      setJoinUrl(data.join_url || DEFAULT_JOIN_URL);
     })
     .catch(function () {
       slot.innerHTML = CD_TBA_HTML;
       renderTiles(DEFAULT_LOGISTICS);
       if (contactLine) contactLine.textContent = DEFAULT_CONTACT;
+      setJoinUrl(DEFAULT_JOIN_URL);
     });
 });

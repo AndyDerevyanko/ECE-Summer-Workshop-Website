@@ -40,6 +40,7 @@ DEFAULT_CONTENT = {
     "timer_mode": "tentative",
     "timer_target": "",
     "contact_text": "Questions? hardware.robotics@utoronto.ca",
+    "join_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
     "logistics": [
         {"big": "2 weeks", "lbl": "Tentative start date", "icon": False},
         {"big": "4 hours", "lbl": "1:30pm–5:30pm", "icon": False},

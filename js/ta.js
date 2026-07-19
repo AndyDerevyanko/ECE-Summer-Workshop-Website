@@ -53,6 +53,28 @@ function authHeaders() {
   return { "Authorization": "Bearer " + (localStorage.getItem("token") || "") };
 }
 
+/* server says the session's gone (idle timeout, or the account got
+   removed), clear local state and bounce to login with a message instead
+   of quietly failing every button on the page */
+function handleExpiredSession() {
+  localStorage.removeItem("session");
+  localStorage.removeItem("role");
+  localStorage.removeItem("token");
+  localStorage.removeItem("last_active");
+  window.location.href = "login.html?expired=1";
+}
+
+/* fetch with the auth header attached; on a 401 it handles the redirect
+   itself and rejects, so callers only need to handle other failures */
+function authedFetch(url, opts) {
+  opts = opts || {};
+  opts.headers = Object.assign({}, opts.headers, authHeaders());
+  return fetch(url, opts).then(function (res) {
+    if (res.status === 401) { handleExpiredSession(); throw new Error("expired"); }
+    return res;
+  });
+}
+
 function showMsg(text, ok) {
   var el = document.getElementById("taMsg");
   if (!el) return;
@@ -64,7 +86,7 @@ function showMsg(text, ok) {
 function uploadFile(file) {
   var fd = new FormData();
   fd.append("file", file);
-  return fetch("/api/upload", { method: "POST", headers: authHeaders(), body: fd })
+  return authedFetch("/api/upload", { method: "POST", body: fd })
     .then(function (res) {
       if (!res.ok) throw new Error("upload failed");
       return res.json();
@@ -328,7 +350,8 @@ function renderPanels() {
           showMsg("Uploaded. Don't forget to save your changes.", true);
           renderPanels();
         })
-        .catch(function () {
+        .catch(function (err) {
+          if (err.message === "expired") return;
           showMsg("Couldn't upload one of the files. Try again.", false);
         });
     });
@@ -482,16 +505,17 @@ function nextProfileName() {
 }
 
 function updateProfile(id, fields, onOk) {
-  fetch("/api/profiles/" + id, {
+  authedFetch("/api/profiles/" + id, {
     method: "POST",
-    headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(fields)
   })
     .then(function (res) {
       if (!res.ok) throw new Error("update failed");
       if (onOk) onOk();
     })
-    .catch(function () {
+    .catch(function (err) {
+      if (err.message === "expired") return;
       showMsg("Couldn't update the profile. Check you're still logged in.", false);
     });
 }
@@ -535,7 +559,7 @@ function backToLive(skipConfirm) {
 }
 
 function fetchProfiles() {
-  return fetch("/api/profiles", { headers: authHeaders() })
+  return authedFetch("/api/profiles")
     .then(function (res) {
       if (!res.ok) throw new Error("profiles failed");
       return res.json();
@@ -544,7 +568,8 @@ function fetchProfiles() {
       PROFILES = list;
       renderProfiles();
     })
-    .catch(function () {
+    .catch(function (err) {
+      if (err.message === "expired") return;
       var el = document.getElementById("profileList");
       if (el) el.innerHTML = '<p class="muted"><strong>Couldn\'t load profiles.</strong></p>';
     });
@@ -610,7 +635,7 @@ function renderProfiles() {
     var delBtn = row.querySelector(".pr-del");
     if (delBtn) delBtn.addEventListener("click", function () {
       if (!confirm('Delete "' + p.name + '"? This can\'t be undone.')) return;
-      fetch("/api/profiles/" + p.id, { method: "DELETE", headers: authHeaders() })
+      authedFetch("/api/profiles/" + p.id, { method: "DELETE" })
         .then(function (res) {
           if (!res.ok) throw new Error("delete failed");
           PROFILES.splice(PROFILES.indexOf(p), 1);
@@ -618,7 +643,8 @@ function renderProfiles() {
           renderProfiles();
           showMsg("Profile deleted.", true);
         })
-        .catch(function () {
+        .catch(function (err) {
+          if (err.message === "expired") return;
           showMsg("Couldn't delete that profile.", false);
         });
     });
@@ -631,6 +657,7 @@ document.addEventListener("DOMContentLoaded", function () {
     localStorage.removeItem("session");
     localStorage.removeItem("role");
     localStorage.removeItem("token");
+    localStorage.removeItem("last_active");
     window.location.href = "login.html";
   });
   if (!gateCheck()) return;
@@ -665,7 +692,8 @@ document.addEventListener("DOMContentLoaded", function () {
         showMsg("Uploaded. Don't forget to save your changes.", true);
         renderExtras();
       })
-      .catch(function () {
+      .catch(function (err) {
+        if (err.message === "expired") return;
         showMsg("Couldn't upload one of the files. Try again.", false);
       });
   });
@@ -700,9 +728,9 @@ document.addEventListener("DOMContentLoaded", function () {
   function applyContent() {
     if (EDITING && !confirm('Apply "' + profileLabel(EDITING) + '" to the live site? Students will see it right away.')) return;
     showMsg("Applying...", true);
-    fetch("/api/content", {
+    authedFetch("/api/content", {
       method: "POST",
-      headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(STATE)
     })
       .then(function (res) {
@@ -715,7 +743,8 @@ document.addEventListener("DOMContentLoaded", function () {
           showMsg("Applied. Students see this now.", true);
         }
       })
-      .catch(function () {
+      .catch(function (err) {
+        if (err.message === "expired") return;
         showMsg("Couldn't apply. Check you're still logged in and try again.", false);
       });
   }
@@ -731,9 +760,9 @@ document.addEventListener("DOMContentLoaded", function () {
     }
     var name = nextProfileName();
     showMsg("Saving...", true);
-    fetch("/api/profiles", {
+    authedFetch("/api/profiles", {
       method: "POST",
-      headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: name, data: STATE })
     })
       .then(function (res) {
@@ -743,7 +772,8 @@ document.addEventListener("DOMContentLoaded", function () {
       .then(function () {
         showMsg('Saved as "' + name + '". The live site is unchanged.', true);
       })
-      .catch(function () {
+      .catch(function (err) {
+        if (err.message === "expired") return;
         showMsg("Couldn't save. Check you're still logged in and try again.", false);
       });
   }

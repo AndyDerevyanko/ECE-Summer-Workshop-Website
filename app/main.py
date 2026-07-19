@@ -133,6 +133,13 @@ def api_delete_profile(profile_id: int, ta=Depends(require_ta)):
     return {"ok": True}
 
 
+@app.get("/api/ping")
+def api_ping(_ta=Depends(require_ta)):
+    # heartbeat from an open ta tab (js/idle.js), the require_ta lookup
+    # already slid the session's expiry forward, nothing else to do
+    return {"ok": True}
+
+
 class NewUserRequest(BaseModel):
     username: str
     password: str

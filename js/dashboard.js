@@ -134,6 +134,7 @@ function logout() {
   localStorage.removeItem("session");
   localStorage.removeItem("role");
   localStorage.removeItem("token");
+  localStorage.removeItem("last_active");
   window.location.href = "login.html";
 }
 

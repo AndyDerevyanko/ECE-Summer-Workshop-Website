@@ -8,6 +8,28 @@ function authHeaders() {
   return { "Authorization": "Bearer " + (localStorage.getItem("token") || "") };
 }
 
+/* server says the session's gone (idle timeout, or the account got
+   removed), clear local state and bounce to login with a message instead
+   of quietly failing every button on the page */
+function handleExpiredSession() {
+  localStorage.removeItem("session");
+  localStorage.removeItem("role");
+  localStorage.removeItem("token");
+  localStorage.removeItem("last_active");
+  window.location.href = "login.html?expired=1";
+}
+
+/* fetch with the auth header attached; on a 401 it handles the redirect
+   itself and rejects, so callers only need to handle other failures */
+function authedFetch(url, opts) {
+  opts = opts || {};
+  opts.headers = Object.assign({}, opts.headers, authHeaders());
+  return fetch(url, opts).then(function (res) {
+    if (res.status === 401) { handleExpiredSession(); throw new Error("expired"); }
+    return res;
+  });
+}
+
 function showMsg(text, ok) {
   var el = document.getElementById("accMsg");
   if (!el) return;
@@ -31,7 +53,7 @@ var PERSON_SVG =
   '<circle cx="12" cy="8" r="3.6"/><path d="M5 20a7 7 0 0 1 14 0"/></svg>';
 
 function fetchUsers() {
-  return fetch("/api/users", { headers: authHeaders() })
+  return authedFetch("/api/users")
     .then(function (res) {
       if (!res.ok) throw new Error("users failed");
       return res.json();
@@ -40,7 +62,8 @@ function fetchUsers() {
       USERS = list;
       renderUsers();
     })
-    .catch(function () {
+    .catch(function (err) {
+      if (err.message === "expired") return;
       showMsg("Couldn't load accounts. Check you're still logged in.", false);
     });
 }
@@ -48,14 +71,15 @@ function fetchUsers() {
 function removeUser(u) {
   var what = u.role === "ta" ? "TA" : "student";
   if (!confirm("Remove " + what + ' "' + u.username + '"? They won\'t be able to log in anymore.')) return;
-  fetch("/api/users/" + encodeURIComponent(u.username), { method: "DELETE", headers: authHeaders() })
+  authedFetch("/api/users/" + encodeURIComponent(u.username), { method: "DELETE" })
     .then(function (res) {
       if (!res.ok) throw new Error("delete failed");
       USERS.splice(USERS.indexOf(u), 1);
       renderUsers();
       showMsg('Removed "' + u.username + '".', true);
     })
-    .catch(function () {
+    .catch(function (err) {
+      if (err.message === "expired") return;
       showMsg("Couldn't remove that account.", false);
     });
 }
@@ -112,9 +136,9 @@ function addUser(role, userInput, passInput) {
     return;
   }
   if (role === "ta" && !confirm('Add "' + username + '" as a TA? They get full access to this portal.')) return;
-  fetch("/api/users", {
+  authedFetch("/api/users", {
     method: "POST",
-    headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username: username, password: password, role: role })
   })
     .then(function (res) {
@@ -126,6 +150,7 @@ function addUser(role, userInput, passInput) {
       return fetchUsers();
     })
     .catch(function (err) {
+      if (err.message === "expired") return;
       if (err.message === "taken") showMsg('"' + username + '" is already taken.', false);
       else showMsg("Couldn't add the account. Check you're still logged in.", false);
     });
@@ -137,6 +162,7 @@ document.addEventListener("DOMContentLoaded", function () {
     localStorage.removeItem("session");
     localStorage.removeItem("role");
     localStorage.removeItem("token");
+    localStorage.removeItem("last_active");
     window.location.href = "login.html";
   });
   if (!gateCheck()) return;

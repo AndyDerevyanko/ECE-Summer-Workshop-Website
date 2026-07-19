@@ -3,6 +3,7 @@ content table holds the TA-editable site content (day panels, extras, timer)."""
 
 import json
 import sqlite3
+import time
 from pathlib import Path
 
 from app.security import generate_token, hash_password, verify_password
@@ -16,6 +17,17 @@ except ImportError:
 BASE_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = BASE_DIR / "data" / "app.db"
 UPLOAD_DIR = BASE_DIR / "data" / "uploads"
+
+# sliding idle windows per role, pushed forward on every authenticated
+# request (tas also heartbeat from an open tab, see js/idle.js). tas hold
+# the editing keys so they idle out fast; students only lose the dashboard
+# so they get a lazier window. matches IDLE_LIMIT_MS in js/idle.js.
+TA_IDLE_SECONDS = 20 * 60
+STUDENT_IDLE_SECONDS = 4 * 60 * 60
+
+
+def _idle_seconds(role):
+    return TA_IDLE_SECONDS if role == "ta" else STUDENT_IDLE_SECONDS
 
 # starting content, same shape as the old hardcoded DAYS/EXTRAS/timer vars.
 # only used the first time the content table is empty.
@@ -67,15 +79,25 @@ def init_db():
     except sqlite3.OperationalError:
         pass
     # login tokens, issued on login, checked on every ta-only request.
+    # expires_at slides forward on every valid use (see get_session), so a
+    # session only dies from real inactivity, not from navigating around.
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS sessions (
             token TEXT PRIMARY KEY,
             username TEXT NOT NULL,
-            role TEXT NOT NULL
+            role TEXT NOT NULL,
+            expires_at INTEGER
         )
         """
     )
+    # guarded add for dbs created before expires_at existed. those old rows
+    # come back with expires_at null, which get_session treats as expired,
+    # a one-time forced re-login instead of the old "never expires" tokens.
+    try:
+        conn.execute("ALTER TABLE sessions ADD COLUMN expires_at INTEGER")
+    except sqlite3.OperationalError:
+        pass
     # single row of json holding everything the ta portal edits. simplest
     # thing that works for a handful of day panels and a short extras list.
     conn.execute(
@@ -150,8 +172,8 @@ def create_session(username, role):
     token = generate_token()
     conn = get_db()
     conn.execute(
-        "INSERT INTO sessions (token, username, role) VALUES (?, ?, ?)",
-        (token, username, role),
+        "INSERT INTO sessions (token, username, role, expires_at) VALUES (?, ?, ?, ?)",
+        (token, username, role, int(time.time()) + _idle_seconds(role)),
     )
     conn.commit()
     conn.close()
@@ -159,13 +181,27 @@ def create_session(username, role):
 
 
 def get_session(token):
-    """returns the {username, role} row for a token, or none if it's not valid."""
+    """returns the {username, role} row for a token, or none if it's missing
+    or idle-expired. a valid token's expiry slides forward on every call,
+    so using the portal (or just having it open) keeps you logged in."""
+    now = int(time.time())
     conn = get_db()
     row = conn.execute(
-        "SELECT username, role FROM sessions WHERE token = ?", (token,)
+        "SELECT username, role, expires_at FROM sessions WHERE token = ?", (token,)
     ).fetchone()
+    if not row or not row["expires_at"] or row["expires_at"] < now:
+        if row:
+            conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
+            conn.commit()
+        conn.close()
+        return None
+    conn.execute(
+        "UPDATE sessions SET expires_at = ? WHERE token = ?",
+        (now + _idle_seconds(row["role"]), token),
+    )
+    conn.commit()
     conn.close()
-    return dict(row) if row else None
+    return {"username": row["username"], "role": row["role"]}
 
 
 def list_users():

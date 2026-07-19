@@ -98,7 +98,34 @@ function startCountdown(target) {
   setInterval(tick, 1000);
 }
 
+/* still logged in from a previous visit? point the nav link back at your
+   portal and show a log out button, instead of always saying "Access
+   portal", which read as having been logged out */
+function updatePortalLink() {
+  var link = document.getElementById("portalLink");
+  var outBtn = document.getElementById("logoutBtn");
+  if (!link) return;
+  var session = localStorage.getItem("session");
+  var role = localStorage.getItem("role");
+  if (!session || !role) return;
+  link.textContent = role === "ta" ? "TA portal" : "Dashboard";
+  link.href = role === "ta" ? "instructor.html" : "dashboard.html";
+  if (!outBtn) return;
+  outBtn.style.display = "";
+  outBtn.addEventListener("click", function () {
+    localStorage.removeItem("session");
+    localStorage.removeItem("role");
+    localStorage.removeItem("token");
+    localStorage.removeItem("last_active");
+    link.textContent = "Access portal";
+    link.href = "login.html";
+    outBtn.style.display = "none";
+  });
+}
+
 document.addEventListener("DOMContentLoaded", function () {
+  updatePortalLink();
+
   var slot = document.getElementById("heroCountdown");
   var grid = document.getElementById("logisticsGrid");
   var contactLine = document.getElementById("contactLine");

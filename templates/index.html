@@ -42,7 +42,7 @@
         <a href="#schedule">Schedule</a>
         <a href="#prizes">Prizes</a>
         <a href="gallery.html">Gallery</a>
-        <a href="login.html">Access portal</a>
+        <a href="login.html" id="portalLink">Access portal</a>
       </div>
       <div class="nav-right">
         <button id="themeBtn" class="theme-btn" type="button" aria-label="Toggle theme">
@@ -57,6 +57,8 @@
           </svg>
         </button>
         <a class="btn btn-primary" href="https://www.youtube.com/watch?v=dQw4w9WgXcQ" target="_blank" rel="noopener">Join Us</a>
+        <!-- only shows while logged in, see updatePortalLink() in js/main.js -->
+        <button class="btn btn-ghost" id="logoutBtn" type="button" style="display:none">Log out</button>
       </div>
     </div>
   </nav>

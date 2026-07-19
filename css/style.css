@@ -838,9 +838,17 @@ h1, h2, h3 {
   margin-bottom: 14px;
 }
 /* a couple of cards (total workshop days, the landing-page live preview)
-   are settings/summary boxes rather than editable fields like the rest,
-   shade them a step lighter so they stand out from the surrounding cards */
-.ta-card-hl { background: var(--surface-2); }
+   are settings/summary boxes rather than editable fields like the rest, tint
+   them with the accent color so they read as visually distinct, not just a
+   shade darker/lighter */
+.ta-card-hl {
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+}
+/* the shade-diff trick that separates .field input from a plain .ta-card
+   doesn't work once the card itself is tinted (input and card would both
+   read as "the same accent-ish blob"), so pin the input back to the plain
+   surface color, which now contrasts against the tinted card around it */
+.ta-card-hl .field input { background: var(--surface); }
 .ta-panel-head {
   display: flex;
   align-items: center;
@@ -932,7 +940,7 @@ h1, h2, h3 {
 .prof-btns .btn { margin-left: 0; }
 .prof-btns .btn[disabled] { opacity: .5; cursor: default; }
 .ta-live {
-  background: var(--surface-2);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 22px;

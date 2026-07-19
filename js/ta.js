@@ -139,6 +139,27 @@ var FILE_SVG_CHIP =
   'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
   '<path d="M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v5h5"/></svg>';
 
+var IMAGE_SVG_CHIP =
+  '<svg class="tf-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/>' +
+  '<path d="M21 15l-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></svg>';
+
+var DOC_SVG_CHIP =
+  '<svg class="tf-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>' +
+  '<path d="M14 2v6h6"/><path d="M8 13h8M8 17h8"/></svg>';
+
+var SLIDES_SVG_CHIP =
+  '<svg class="tf-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M2 3h20"/><path d="M21 3v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V3"/><path d="M7 21l5-5 5 5"/></svg>';
+
+var IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "avif", "tiff", "heic"];
+var DOC_EXTS = ["pdf", "doc", "docx", "txt", "rtf", "odt", "pages"];
+var SLIDES_EXTS = ["ppt", "pptx", "key", "odp"];
+
 /* three-node share glyph, next to "shared" on a profile row */
 var SHARE_SVG_CHIP =
   '<svg class="tf-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
@@ -154,7 +175,18 @@ function itemLabel(item) {
   if (item && typeof item === "object") return item.name;
   return item;
 }
-function itemIcon(item) { return isLink(item) ? LINK_SVG_CHIP : FILE_SVG_CHIP; }
+/* picks an icon off the file extension in the attachment's name, same
+   rule as js/dashboard.js. falls back to a generic file glyph. */
+function itemIcon(item) {
+  if (isLink(item)) return LINK_SVG_CHIP;
+  var name = itemLabel(item) || "";
+  var m = /\.([a-z0-9]+)$/i.exec(name);
+  var ext = m ? m[1].toLowerCase() : "";
+  if (IMAGE_EXTS.indexOf(ext) !== -1) return IMAGE_SVG_CHIP;
+  if (DOC_EXTS.indexOf(ext) !== -1) return DOC_SVG_CHIP;
+  if (SLIDES_EXTS.indexOf(ext) !== -1) return SLIDES_SVG_CHIP;
+  return FILE_SVG_CHIP;
+}
 
 var CHECK_ICON_SVG =
   '<svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" ' +
@@ -598,13 +630,16 @@ function renderProfiles() {
     } else {
       html += '<span class="rname">' + profileLabel(p) + '</span>';
     }
-    if (p.shared) html += '<span class="shared-flag" title="Every TA can see and edit this profile">' + SHARE_SVG_CHIP + 'shared</span>';
+    if (p.shared) {
+      html += '<span class="shared-flag" title="Every TA can see and edit this profile">' + SHARE_SVG_CHIP + 'shared</span>' +
+        '<button class="btn btn-ghost pr-unshare" type="button">Unshare</button>';
+    }
     html += '<span class="prof-btns">' +
       '<button class="btn btn-ghost pr-edit" type="button"' + (open ? " disabled" : "") + '>' +
       (open ? "Editing" : "Edit") + '</button>';
     if (p.mine) {
-      html += '<button class="btn btn-ghost pr-share" type="button">' + (p.shared ? "Unshare" : "Share") + '</button>' +
-        '<button class="btn btn-ghost pr-del" type="button">Delete</button>';
+      if (!p.shared) html += '<button class="btn btn-ghost pr-share" type="button">Share</button>';
+      html += '<button class="btn btn-ghost pr-del" type="button">Delete</button>';
     }
     html += '</span></div>';
   });
@@ -631,10 +666,21 @@ function renderProfiles() {
 
     var shareBtn = row.querySelector(".pr-share");
     if (shareBtn) shareBtn.addEventListener("click", function () {
-      updateProfile(p.id, { shared: !p.shared }, function () {
-        p.shared = !p.shared;
+      updateProfile(p.id, { shared: true }, function () {
+        p.shared = true;
         renderProfiles();
-        showMsg(p.shared ? 'Shared. Every TA can see "' + p.name + '" now.' : "Unshared.", true);
+        showMsg('Shared. Every TA can see "' + p.name + '" now.', true);
+      });
+    });
+
+    /* unlike sharing (owner only), any ta who can see a shared profile can
+       take it back off the shared list, no need to track down the owner */
+    var unshareBtn = row.querySelector(".pr-unshare");
+    if (unshareBtn) unshareBtn.addEventListener("click", function () {
+      updateProfile(p.id, { shared: false }, function () {
+        p.shared = false;
+        renderProfiles();
+        showMsg('Unshared "' + p.name + '".', true);
       });
     });
 

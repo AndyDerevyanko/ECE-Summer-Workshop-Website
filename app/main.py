@@ -107,9 +107,12 @@ def api_update_profile(profile_id: int, payload: dict[str, Any], ta=Depends(requ
     if not prof:
         raise HTTPException(status_code=404, detail="No such profile.")
     is_owner = prof["owner"] == ta["username"]
-    # anyone can save content into a shared profile, but only the owner
-    # can rename, share/unshare, or delete it
-    if ("name" in payload or "shared" in payload) and not is_owner:
+    # anyone can save content into a shared profile, and anyone can take a
+    # shared profile off the shared list, but only the owner can rename,
+    # turn sharing on, or delete it
+    if "name" in payload and not is_owner:
+        raise HTTPException(status_code=403, detail="Only the owner can change that.")
+    if payload.get("shared") is True and not is_owner:
         raise HTTPException(status_code=403, detail="Only the owner can change that.")
     if "data" in payload and not (is_owner or prof["shared"]):
         raise HTTPException(status_code=403, detail="Not your profile.")

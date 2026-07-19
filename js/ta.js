@@ -3,6 +3,7 @@
 
 function seed() {
   return {
+    total_days: 10,
     days: [
       { day: 1, date: "", opens_at: "", unlocked: false, title: "", blurb: "", files: [] },
       { day: 2, date: "", opens_at: "", unlocked: false, title: "", blurb: "", files: [] }
@@ -44,6 +45,7 @@ function normalizeState() {
   delete STATE.end_date;
   if (STATE.contact_text === undefined) STATE.contact_text = "Questions? hardware.robotics@utoronto.ca";
   if (STATE.join_url === undefined) STATE.join_url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+  if (!STATE.total_days) STATE.total_days = 10;
 }
 
 var STATE = seed();
@@ -466,6 +468,7 @@ function syncLanding() {
 }
 
 function renderAll() {
+  document.getElementById("totalDaysInput").value = STATE.total_days;
   renderPanels();
   renderExtras();
   renderLogistics();
@@ -670,6 +673,10 @@ document.addEventListener("DOMContentLoaded", function () {
 
   document.getElementById("profileBack").addEventListener("click", function () {
     backToLive();
+  });
+
+  document.getElementById("totalDaysInput").addEventListener("input", function () {
+    STATE.total_days = +this.value || 1;
   });
 
   document.getElementById("addPanel").addEventListener("click", function () {

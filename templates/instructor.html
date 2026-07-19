@@ -73,7 +73,14 @@
 
     <section class="section-sm" id="panels">
       <div class="wrap">
-        <h2 style="font-size:1.4rem;margin-bottom:18px">Day panels</h2>
+        <h2 style="font-size:1.4rem;margin-bottom:6px">Day panels</h2>
+        <div class="ta-card" style="max-width:260px">
+          <div class="field">
+            <label for="totalDaysInput">Total workshop days</label>
+            <input id="totalDaysInput" type="number" min="1">
+          </div>
+          <p class="muted" style="margin:6px 0 0">Drives the "N of TOTAL days unlocked" progress bar on the dashboard.</p>
+        </div>
         <div id="panelList">
           <!-- filled in by ta.js -->
         </div>

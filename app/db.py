@@ -32,6 +32,7 @@ def _idle_seconds(role):
 # starting content, same shape as the old hardcoded DAYS/EXTRAS/timer vars.
 # only used the first time the content table is empty.
 DEFAULT_CONTENT = {
+    "total_days": 10,
     "days": [
         {"day": 1, "date": "", "opens_at": "", "unlocked": False, "title": "", "blurb": "", "files": []},
         {"day": 2, "date": "", "opens_at": "", "unlocked": False, "title": "", "blurb": "", "files": []},

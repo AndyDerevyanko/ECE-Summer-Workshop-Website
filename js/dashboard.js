@@ -1,7 +1,8 @@
 /* dashboard: renders day panels from content fetched off /api/content */
 
-/* full length of the workshop, drives the progress denominator. fixed by
-   the workshop schedule, not something the ta portal edits. */
+/* full length of the workshop, drives the progress denominator. set from
+   /api/content (ta portal, "Total workshop days"), this is just the
+   fallback if that's missing. */
 var TOTAL_DAYS = 10;
 
 /* filled in by loadContent() before renderDays()/renderExtras() run */
@@ -149,6 +150,7 @@ document.addEventListener("DOMContentLoaded", function () {
     .then(function (data) {
       DAYS = data.days;
       EXTRAS = data.extras;
+      TOTAL_DAYS = data.total_days || TOTAL_DAYS;
       var unlocked = renderDays();
       renderProgress(unlocked);
       renderExtras();

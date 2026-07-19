@@ -86,6 +86,18 @@ var X_SVG =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
   'stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
 
+var LOCK_SVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<rect x="5" y="11" width="14" height="9" rx="2"/>' +
+  '<path d="M8 11V8a4 4 0 0 1 8 0v3"/><path d="M12 14.5v2"/></svg>';
+
+var UNLOCK_SVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<rect x="5" y="11" width="14" height="9" rx="2"/>' +
+  '<path d="M8 11V8a4 4 0 0 1 7.5-2"/><path d="M12 14.5v2"/></svg>';
+
 var LINK_SVG_BTN =
   '<svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
   'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
@@ -240,7 +252,7 @@ function renderPanels() {
       '<div class="ta-panel" data-i="' + i + '">' +
         '<div class="ta-panel-head">' +
           '<span class="daytag">Day ' + d.day + '</span>' +
-          '<span class="badge ' + (d.unlocked ? 'open">Open' : 'locked">Locked') + '</span>' +
+          '<span class="badge ' + (d.unlocked ? 'open">' + UNLOCK_SVG + 'Open' : 'locked">' + LOCK_SVG + 'Locked') + '</span>' +
           '<button class="btn btn-ghost p-del" type="button">Remove panel</button>' +
         '</div>' +
         '<div class="ta-row">' +

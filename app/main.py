@@ -14,12 +14,15 @@ from app.db import (
     UPLOAD_DIR,
     create_profile,
     create_session,
+    create_user,
     delete_profile,
+    delete_user,
     get_content,
     get_profile,
     get_session,
     init_db,
     list_profiles,
+    list_users,
     save_content,
     update_profile,
     verify_login,
@@ -130,6 +133,39 @@ def api_delete_profile(profile_id: int, ta=Depends(require_ta)):
     return {"ok": True}
 
 
+class NewUserRequest(BaseModel):
+    username: str
+    password: str
+    role: str
+
+
+@app.get("/api/users")
+def api_list_users(_ta=Depends(require_ta)):
+    return list_users()
+
+
+@app.post("/api/users")
+def api_create_user(payload: NewUserRequest, _ta=Depends(require_ta)):
+    username = payload.username.strip()
+    if not username or not payload.password:
+        raise HTTPException(status_code=400, detail="Username and password are both needed.")
+    if payload.role not in ("student", "ta"):
+        raise HTTPException(status_code=400, detail="Role must be student or ta.")
+    if not create_user(username, payload.password, payload.role):
+        raise HTTPException(status_code=409, detail="That username is already taken.")
+    return {"ok": True}
+
+
+@app.delete("/api/users/{username}")
+def api_delete_user(username: str, ta=Depends(require_ta)):
+    # stops a ta nuking their own account (and with it the last ta)
+    if username == ta["username"]:
+        raise HTTPException(status_code=400, detail="You can't remove your own account.")
+    if not delete_user(username):
+        raise HTTPException(status_code=404, detail="No such account.")
+    return {"ok": True}
+
+
 @app.post("/api/upload")
 def api_upload(file: UploadFile, _ta=Depends(require_ta)):
     safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", file.filename or "file")
@@ -167,3 +203,8 @@ def page_dashboard(request: Request):
 @app.get("/instructor.html")
 def page_instructor(request: Request):
     return templates.TemplateResponse(request, "instructor.html")
+
+
+@app.get("/accounts.html")
+def page_accounts(request: Request):
+    return templates.TemplateResponse(request, "accounts.html")

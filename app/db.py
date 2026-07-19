@@ -54,10 +54,18 @@ def init_db():
             username TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
             salt TEXT NOT NULL,
-            role TEXT NOT NULL CHECK (role IN ('student', 'ta'))
+            role TEXT NOT NULL CHECK (role IN ('student', 'ta')),
+            plain TEXT
         )
         """
     )
+    # plain holds student passwords so tas can read them back off the
+    # accounts page (they're ta-issued handout credentials, not secrets).
+    # ta rows stay null, those are hash-only. guarded alter for older dbs.
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN plain TEXT")
+    except sqlite3.OperationalError:
+        pass
     # login tokens, issued on login, checked on every ta-only request.
     conn.execute(
         """
@@ -93,6 +101,7 @@ def init_db():
     )
     conn.commit()
     _seed_users(conn)
+    _backfill_plain(conn)
     _seed_content(conn)
     conn.close()
 
@@ -103,14 +112,25 @@ def _seed_users(conn):
     rows = []
     for username, password in SEED_STUDENTS.items():
         password_hash, salt = hash_password(password)
-        rows.append((username, password_hash, salt, "student"))
+        rows.append((username, password_hash, salt, "student", password))
     for username, password in SEED_TAS.items():
         password_hash, salt = hash_password(password)
-        rows.append((username, password_hash, salt, "ta"))
+        rows.append((username, password_hash, salt, "ta", None))
     conn.executemany(
-        "INSERT INTO users (username, password_hash, salt, role) VALUES (?, ?, ?, ?)",
+        "INSERT INTO users (username, password_hash, salt, role, plain) VALUES (?, ?, ?, ?, ?)",
         rows,
     )
+    conn.commit()
+
+
+def _backfill_plain(conn):
+    """dbs seeded before the plain column exist don't have student passwords
+    stored, fill them back in from the seed list by username."""
+    for username, password in SEED_STUDENTS.items():
+        conn.execute(
+            "UPDATE users SET plain = ? WHERE username = ? AND role = 'student' AND plain IS NULL",
+            (password, username),
+        )
     conn.commit()
 
 
@@ -146,6 +166,43 @@ def get_session(token):
     ).fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+def list_users():
+    """usernames, roles, and the stored student passwords. hashes never
+    leave the db and ta passwords have no plain copy at all."""
+    conn = get_db()
+    rows = conn.execute("SELECT username, role, plain FROM users ORDER BY username").fetchall()
+    conn.close()
+    return [{"username": r["username"], "role": r["role"], "password": r["plain"]} for r in rows]
+
+
+def create_user(username, password, role):
+    """returns false if the username is already taken."""
+    password_hash, salt = hash_password(password)
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO users (username, password_hash, salt, role, plain) VALUES (?, ?, ?, ?, ?)",
+            (username, password_hash, salt, role, password if role == "student" else None),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        # username taken (unique constraint)
+        conn.close()
+        return False
+    conn.close()
+    return True
+
+
+def delete_user(username):
+    """removes the account and any login tokens it had. false if no such user."""
+    conn = get_db()
+    cur = conn.execute("DELETE FROM users WHERE username = ?", (username,))
+    conn.execute("DELETE FROM sessions WHERE username = ?", (username,))
+    conn.commit()
+    conn.close()
+    return cur.rowcount > 0
 
 
 def _seed_content(conn):

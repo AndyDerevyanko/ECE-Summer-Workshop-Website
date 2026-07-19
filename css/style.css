@@ -756,19 +756,19 @@ h1, h2, h3 {
   font-size: .85rem;
   color: var(--muted);
 }
+/* no pill, just a small icon + word */
 .badge {
-  display: inline-block;
-  font-size: .72rem;
-  letter-spacing: 1px;
-  text-transform: uppercase;
-  padding: 3px 10px;
-  border-radius: 999px;
-  font-family: var(--font-mono);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: .82rem;
+  font-weight: 600;
+  font-family: var(--font-body);
 }
-.badge.open   { background: color-mix(in srgb, var(--good) 22%, transparent); color: var(--good); }
-.badge.locked { background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); }
-.badge.today  { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent); }
-.badge svg { width: 11px; height: 11px; vertical-align: -1px; }
+.badge.open   { color: var(--good); }
+.badge.locked { color: var(--muted); }
+.badge.today  { color: var(--accent); }
+.badge svg { width: 14px; height: 14px; flex: none; }
 
 /* empty upcoming day, big lock and a coming soon note */
 .day-card.soon {
@@ -783,14 +783,7 @@ h1, h2, h3 {
 }
 .day-card.soon h3 { color: var(--text); margin: 10px 0 0; }
 .day-card.soon p { margin: 2px 0 0; font-size: .92rem; }
-.day-card.soon .badge {
-  margin-top: 14px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--accent);
-}
+.day-card.soon .badge { margin-top: 14px; color: var(--accent); }
 .soon-lock {
   width: 46px;
   height: 46px;

@@ -28,6 +28,12 @@ var LOCK_SVG =
   '<rect x="5" y="11" width="14" height="9" rx="2"/>' +
   '<path d="M8 11V8a4 4 0 0 1 8 0v3"/><path d="M12 14.5v2"/></svg>';
 
+var UNLOCK_SVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<rect x="5" y="11" width="14" height="9" rx="2"/>' +
+  '<path d="M8 11V8a4 4 0 0 1 7.5-2"/><path d="M12 14.5v2"/></svg>';
+
 function fmtDate(dateStr) {
   var d = new Date(dateStr + "T00:00:00");
   return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
@@ -53,7 +59,7 @@ function soonCard(dayNum) {
     '<span class="soon-lock">' + LOCK_SVG + '</span>' +
     '<h3>Day ' + dayNum + '</h3>' +
     '<p class="muted">This module will be available soon</p>' +
-    '<span class="badge locked">' + LOCK_SVG + ' Locked</span>' +
+    '<span class="badge locked">' + LOCK_SVG + 'Locked</span>' +
   '</div>';
 }
 
@@ -79,7 +85,7 @@ function renderDays() {
         '<div style="display:flex;justify-content:space-between;align-items:center">' +
           '<span class="daytag">Day ' + day.day +
             (day.date ? ' &middot; ' + fmtDate(day.date) : '') + '</span>' +
-          '<span class="badge open">Open</span>' +
+          '<span class="badge open">' + UNLOCK_SVG + 'Open</span>' +
         '</div>' +
         '<h3>' + day.title + '</h3>' +
         '<p class="muted">' + day.blurb + '</p>' +

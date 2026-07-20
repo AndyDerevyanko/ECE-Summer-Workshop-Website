@@ -202,6 +202,11 @@ h1, h2, h3 {
   align-items: center;
   gap: 18px;
   height: 64px;
+  /* keep it a single row: text stays on one line, and the row scrolls
+     sideways instead of wrapping if a page's nav has too much in it */
+  white-space: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 .brand {
   font-family: var(--font-head);
@@ -1012,7 +1017,21 @@ h1, h2, h3 {
 .gy-kind { display: inline-flex; align-items: center; gap: 5px; font-size: .82rem; color: var(--muted); }
 .gy-bar .gy-rm { margin-left: auto; }
 /* ---------- ta preview page ---------- */
-.pv-tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+/* whole page fills the viewport and the frame stretches to fill whatever's
+   left after the nav/header/tabs, so there's no scrolling to see it all */
+.pv-page { display: flex; flex-direction: column; min-height: 100vh; }
+.pv-main { flex: 1; display: flex; min-height: 0; }
+.pv-wrap { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 18px 24px; }
+.pv-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.pv-title { font-size: 1.4rem; margin: 2px 0 0; }
+.pv-tabs { display: flex; gap: 8px; }
 .pv-tab {
   border: none;
   padding: 12px 18px;
@@ -1027,11 +1046,14 @@ h1, h2, h3 {
 .pv-tab:hover { color: var(--text); }
 .pv-tab.active { background: var(--accent); color: #fff; }
 .pv-frame-wrap {
+  flex: 1;
+  min-height: 0;
+  border: 2px solid var(--accent);
   border-radius: var(--radius);
   overflow: hidden;
   background: var(--surface);
 }
-.pv-frame { width: 100%; height: 80vh; border: none; display: block; }
+.pv-frame { width: 100%; height: 100%; border: none; display: block; }
 /* .field label/input rules hit these too, needs the extra specificity */
 .field .ta-radio {
   display: flex;

@@ -19,7 +19,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="css/style.css" />
 </head>
-<body class="mono">
+<body class="mono pv-page">
 
   <nav class="nav">
     <div class="wrap nav-inner">
@@ -52,35 +52,23 @@
     <a class="btn btn-primary" href="login.html">Go to login</a>
   </div>
 
-  <main id="pvApp" style="display:none">
-    <section class="dash-head">
-      <div class="wrap">
-        <p class="eyebrow">TA portal</p>
-        <h1>Preview</h1>
-        <p class="muted">
-          This shows your unsaved edits from the content manager, not the live site. Students
-          see none of it until you hit Apply. Made more changes? Click Preview again from the
-          content manager to refresh this page.
-        </p>
-      </div>
-    </section>
-
-    <section class="section-sm">
-      <div class="wrap">
+  <main id="pvApp" class="pv-main" style="display:none">
+    <div class="wrap pv-wrap">
+      <div class="pv-head">
+        <div>
+          <p class="eyebrow">TA portal</p>
+          <h1 class="pv-title">Preview</h1>
+        </div>
         <div class="pv-tabs" role="tablist">
           <button class="pv-tab" data-tab="landing" type="button" role="tab">Landing page</button>
           <button class="pv-tab" data-tab="dashboard" type="button" role="tab">Student dashboard</button>
         </div>
-        <div class="pv-frame-wrap">
-          <iframe id="pvFrame" class="pv-frame" title="Preview"></iframe>
-        </div>
       </div>
-    </section>
+      <div class="pv-frame-wrap">
+        <iframe id="pvFrame" class="pv-frame" title="Preview"></iframe>
+      </div>
+    </div>
   </main>
-
-  <footer class="footer">
-    <div class="wrap">ECE Workshops · TA area</div>
-  </footer>
 
   <script src="js/theme.js"></script>
   <script src="js/idle.js"></script>

@@ -9,7 +9,7 @@ function gateCheck() {
   var ok = localStorage.getItem("session") && localStorage.getItem("role") === "ta";
   var app = document.getElementById("pvApp");
   var gate = document.getElementById("pvGate");
-  if (app) app.style.display = ok ? "block" : "none";
+  if (app) app.style.display = ok ? "flex" : "none";
   if (gate) gate.style.display = ok ? "none" : "block";
   return ok;
 }

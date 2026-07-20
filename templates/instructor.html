@@ -27,6 +27,7 @@
       <div class="nav-links">
         <a href="#panels">Day panels</a>
         <a href="#extras">Extra attachments</a>
+        <a href="#gallery">Gallery</a>
         <a href="#landing">Landing page</a>
         <a href="#profiles">Profiles</a>
       </div>
@@ -117,6 +118,29 @@
         <div class="ta-link-row" id="extraLinkRow" style="display:none">
           <input type="url" id="extraLinkInput" placeholder="https://...">
           <button class="btn btn-primary" id="extraLinkAdd" type="button">Add</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="section-sm" id="gallery">
+      <div class="wrap">
+        <h2 style="font-size:1.4rem;margin-bottom:6px">Gallery</h2>
+        <p class="muted" style="margin-top:0;margin-bottom:18px">
+          Photos and clips shown on the public gallery page, grouped by year.
+        </p>
+        <div id="galleryList">
+          <!-- filled in by ta.js -->
+        </div>
+        <div class="ta-row" style="align-items:end">
+          <div class="field">
+            <label for="newYearInput">Add a year</label>
+            <input id="newYearInput" type="text" placeholder="e.g. 2027">
+          </div>
+          <button class="btn btn-ghost" id="addGalleryYear" type="button">
+            <svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+            Add year
+          </button>
         </div>
       </div>
     </section>

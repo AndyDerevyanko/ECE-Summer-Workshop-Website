@@ -19,7 +19,14 @@ function seed() {
       { big: "4 hours", lbl: "1:30pm–5:30pm", icon: false },
       { big: "SFB520", lbl: "Sandford Fleming", icon: false },
       { big: "", lbl: "Certificate of completion", icon: true }
-    ]
+    ],
+    gallery: {
+      years: ["2026", "2025"],
+      images: {
+        "2026": ["assets/gallery/group-main-2026.png"],
+        "2025": ["assets/gallery/group_photo_2025.jpg"]
+      }
+    }
   };
 }
 
@@ -50,6 +57,7 @@ function normalizeState() {
     STATE.apply_tooltip = "Applications open once the workshop dates are confirmed, check back soon.";
   }
   if (!STATE.total_days) STATE.total_days = 10;
+  if (!STATE.gallery || !Array.isArray(STATE.gallery.years)) STATE.gallery = seed().gallery;
 }
 
 var STATE = seed();
@@ -494,6 +502,98 @@ function renderLogistics() {
   });
 }
 
+function isVidUrl(u) { return /\.mov$/i.test(u); }
+
+/* editable per-year photo/clip lists shown on gallery.html */
+function renderGallery() {
+  var list = document.getElementById("galleryList");
+  if (!list) return;
+  var html = "";
+
+  STATE.gallery.years.forEach(function (y) {
+    var imgs = STATE.gallery.images[y] || [];
+    var thumbs = imgs.map(function (u, i) {
+      var media = isVidUrl(u) ?
+        '<video src="' + u + '" muted playsinline></video>' :
+        '<img src="' + u + '" alt="">';
+      return '<div class="gy-item">' + media +
+        '<button class="gy-rm" data-i="' + i + '" type="button" aria-label="Remove image">' + X_SVG + '</button></div>';
+    }).join("");
+
+    html +=
+      '<div class="ta-panel" data-year="' + y + '">' +
+        '<div class="ta-panel-head">' +
+          '<span class="daytag">' + y + '</span>' +
+          '<button class="btn btn-ghost gy-del" type="button">Remove year</button>' +
+        '</div>' +
+        '<div class="gy-grid">' + (thumbs || '<p class="muted">No images yet.</p>') + '</div>' +
+        '<label class="btn btn-ghost ta-upload">' +
+          '<svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+          'stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>' +
+          ' Add image<input type="file" class="gy-file" accept="image/*,video/*" multiple hidden></label> ' +
+        '<button class="btn btn-ghost gy-link-btn" type="button">' + LINK_SVG_BTN + ' Add by URL</button>' +
+        '<div class="ta-link-row gy-link-row" style="display:none">' +
+          '<input type="url" class="gy-link-input" placeholder="https://... or assets/gallery/...">' +
+          '<button class="btn btn-primary gy-link-add" type="button">Add</button>' +
+        '</div>' +
+      '</div>';
+  });
+
+  list.innerHTML = html || '<p class="muted">No years yet.</p>';
+
+  list.querySelectorAll(".ta-panel").forEach(function (p) {
+    var y = p.getAttribute("data-year");
+
+    p.querySelector(".gy-del").addEventListener("click", function () {
+      if (!confirm('Remove the "' + y + '" year and all its images from the gallery?')) return;
+      STATE.gallery.years.splice(STATE.gallery.years.indexOf(y), 1);
+      delete STATE.gallery.images[y];
+      renderGallery();
+    });
+
+    p.querySelectorAll(".gy-rm").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        STATE.gallery.images[y].splice(+this.getAttribute("data-i"), 1);
+        renderGallery();
+      });
+    });
+
+    p.querySelector(".gy-file").addEventListener("change", function () {
+      var files = Array.prototype.slice.call(this.files);
+      if (!files.length) return;
+      showMsg("Uploading...", true);
+      Promise.all(files.map(uploadFile))
+        .then(function (items) {
+          items.forEach(function (it) { STATE.gallery.images[y].push(it.url); });
+          showMsg("Uploaded. Don't forget to save your changes.", true);
+          renderGallery();
+        })
+        .catch(function (err) {
+          if (err.message === "expired") return;
+          showMsg("Couldn't upload one of the files. Try again.", false);
+        });
+    });
+
+    var linkRow = p.querySelector(".gy-link-row");
+    var linkInput = p.querySelector(".gy-link-input");
+    p.querySelector(".gy-link-btn").addEventListener("click", function () {
+      linkRow.style.display = "flex";
+      linkInput.focus();
+    });
+    function addGalleryLink() {
+      var v = linkInput.value.trim();
+      if (!v) return;
+      STATE.gallery.images[y].push(v);
+      linkInput.value = "";
+      renderGallery();
+    }
+    p.querySelector(".gy-link-add").addEventListener("click", addGalleryLink);
+    linkInput.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); addGalleryLink(); }
+    });
+  });
+}
+
 /* push STATE into the landing page controls */
 function syncLanding() {
   var radios = document.querySelectorAll('input[name="cdMode"]');
@@ -509,6 +609,7 @@ function renderAll() {
   renderPanels();
   renderExtras();
   renderLogistics();
+  renderGallery();
   syncLanding();
   renderPreview();
 }
@@ -740,6 +841,17 @@ document.addEventListener("DOMContentLoaded", function () {
     STATE.logistics.push({ big: "", lbl: "", icon: false });
     renderLogistics();
     renderPreview();
+  });
+
+  document.getElementById("addGalleryYear").addEventListener("click", function () {
+    var input = document.getElementById("newYearInput");
+    var y = input.value.trim();
+    if (!y) return;
+    if (STATE.gallery.years.indexOf(y) !== -1) { showMsg("That year already exists.", false); return; }
+    STATE.gallery.years.unshift(y);
+    STATE.gallery.images[y] = [];
+    input.value = "";
+    renderGallery();
   });
 
   document.getElementById("extraFile").addEventListener("change", function () {

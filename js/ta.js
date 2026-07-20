@@ -168,6 +168,11 @@ var SLIDES_SVG_CHIP =
   'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
   '<path d="M2 3h20"/><path d="M21 3v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V3"/><path d="M7 21l5-5 5 5"/></svg>';
 
+var VID_SVG_CHIP =
+  '<svg class="tf-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<rect x="2" y="5" width="14" height="14" rx="2"/><path d="M16 10l6-3v10l-6-3"/></svg>';
+
 var IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "avif", "tiff", "heic"];
 var DOC_EXTS = ["pdf", "doc", "docx", "txt", "rtf", "odt", "pages"];
 var SLIDES_EXTS = ["ppt", "pptx", "key", "odp"];
@@ -542,7 +547,8 @@ function renderGallery() {
         '</div>' +
         '<div class="gy-bar">' +
           '<span class="gy-count">' + (i + 1) + ' / ' + imgs.length + '</span>' +
-          '<button class="btn btn-ghost gy-rm" type="button">Remove this image</button>' +
+          '<span class="gy-kind">' + (isVidUrl(cur) ? VID_SVG_CHIP + 'Video clip' : IMAGE_SVG_CHIP + 'Photo') + '</span>' +
+          '<button class="btn btn-ghost gy-rm" type="button">Remove</button>' +
         '</div>';
     } else {
       viewer = '<p class="muted">No images yet.</p>';

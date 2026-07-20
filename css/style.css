@@ -969,20 +969,29 @@ h1, h2, h3 {
 .ta-link-row input:focus { outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
 .ta-link-row .btn { padding: 10px 16px; }
 /* gallery mini viewer, ta portal only. one image at a time per year */
-.gy-stage { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
-.gy-media {
-  flex: 1;
-  min-width: 0;
-  height: 240px;
-  object-fit: cover;
+.gy-stage {
+  position: relative;
+  width: 100%;
+  /* normal 16:9 frame that fills the panel width, instead of a full-width sliver */
+  aspect-ratio: 16 / 9;
+  margin: 0 0 10px;
   border-radius: 10px;
-  background: var(--surface-2);
+  background: var(--surface);
+  overflow: hidden;
+}
+.gy-media {
+  width: 100%;
+  height: 100%;
+  /* contain, not cover: tas need to see the whole shot, not a crop */
+  object-fit: contain;
   display: block;
 }
 .gy-arrow {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
   width: 34px;
   height: 34px;
-  flex: none;
   border: none;
   border-radius: 50%;
   background: var(--surface-2);
@@ -991,11 +1000,17 @@ h1, h2, h3 {
   display: grid;
   place-items: center;
   padding: 0;
+  z-index: 2;
 }
+.gy-prev { left: 8px; }
+.gy-next { right: 8px; }
 .gy-arrow svg { width: 16px; height: 16px; }
-.gy-arrow:hover { color: var(--accent); }
+.gy-arrow:hover { background: var(--accent); color: #fff; }
 .gy-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
 .gy-count { color: var(--muted); font-size: .88rem; }
+/* photo vs video tag so a still frame isn't mistaken for a photo */
+.gy-kind { display: inline-flex; align-items: center; gap: 5px; font-size: .82rem; color: var(--muted); }
+.gy-bar .gy-rm { margin-left: auto; }
 /* .field label/input rules hit these too, needs the extra specificity */
 .field .ta-radio {
   display: flex;

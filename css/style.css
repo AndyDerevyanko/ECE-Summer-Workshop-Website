@@ -76,16 +76,17 @@ body {
 
 img { max-width: 100%; display: block; }
 
-/* huge faint logo behind the hero, scrolls with the page.
-   pulled up so the visible part starts a bit below the 64px nav
-   (the top of the png is a soft glow you can't see at this opacity) */
+/* faint logo watermark behind the "from circuits to robots" copy, scrolls
+   with the page. #about clips it (overflow: hidden) so it can never bleed
+   into the lighter section below */
+#about { position: relative; overflow: hidden; }
 .bg-logo {
   position: absolute;
-  top: -100px;
+  top: 50%;
   left: 50%;
-  width: min(1400px, 100%);
+  width: min(900px, 90%);
   max-width: none;
-  transform: translateX(-50%);
+  transform: translate(-50%, -50%);
   opacity: .05;
   pointer-events: none;
   user-select: none;
@@ -258,6 +259,41 @@ h1, h2, h3 {
   justify-content: center;
 }
 .hero-left .lead { margin-top: 0; }
+
+/* full-screen video hero. hidden unless .hero also has "hero-media" so
+   removing that one class off the header in index.html reverts to the
+   plain hero, no other cleanup needed */
+.hero-bg, .hero-scrim { display: none; }
+.hero.hero-media {
+  min-height: calc(100vh - 64px); /* 64px = .nav-inner height, above this */
+  display: flex;
+  align-items: center;
+  padding: 60px 0;
+}
+.hero.hero-media .hero-bg {
+  display: block;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 0;
+}
+.hero.hero-media .hero-scrim {
+  display: block;
+  position: absolute;
+  inset: 0;
+  /* flat scrim, not a gradient, just enough to keep the overlaid text readable */
+  background: rgba(8, 11, 16, .58);
+  z-index: 1;
+}
+.hero.hero-media > .wrap { position: relative; z-index: 2; width: 100%; }
+.hero.hero-media .eyebrow,
+.hero.hero-media h1,
+.hero.hero-media p.lead {
+  color: #f2f4f8;
+}
+.hero.hero-media h1 .grad { color: var(--accent); }
 
 /* floating emoji in hero */
 .floaty {

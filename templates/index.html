@@ -28,9 +28,6 @@
 
 <body class="mono">
 
-  <!-- faint upscaled logo mark (no text), scrolls with the page -->
-  <img class="bg-logo" src="assets/logo-mark.png" alt="" aria-hidden="true" />
-
   <!-- ===== nav ===== -->
   <nav class="nav">
     <div class="wrap nav-inner">
@@ -42,7 +39,8 @@
         <a href="#schedule">Schedule</a>
         <a href="#prizes">Prizes</a>
         <a href="gallery.html">Gallery</a>
-        <a href="login.html" id="portalLink">Access portal</a>
+        <!-- hidden while logged in, see updatePortalLink() in js/main.js -->
+        <a href="https://www.youtube.com/watch?v=dQw4w9WgXcQ" target="_blank" rel="noopener" class="join-link" id="navJoinLink">Join Us</a>
       </div>
       <div class="nav-right">
         <button id="themeBtn" class="theme-btn" type="button" aria-label="Toggle theme">
@@ -56,15 +54,22 @@
             <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />
           </svg>
         </button>
-        <a class="btn btn-primary join-link" href="https://www.youtube.com/watch?v=dQw4w9WgXcQ" target="_blank" rel="noopener">Join Us</a>
-        <!-- only shows while logged in, see updatePortalLink() in js/main.js -->
+        <a class="btn btn-accent2" href="login.html" id="portalLink">Access portal</a>
         <button class="btn btn-ghost" id="logoutBtn" type="button" style="display:none">Log out</button>
       </div>
     </div>
   </nav>
 
   <!-- ===== hero ===== -->
-  <header class="hero">
+  <!-- hero-media = full-screen video hero. to undo, just remove "hero-media"
+       from this class list, the video/scrim stay hidden and it's the old
+       plain hero again -->
+  <header class="hero hero-media">
+    <!-- cover-video.mp4 is robot-moving/-2/-3 + bluetooth-robot trimmed and
+         merged into one clip (see git history for the ffmpeg steps), so the
+         loop is seamless instead of jumping between separate <video> sources -->
+    <video class="hero-bg" src="assets/cover-video.mp4" autoplay muted loop playsinline></video>
+    <div class="hero-scrim"></div>
     <div class="wrap">
       <p class="eyebrow">University of Toronto · ECE</p>
       <h1>Design, Build and <span class="grad">Compete</span></h1>
@@ -89,6 +94,8 @@
 
   <!-- ===== about ===== -->
   <section class="section" id="about">
+    <!-- faint upscaled logo mark (no text), contained to this section only -->
+    <img class="bg-logo" src="assets/logo-mark.png" alt="" aria-hidden="true" />
     <div class="wrap split">
       <div class="reveal">
         <h2>From circuits to robots&hellip;</h2>

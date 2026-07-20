@@ -15,7 +15,11 @@ var CHECK_ICON_SVG =
   '<svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" ' +
   'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12.5l5 5L20 6.5" /></svg>';
 
-/* builds one logistics tile ("2 weeks", "4 hours", "SFB520", certificate, etc) */
+/**
+ * Builds one logistics tile ("2 weeks", "4 hours", "SFB520", certificate, etc).
+ * @param t {big, lbl, icon} tile data
+ * @return the tile's card element
+ */
 function logisticsTile(t) {
   var card = document.createElement("div");
   card.className = "card stat";
@@ -53,6 +57,28 @@ var DEFAULT_CONTACT = "Questions? hardware.robotics@utoronto.ca";
 var DEFAULT_JOIN_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
 var DEFAULT_APPLY_TOOLTIP = "Applications open once the workshop dates are confirmed, check back soon.";
 
+/**
+ * Resolves to the site content: the ta portal's unsaved snapshot when this
+ * page was opened with ?preview=1 (see js/preview.js, js/ta.js), otherwise
+ * the live content from /api/content.
+ * @return a promise resolving to the content object
+ */
+function fetchContent() {
+  if (/[?&]preview=1(&|$)/.test(window.location.search)) {
+    try {
+      var raw = localStorage.getItem("preview_content");
+      if (raw) return Promise.resolve(JSON.parse(raw));
+    } catch (e) {}
+  }
+  return fetch("/api/content").then(function (res) { return res.json(); });
+}
+
+/**
+ * Formats a date range as "Mon D to Mon D, YYYY".
+ * @param start iso date string (yyyy-mm-dd)
+ * @param end iso date string (yyyy-mm-dd)
+ * @return the formatted range
+ */
 function formatDateRange(start, end) {
   var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   var s = new Date(start + "T00:00:00");
@@ -61,10 +87,15 @@ function formatDateRange(start, end) {
     months[e.getMonth()] + " " + e.getDate() + ", " + e.getFullYear();
 }
 
-/* content saved before the workshop-dates tile got folded into the generic
-   logistics list has no "logistics" key at all, just the old date_mode/
-   weeks_label fields. build a first tile out of those so the real saved
-   dates don't disappear on students until a ta re-saves from the portal. */
+/**
+ * Returns the logistics tiles to render, migrating old-shaped content on
+ * the fly. Content saved before the workshop-dates tile got folded into the
+ * generic logistics list has no "logistics" key at all, just the old
+ * date_mode/weeks_label fields; this builds a first tile out of those so
+ * the real saved dates don't disappear on students until a ta re-saves.
+ * @param data the content blob from /api/content
+ * @return an array of {big, lbl, icon} tiles
+ */
 function resolveLogistics(data) {
   if (data.logistics) return data.logistics;
   var lbl = (data.date_mode === "confirmed" && data.start_date && data.end_date) ?
@@ -74,7 +105,10 @@ function resolveLogistics(data) {
   return tiles;
 }
 
-/* counts down to target (an iso datetime string), updates the clock digits every second */
+/**
+ * Starts the hero countdown clock, ticking the digits every second.
+ * @param target iso datetime string to count down to
+ */
 function startCountdown(target) {
   var targetMs = new Date(target).getTime();
 
@@ -100,9 +134,11 @@ function startCountdown(target) {
   setInterval(tick, 1000);
 }
 
-/* still logged in from a previous visit? point the nav link back at your
-   portal and show a log out button, instead of always saying "Access
-   portal", which read as having been logged out */
+/**
+ * Still logged in from a previous visit? Point the nav link back at your
+ * portal and show a log out button, instead of always saying "Access
+ * portal", which read as having been logged out.
+ */
 function updatePortalLink() {
   var link = document.getElementById("portalLink");
   var outBtn = document.getElementById("logoutBtn");
@@ -152,8 +188,7 @@ document.addEventListener("DOMContentLoaded", function () {
     document.querySelectorAll(".join-link").forEach(function (a) { a.setAttribute("data-tooltip", text); });
   }
 
-  fetch("/api/content")
-    .then(function (res) { return res.json(); })
+  fetchContent()
     .then(function (data) {
       if (data.timer_mode === "actual" && data.timer_target) {
         slot.innerHTML = CD_CLOCK_HTML;

@@ -4,13 +4,19 @@
 
 var USERS = [];
 
+/**
+ * Builds the Authorization header for a ta-only request.
+ * @return a {Authorization} headers object
+ */
 function authHeaders() {
   return { "Authorization": "Bearer " + (localStorage.getItem("token") || "") };
 }
 
-/* server says the session's gone (idle timeout, or the account got
-   removed), clear local state and bounce to login with a message instead
-   of quietly failing every button on the page */
+/**
+ * The server says the session's gone (idle timeout, or the account got
+ * removed): clears local state and bounces to login with a message instead
+ * of quietly failing every button on the page.
+ */
 function handleExpiredSession() {
   localStorage.removeItem("session");
   localStorage.removeItem("role");
@@ -19,8 +25,13 @@ function handleExpiredSession() {
   window.location.href = "login.html?expired=1";
 }
 
-/* fetch with the auth header attached; on a 401 it handles the redirect
-   itself and rejects, so callers only need to handle other failures */
+/**
+ * Fetch with the auth header attached; on a 401 it handles the redirect
+ * itself and rejects, so callers only need to handle other failures.
+ * @param url request url
+ * @param opts fetch options
+ * @return a promise resolving to the response (rejects on 401)
+ */
 function authedFetch(url, opts) {
   opts = opts || {};
   opts.headers = Object.assign({}, opts.headers, authHeaders());
@@ -30,6 +41,11 @@ function authedFetch(url, opts) {
   });
 }
 
+/**
+ * Shows a status message under the account forms.
+ * @param text message to show
+ * @param ok true for a success style, false for an error style
+ */
 function showMsg(text, ok) {
   var el = document.getElementById("accMsg");
   if (!el) return;
@@ -37,7 +53,10 @@ function showMsg(text, ok) {
   el.className = "form-msg " + (ok ? "ok" : "err");
 }
 
-/* only ta keys get in here */
+/**
+ * Only ta keys get in here.
+ * @return true if a ta is logged in
+ */
 function gateCheck() {
   var ok = localStorage.getItem("session") && localStorage.getItem("role") === "ta";
   var app = document.getElementById("accApp");
@@ -52,6 +71,10 @@ var PERSON_SVG =
   'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
   '<circle cx="12" cy="8" r="3.6"/><path d="M5 20a7 7 0 0 1 14 0"/></svg>';
 
+/**
+ * Loads the user list from the server into USERS and re-renders it.
+ * @return the underlying fetch promise
+ */
 function fetchUsers() {
   return authedFetch("/api/users")
     .then(function (res) {
@@ -68,6 +91,10 @@ function fetchUsers() {
     });
 }
 
+/**
+ * Confirms and deletes an account.
+ * @param u the user row {username, role, password}
+ */
 function removeUser(u) {
   var what = u.role === "ta" ? "TA" : "student";
   if (!confirm("Remove " + what + ' "' + u.username + '"? They won\'t be able to log in anymore.')) return;
@@ -84,6 +111,12 @@ function removeUser(u) {
     });
 }
 
+/**
+ * Renders one role's account list (students or tas) into a container.
+ * @param el the list container element
+ * @param role "student" or "ta"
+ * @param emptyText message shown when there are no accounts of that role
+ */
 function renderList(el, role, emptyText) {
   if (!el) return;
   var me = localStorage.getItem("session");
@@ -123,11 +156,18 @@ function renderList(el, role, emptyText) {
   });
 }
 
+/** Renders both the student and ta account lists. */
 function renderUsers() {
   renderList(document.getElementById("studentList"), "student", "No student accounts yet.");
   renderList(document.getElementById("taList"), "ta", "No TA accounts yet.");
 }
 
+/**
+ * Reads the add-account form and posts a new account to the server.
+ * @param role "student" or "ta"
+ * @param userInput the username input element
+ * @param passInput the password input element
+ */
 function addUser(role, userInput, passInput) {
   var username = userInput.value.trim();
   var password = passInput.value;

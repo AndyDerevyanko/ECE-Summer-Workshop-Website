@@ -1,6 +1,11 @@
 /* ta portal. everything edits the in-memory STATE object below; loaded from
    and saved to /api/content, which is the single source of truth. */
 
+/**
+ * Returns a fresh default content blob, used for a brand-new profile and
+ * to fill in missing fields in normalizeState().
+ * @return the default content shape
+ */
 function seed() {
   return {
     total_days: 10,
@@ -30,9 +35,11 @@ function seed() {
   };
 }
 
-/* fills in fields that may be missing from content saved before these were
-   added (or before the workshop-dates tile got folded into the generic
-   logistics list), so older saved blobs don't blow up the ta portal */
+/**
+ * Fills in fields that may be missing from content saved before these were
+ * added (or before the workshop-dates tile got folded into the generic
+ * logistics list), so older saved blobs don't blow up the ta portal.
+ */
 function normalizeState() {
   var oldDatesLbl = (STATE.date_mode === "confirmed" && STATE.start_date && STATE.end_date) ?
     formatDateRange(STATE.start_date, STATE.end_date) : "Tentative start date";
@@ -65,13 +72,21 @@ var STATE = seed();
 var PROFILES = [];  /* saved drafts from /api/profiles */
 var EDITING = null; /* null = editing the live site, else the open profile */
 
+var previewWindow = null; /* the tab opened by openPreview(), if still around */
+
+/**
+ * Builds the Authorization header for a ta-only request.
+ * @return a {Authorization} headers object
+ */
 function authHeaders() {
   return { "Authorization": "Bearer " + (localStorage.getItem("token") || "") };
 }
 
-/* server says the session's gone (idle timeout, or the account got
-   removed), clear local state and bounce to login with a message instead
-   of quietly failing every button on the page */
+/**
+ * The server says the session's gone (idle timeout, or the account got
+ * removed): clears local state and bounces to login with a message instead
+ * of quietly failing every button on the page.
+ */
 function handleExpiredSession() {
   localStorage.removeItem("session");
   localStorage.removeItem("role");
@@ -80,8 +95,13 @@ function handleExpiredSession() {
   window.location.href = "login.html?expired=1";
 }
 
-/* fetch with the auth header attached; on a 401 it handles the redirect
-   itself and rejects, so callers only need to handle other failures */
+/**
+ * Fetch with the auth header attached; on a 401 it handles the redirect
+ * itself and rejects, so callers only need to handle other failures.
+ * @param url request url
+ * @param opts fetch options
+ * @return a promise resolving to the response (rejects on 401)
+ */
 function authedFetch(url, opts) {
   opts = opts || {};
   opts.headers = Object.assign({}, opts.headers, authHeaders());
@@ -91,6 +111,11 @@ function authedFetch(url, opts) {
   });
 }
 
+/**
+ * Shows a status message under the action row.
+ * @param text message to show
+ * @param ok true for a success style, false for an error style
+ */
 function showMsg(text, ok) {
   var el = document.getElementById("taMsg");
   if (!el) return;
@@ -98,7 +123,11 @@ function showMsg(text, ok) {
   el.className = "form-msg " + (ok ? "ok" : "err");
 }
 
-/* uploads one file, resolves to the {type:"file", name, url} attachment entry */
+/**
+ * Uploads one file.
+ * @param file the File object from a file input
+ * @return a promise resolving to the {type:"file", name, url} attachment entry
+ */
 function uploadFile(file) {
   var fd = new FormData();
   fd.append("file", file);
@@ -112,7 +141,11 @@ function uploadFile(file) {
     });
 }
 
-/* datetime-local wants local time, toISOString gives utc */
+/**
+ * Formats the current moment for a datetime-local input (which wants local
+ * time; toISOString gives utc).
+ * @return a "yyyy-mm-ddThh:mm" local timestamp
+ */
 function nowLocal() {
   var n = new Date();
   var p = function (x) { return (x < 10 ? "0" : "") + x; };
@@ -186,14 +219,31 @@ var SHARE_SVG_CHIP =
 
 /* attachments are a plain filename string (legacy), a {type:"link", value}
    object, or a {type:"file", name, url} object for an uploaded file */
+
+/**
+ * Checks whether an attachment is a link entry.
+ * @param item an attachment (string or {type, ...} object)
+ * @return true if it's a {type:"link", value} entry
+ */
 function isLink(item) { return item && typeof item === "object" && item.type === "link"; }
+
+/**
+ * Returns the display label for an attachment chip.
+ * @param item an attachment (string or {type, ...} object)
+ * @return the link url, the uploaded file's name, or the raw legacy string
+ */
 function itemLabel(item) {
   if (isLink(item)) return item.value;
   if (item && typeof item === "object") return item.name;
   return item;
 }
-/* picks an icon off the file extension in the attachment's name, same
-   rule as js/dashboard.js. falls back to a generic file glyph. */
+
+/**
+ * Picks an icon off the file extension in the attachment's name, same rule
+ * as js/dashboard.js. Falls back to a generic file glyph.
+ * @param item an attachment (string or {type, ...} object)
+ * @return an inline svg icon string
+ */
 function itemIcon(item) {
   if (isLink(item)) return LINK_SVG_CHIP;
   var name = itemLabel(item) || "";
@@ -209,7 +259,11 @@ var CHECK_ICON_SVG =
   '<svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" ' +
   'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12.5l5 5L20 6.5" /></svg>';
 
-/* builds one read-only preview tile, same markup as the real one on index.html */
+/**
+ * Builds one read-only preview tile, same markup as the real one on index.html.
+ * @param t {big, lbl, icon} tile data
+ * @return the tile's card element
+ */
 function logisticsPreviewTile(t) {
   var card = document.createElement("div");
   card.className = "card stat ta-live-stat";
@@ -246,6 +300,12 @@ var CD_CLOCK_HTML =
     '</div>' +
   '</div>';
 
+/**
+ * Formats a date range as "Mon D to Mon D, YYYY".
+ * @param start iso date string (yyyy-mm-dd)
+ * @param end iso date string (yyyy-mm-dd)
+ * @return the formatted range, or a placeholder if either date is missing
+ */
 function formatDateRange(start, end) {
   if (!start || !end) return "No dates set yet";
   var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -257,7 +317,10 @@ function formatDateRange(start, end) {
 
 var previewTickHandle = null;
 
-/* ticks the preview clock digits every second, same math as js/main.js */
+/**
+ * Ticks the preview clock digits every second, same math as js/main.js.
+ * @param target iso datetime string to count down to
+ */
 function tickPreviewCountdown(target) {
   var targetMs = new Date(target).getTime();
   function tick() {
@@ -281,7 +344,7 @@ function tickPreviewCountdown(target) {
   previewTickHandle = setInterval(tick, 1000);
 }
 
-/* mirrors STATE back into the "current selection" preview box */
+/** Mirrors STATE back into the "current selection" preview box. */
 function renderPreview() {
   var slot = document.getElementById("previewCountdown");
   if (!slot) return;
@@ -301,7 +364,10 @@ function renderPreview() {
   if (contactPreview) contactPreview.textContent = STATE.contact_text;
 }
 
-/* only ta keys get in here */
+/**
+ * Only ta keys get in here.
+ * @return true if a ta is logged in
+ */
 function gateCheck() {
   var ok = localStorage.getItem("session") && localStorage.getItem("role") === "ta";
   var app = document.getElementById("taApp");
@@ -311,6 +377,7 @@ function gateCheck() {
   return ok;
 }
 
+/** Renders every day panel editor into #panelList and wires up its controls. */
 function renderPanels() {
   var list = document.getElementById("panelList");
   if (!list) return;
@@ -435,6 +502,7 @@ function renderPanels() {
   });
 }
 
+/** Renders the editable "Extra attachments" list into #extraList. */
 function renderExtras() {
   var list = document.getElementById("extraList");
   if (!list) return;
@@ -460,7 +528,7 @@ function renderExtras() {
   });
 }
 
-/* editable list of the "4 hours", "SFB520", certificate, etc tiles */
+/** Renders the editable list of the "4 hours", "SFB520", certificate, etc tiles. */
 function renderLogistics() {
   var list = document.getElementById("logisticsList");
   if (!list) return;
@@ -507,6 +575,11 @@ function renderLogistics() {
   });
 }
 
+/**
+ * Checks whether a gallery url is a video clip.
+ * @param u the media url
+ * @return true if it's a .MOV clip
+ */
 function isVidUrl(u) { return /\.mov$/i.test(u); }
 
 var PREV_SVG =
@@ -520,8 +593,11 @@ var NEXT_SVG =
 /* which image each year's mini viewer is sitting on, survives rerenders */
 var GY_IDX = {};
 
-/* editable per-year photo/clip lists shown on gallery.html. one image at a
-   time per year, same flip-through idea as the public gallery page. */
+/**
+ * Renders the editable per-year photo/clip lists shown on gallery.html.
+ * One image at a time per year, same flip-through idea as the public
+ * gallery page.
+ */
 function renderGallery() {
   var list = document.getElementById("galleryList");
   if (!list) return;
@@ -642,7 +718,7 @@ function renderGallery() {
   });
 }
 
-/* push STATE into the landing page controls */
+/** Pushes STATE into the landing page controls' input values. */
 function syncLanding() {
   var radios = document.querySelectorAll('input[name="cdMode"]');
   radios.forEach(function (r) { r.checked = r.value === STATE.timer_mode; });
@@ -652,6 +728,7 @@ function syncLanding() {
   document.getElementById("applyTooltipInput").value = STATE.apply_tooltip;
 }
 
+/** Re-renders every editor section from STATE. */
 function renderAll() {
   document.getElementById("totalDaysInput").value = STATE.total_days;
   renderPanels();
@@ -662,7 +739,27 @@ function renderAll() {
   renderPreview();
 }
 
-/* fetch the live content into the editor */
+/**
+ * Snapshots the in-editor STATE into localStorage and opens preview.html
+ * (or, if a preview tab from an earlier click is still open, refreshes it)
+ * so the ta can see unsaved edits rendered in the real landing page and
+ * dashboard before applying them.
+ */
+function openPreview() {
+  try { localStorage.setItem("preview_content", JSON.stringify(STATE)); } catch (e) {}
+  if (previewWindow && !previewWindow.closed) {
+    previewWindow.location.reload();
+    previewWindow.focus();
+  } else {
+    previewWindow = window.open("preview.html", "ta_preview");
+  }
+}
+
+/**
+ * Fetches the live content into the editor.
+ * @param okMsg status message to show on success (skipped if omitted)
+ * @return the underlying fetch promise
+ */
 function loadLive(okMsg) {
   return fetch("/api/content")
     .then(function (res) { return res.json(); })
@@ -678,15 +775,22 @@ function loadLive(okMsg) {
     });
 }
 
-/* what a profile is called in the list. shared ones from another ta get
-   their owner's name in front. */
+/**
+ * What a profile is called in the list. Shared ones from another ta get
+ * their owner's name in front.
+ * @param p a profile {owner, name, mine, shared, ...}
+ * @return the display label
+ */
 function profileLabel(p) {
   if (p.mine) return p.name;
   if (/^Profile \d+$/.test(p.name)) return p.owner + "'s " + p.name;
   return p.owner + "'s \"" + p.name + "\" profile";
 }
 
-/* next free default name for a new profile of mine */
+/**
+ * Next free default name for a new profile of mine.
+ * @return e.g. "Profile 3"
+ */
 function nextProfileName() {
   var n = 0;
   PROFILES.forEach(function (p) {
@@ -696,6 +800,12 @@ function nextProfileName() {
   return "Profile " + (n + 1);
 }
 
+/**
+ * Patches a profile on the server.
+ * @param id the profile's id
+ * @param fields the fields to update ({name, data, shared}, any subset)
+ * @param onOk called with no args on success
+ */
 function updateProfile(id, fields, onOk) {
   authedFetch("/api/profiles/" + id, {
     method: "POST",
@@ -712,7 +822,7 @@ function updateProfile(id, fields, onOk) {
     });
 }
 
-/* swaps the action buttons and the banner between live mode and profile mode */
+/** Swaps the action buttons and the banner between live mode and profile mode. */
 function syncProfileBar() {
   var bar = document.getElementById("profileBar");
   var txt = document.getElementById("profileBarText");
@@ -730,7 +840,10 @@ function syncProfileBar() {
   }
 }
 
-/* loads a profile into the editor. edits stay on a local copy until saved */
+/**
+ * Loads a profile into the editor. Edits stay on a local copy until saved.
+ * @param p the profile to open
+ */
 function openProfile(p) {
   EDITING = p;
   STATE = JSON.parse(JSON.stringify(p.data));
@@ -742,6 +855,10 @@ function openProfile(p) {
   window.scrollTo(0, 0);
 }
 
+/**
+ * Leaves profile mode and reloads the live content into the editor.
+ * @param skipConfirm true to skip the "discard unsaved edits" confirm dialog
+ */
 function backToLive(skipConfirm) {
   if (!skipConfirm && !confirm("Go back to the live content? Unsaved profile edits are discarded.")) return;
   EDITING = null;
@@ -750,6 +867,10 @@ function backToLive(skipConfirm) {
   renderProfiles();
 }
 
+/**
+ * Loads this ta's profiles (plus any shared by others) into PROFILES and re-renders the list.
+ * @return the underlying fetch promise
+ */
 function fetchProfiles() {
   return authedFetch("/api/profiles")
     .then(function (res) {
@@ -767,6 +888,7 @@ function fetchProfiles() {
     });
 }
 
+/** Renders the profiles list into #profileList and wires up its controls. */
 function renderProfiles() {
   var list = document.getElementById("profileList");
   if (!list) return;
@@ -946,8 +1068,10 @@ document.addEventListener("DOMContentLoaded", function () {
   document.getElementById("joinUrlInput").addEventListener("input", function () { STATE.join_url = this.value; });
   document.getElementById("applyTooltipInput").addEventListener("input", function () { STATE.apply_tooltip = this.value; });
 
-  /* apply = make what's on screen live for students. in profile mode it
-     also saves the profile first so the two can't drift apart. */
+  /**
+   * Apply = make what's on screen live for students. In profile mode it
+   * also saves the profile first so the two can't drift apart.
+   */
   function applyContent() {
     if (EDITING && !confirm('Apply "' + profileLabel(EDITING) + '" to the live site? Students will see it right away.')) return;
     showMsg("Applying...", true);
@@ -972,7 +1096,7 @@ document.addEventListener("DOMContentLoaded", function () {
       });
   }
 
-  /* save = stash what's on screen in a profile, live site untouched */
+  /** Save = stash what's on screen in a profile, live site untouched. */
   function saveToProfile() {
     if (EDITING) {
       updateProfile(EDITING.id, { data: STATE }, function () {
@@ -1001,6 +1125,7 @@ document.addEventListener("DOMContentLoaded", function () {
       });
   }
 
+  document.getElementById("taPreview").addEventListener("click", openPreview);
   document.getElementById("taApply").addEventListener("click", applyContent);
   document.getElementById("taSave").addEventListener("click", saveToProfile);
 

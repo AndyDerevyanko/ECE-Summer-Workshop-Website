@@ -11,12 +11,30 @@ var EXTRAS = [];
 
 /* attachments are a plain filename string (legacy), a {type:"link", value}
    object, or a {type:"file", name, url} object for an uploaded file */
+
+/**
+ * Checks whether an attachment is a link entry.
+ * @param item an attachment (string or {type, ...} object)
+ * @return true if it's a {type:"link", value} entry
+ */
 function isLink(item) { return item && typeof item === "object" && item.type === "link"; }
+
+/**
+ * Returns the href an attachment chip should point at.
+ * @param item an attachment (string or {type, ...} object)
+ * @return the link's url, or "#" for anything unrecognized
+ */
 function itemHref(item) {
   if (isLink(item)) return item.value;
   if (item && typeof item === "object") return item.url;
   return "#";
 }
+
+/**
+ * Returns the display label for an attachment chip.
+ * @param item an attachment (string or {type, ...} object)
+ * @return the link url, the uploaded file's name, or the raw legacy string
+ */
 function itemLabel(item) {
   if (isLink(item)) return item.value;
   if (item && typeof item === "object") return item.name;
@@ -54,9 +72,13 @@ var IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "avif", "ti
 var DOC_EXTS = ["pdf", "doc", "docx", "txt", "rtf", "odt", "pages"];
 var SLIDES_EXTS = ["ppt", "pptx", "key", "odp"];
 
-/* picks an icon off the file extension in the attachment's name (or the
-   filename itself, for the legacy plain-string shape). falls back to a
-   generic file glyph for anything not recognized (zip, mp3, xlsx, etc). */
+/**
+ * Picks an icon off the file extension in the attachment's name (or the
+ * filename itself, for the legacy plain-string shape). Falls back to a
+ * generic file glyph for anything not recognized (zip, mp3, xlsx, etc).
+ * @param item an attachment (string or {type, ...} object)
+ * @return an inline svg icon string
+ */
 function itemIcon(item) {
   if (isLink(item)) return LINK_SVG;
   var name = itemLabel(item) || "";
@@ -80,12 +102,36 @@ var UNLOCK_SVG =
   '<rect x="5" y="11" width="14" height="9" rx="2"/>' +
   '<path d="M8 11V8a4 4 0 0 1 7.5-2"/><path d="M12 14.5v2"/></svg>';
 
+/**
+ * Resolves to the site content: the ta portal's unsaved snapshot when this
+ * page was opened with ?preview=1 (see js/preview.js, js/ta.js), otherwise
+ * the live content from /api/content.
+ * @return a promise resolving to the content object
+ */
+function fetchContent() {
+  if (/[?&]preview=1(&|$)/.test(window.location.search)) {
+    try {
+      var raw = localStorage.getItem("preview_content");
+      if (raw) return Promise.resolve(JSON.parse(raw));
+    } catch (e) {}
+  }
+  return fetch("/api/content").then(function (res) { return res.json(); });
+}
+
+/**
+ * Formats a day panel's date for its card ("Mon, Jan 5").
+ * @param dateStr iso date string (yyyy-mm-dd)
+ * @return the formatted date
+ */
 function fmtDate(dateStr) {
   var d = new Date(dateStr + "T00:00:00");
   return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
 }
 
-/* no session, bounce to the gate */
+/**
+ * Shows the dashboard if logged in, otherwise the gate.
+ * @return the logged-in username, or null if there's no session
+ */
 function gateCheck() {
   var session = localStorage.getItem("session");
   var app = document.getElementById("dashApp");
@@ -100,6 +146,11 @@ function gateCheck() {
   return session;
 }
 
+/**
+ * Builds a locked "available soon" day card.
+ * @param dayNum the day number to show on the card
+ * @return the card's html
+ */
 function soonCard(dayNum) {
   return '<div class="day-card soon">' +
     '<span class="soon-lock">' + LOCK_SVG + '</span>' +
@@ -109,6 +160,12 @@ function soonCard(dayNum) {
   '</div>';
 }
 
+/**
+ * Renders every day panel into #dayGrid: unlocked panels with their
+ * content, locked ones as a "soon" card, plus one trailing locked card for
+ * the next day once everything so far is open.
+ * @return how many day panels are currently unlocked
+ */
 function renderDays() {
   var grid = document.getElementById("dayGrid");
   if (!grid) return 0;
@@ -148,6 +205,10 @@ function renderDays() {
   return unlockedCount;
 }
 
+/**
+ * Fills in the "N of TOTAL_DAYS days unlocked" progress bar.
+ * @param unlockedCount how many day panels are unlocked
+ */
 function renderProgress(unlockedCount) {
   var fill = document.getElementById("progFill");
   var label = document.getElementById("progLabel");
@@ -156,6 +217,7 @@ function renderProgress(unlockedCount) {
   if (label) label.textContent = unlockedCount + " of " + TOTAL_DAYS + " days unlocked (" + pct + "%)";
 }
 
+/** Renders the "Extra attachments" list into #resList. */
 function renderExtras() {
   var list = document.getElementById("resList");
   if (!list) return;
@@ -177,6 +239,7 @@ function renderExtras() {
   list.innerHTML = rows;
 }
 
+/** Clears the session and sends the student back to the login page. */
 function logout() {
   localStorage.removeItem("session");
   localStorage.removeItem("role");
@@ -191,8 +254,7 @@ document.addEventListener("DOMContentLoaded", function () {
   if (logoutBtn) logoutBtn.addEventListener("click", logout);
   if (!session) return;
 
-  fetch("/api/content")
-    .then(function (res) { return res.json(); })
+  fetchContent()
     .then(function (data) {
       DAYS = data.days;
       EXTRAS = data.extras;

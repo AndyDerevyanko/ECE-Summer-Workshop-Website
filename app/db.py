@@ -27,6 +27,10 @@ STUDENT_IDLE_SECONDS = 4 * 60 * 60
 
 
 def _idle_seconds(role):
+    """the sliding idle window for a role.
+    @param role "ta" or "student"
+    @return seconds of inactivity before the session expires
+    """
     return TA_IDLE_SECONDS if role == "ta" else STUDENT_IDLE_SECONDS
 
 # starting content, same shape as the old hardcoded DAYS/EXTRAS/timer vars.
@@ -125,12 +129,16 @@ DEFAULT_CONTENT = {
 
 
 def get_db():
+    """opens a new connection to the sqlite database.
+    @return a sqlite3.Connection with row_factory set to sqlite3.Row
+    """
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
 
 def init_db():
+    """creates the schema (if missing) and seeds accounts/content on first run."""
     DB_PATH.parent.mkdir(exist_ok=True)
     UPLOAD_DIR.mkdir(exist_ok=True)
     conn = get_db()
@@ -204,6 +212,9 @@ def init_db():
 
 
 def _seed_users(conn):
+    """inserts SEED_STUDENTS/SEED_TAS if the users table is still empty.
+    @param conn an open db connection
+    """
     if conn.execute("SELECT 1 FROM users LIMIT 1").fetchone():
         return
     rows = []
@@ -221,8 +232,10 @@ def _seed_users(conn):
 
 
 def _backfill_plain(conn):
-    """dbs seeded before the plain column exist don't have student passwords
-    stored, fill them back in from the seed list by username."""
+    """fills in student plain-text passwords for dbs seeded before the plain
+    column existed, by username, off the seed list.
+    @param conn an open db connection
+    """
     for username, password in SEED_STUDENTS.items():
         conn.execute(
             "UPDATE users SET plain = ? WHERE username = ? AND role = 'student' AND plain IS NULL",
@@ -232,7 +245,11 @@ def _backfill_plain(conn):
 
 
 def verify_login(username, password):
-    """returns the user's role on success, none on a bad username or password."""
+    """checks a login attempt against the stored hash.
+    @param username the attempted username
+    @param password the attempted plaintext password
+    @return the user's role on success, none on a bad username or password
+    """
     conn = get_db()
     row = conn.execute(
         "SELECT password_hash, salt, role FROM users WHERE username = ?", (username,)
@@ -244,6 +261,11 @@ def verify_login(username, password):
 
 
 def create_session(username, role):
+    """opens a new login session.
+    @param username the logging-in user
+    @param role "student" or "ta"
+    @return the new session token
+    """
     token = generate_token()
     conn = get_db()
     conn.execute(
@@ -256,9 +278,11 @@ def create_session(username, role):
 
 
 def get_session(token):
-    """returns the {username, role} row for a token, or none if it's missing
-    or idle-expired. a valid token's expiry slides forward on every call,
-    so using the portal (or just having it open) keeps you logged in."""
+    """looks up a session token, sliding its expiry forward on every valid
+    call, so using the portal (or just having it open) keeps you logged in.
+    @param token the bearer token to check
+    @return the {username, role} row for the token, or none if it's missing or idle-expired
+    """
     now = int(time.time())
     conn = get_db()
     row = conn.execute(
@@ -280,8 +304,10 @@ def get_session(token):
 
 
 def list_users():
-    """usernames, roles, and the stored student passwords. hashes never
-    leave the db and ta passwords have no plain copy at all."""
+    """lists every account. hashes never leave the db and ta passwords have
+    no plain copy at all.
+    @return a list of {username, role, password} rows (password is null for tas)
+    """
     conn = get_db()
     rows = conn.execute("SELECT username, role, plain FROM users ORDER BY username").fetchall()
     conn.close()
@@ -289,7 +315,12 @@ def list_users():
 
 
 def create_user(username, password, role):
-    """returns false if the username is already taken."""
+    """creates a new account.
+    @param username the new account's username
+    @param password the new account's plaintext password
+    @param role "student" or "ta"
+    @return false if the username is already taken
+    """
     password_hash, salt = hash_password(password)
     conn = get_db()
     try:
@@ -307,7 +338,10 @@ def create_user(username, password, role):
 
 
 def delete_user(username):
-    """removes the account and any login tokens it had. false if no such user."""
+    """removes an account and any login tokens it had.
+    @param username the account to remove
+    @return false if no such user
+    """
     conn = get_db()
     cur = conn.execute("DELETE FROM users WHERE username = ?", (username,))
     conn.execute("DELETE FROM sessions WHERE username = ?", (username,))
@@ -317,6 +351,9 @@ def delete_user(username):
 
 
 def _seed_content(conn):
+    """inserts DEFAULT_CONTENT if the content row doesn't exist yet.
+    @param conn an open db connection
+    """
     if conn.execute("SELECT 1 FROM content WHERE id = 1").fetchone():
         return
     conn.execute(
@@ -326,6 +363,9 @@ def _seed_content(conn):
 
 
 def get_content():
+    """reads the live ta-editable content blob.
+    @return the content dict, with any keys missing from an older save filled in from DEFAULT_CONTENT
+    """
     conn = get_db()
     row = conn.execute("SELECT data FROM content WHERE id = 1").fetchone()
     conn.close()
@@ -341,6 +381,9 @@ def get_content():
 
 
 def save_content(data):
+    """overwrites the live content blob.
+    @param data the full content dict to save
+    """
     conn = get_db()
     conn.execute(
         "UPDATE content SET data = ? WHERE id = 1", (json.dumps(data),)
@@ -350,7 +393,10 @@ def save_content(data):
 
 
 def list_profiles(username):
-    """your own profiles plus anything another ta has shared."""
+    """lists a ta's saved content drafts.
+    @param username the requesting ta
+    @return that ta's own profiles plus anything another ta has shared
+    """
     conn = get_db()
     rows = conn.execute(
         "SELECT id, owner, name, data, shared FROM profiles"
@@ -372,6 +418,10 @@ def list_profiles(username):
 
 
 def get_profile(profile_id):
+    """looks up one profile.
+    @param profile_id the profile's id
+    @return the profile row, or none if it doesn't exist
+    """
     conn = get_db()
     row = conn.execute(
         "SELECT id, owner, name, data, shared FROM profiles WHERE id = ?",
@@ -390,6 +440,12 @@ def get_profile(profile_id):
 
 
 def create_profile(owner, name, data):
+    """saves a new profile.
+    @param owner the ta creating it
+    @param name the profile's display name
+    @param data the content dict to save as this profile's draft
+    @return the new profile's id
+    """
     conn = get_db()
     cur = conn.execute(
         "INSERT INTO profiles (owner, name, data) VALUES (?, ?, ?)",
@@ -401,6 +457,12 @@ def create_profile(owner, name, data):
 
 
 def update_profile(profile_id, name=None, data=None, shared=None):
+    """partially updates a profile; omitted fields are left unchanged.
+    @param profile_id the profile to update
+    @param name new display name, if renaming
+    @param data new content dict, if saving edits
+    @param shared new shared flag, if toggling sharing
+    """
     conn = get_db()
     if name is not None:
         conn.execute("UPDATE profiles SET name = ? WHERE id = ?", (name, profile_id))
@@ -413,6 +475,9 @@ def update_profile(profile_id, name=None, data=None, shared=None):
 
 
 def delete_profile(profile_id):
+    """deletes a profile.
+    @param profile_id the profile to delete
+    """
     conn = get_db()
     conn.execute("DELETE FROM profiles WHERE id = ?", (profile_id,))
     conn.commit()

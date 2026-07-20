@@ -21,8 +21,14 @@ var count = document.getElementById("gvCount");
 var yearLbl = document.getElementById("gvYear");
 var yearsWrap = document.getElementById("gvYears");
 
+/**
+ * Checks whether a gallery url is a video clip.
+ * @param u the media url
+ * @return true if it's a .MOV clip
+ */
 function isVid(u) { return /\.mov$/i.test(u); }
 
+/** Shows the current photo/clip for the selected year and updates the counter. */
 function show() {
   var list = PHOTOS[year] || [];
   if (!list.length) {
@@ -53,6 +59,10 @@ function show() {
   if (!isVid(prv)) new Image().src = prv;
 }
 
+/**
+ * Moves the viewer forward or back within the current year's list, wrapping at both ends.
+ * @param d -1 for previous, 1 for next
+ */
 function step(d) {
   var list = PHOTOS[year] || [];
   if (!list.length) return;
@@ -60,7 +70,7 @@ function step(d) {
   show();
 }
 
-/* year rail, rebuilt from whatever years the ta portal last saved */
+/** Rebuilds the year rail from whatever years the ta portal last saved. */
 function renderYearRail() {
   if (!yearsWrap) return;
   yearsWrap.innerHTML = YEARS.map(function (y) {

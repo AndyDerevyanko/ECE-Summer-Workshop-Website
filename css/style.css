@@ -1045,6 +1045,7 @@ h1, h2, h3 {
   margin-bottom: 14px;
 }
 .pv-title { font-size: 1.4rem; margin: 2px 0 0; }
+.pv-tabs-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .pv-tabs { display: flex; gap: 8px; }
 .pv-tab {
   border: none;
@@ -1059,6 +1060,7 @@ h1, h2, h3 {
 }
 .pv-tab:hover { color: var(--text); }
 .pv-tab.active { background: var(--accent); color: #fff; }
+#pvEditToggle.active { background: var(--accent); color: #fff; }
 .pv-frame-wrap {
   flex: 1;
   min-height: 0;
@@ -1179,4 +1181,23 @@ h1, h2, h3 {
 /* pages tagged .mono (dashboard, instructor) keep to one accent + grey */
 body.mono .eyebrow { color: var(--accent); }
 body.mono .progress-bar i { background: var(--accent); }
+
+/* click-to-edit, only active inside the preview iframe with the "Edit
+   text" toggle on (js/preview.js sets ?edit=1, js/main.js's
+   wireClickToEdit() adds this body class). outline instead of border so
+   nothing shifts layout when a field lights up. */
+body.edit-mode [data-edit-id] {
+  cursor: pointer;
+  outline: 1px dashed transparent;
+  outline-offset: 3px;
+  border-radius: 3px;
+  transition: outline-color .15s;
+}
+body.edit-mode [data-edit-id]:hover { outline-color: var(--accent); }
+body.edit-mode [data-edit-id].editing {
+  cursor: text;
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  background: var(--surface);
+}
 body.mono .day-card .daytag { color: var(--accent); }

@@ -44,7 +44,6 @@ DEFAULT_CONTENT = {
     "extras": [],
     "timer_mode": "tentative",
     "timer_target": "",
-    "contact_text": "Questions? hardware.robotics@utoronto.ca",
     "join_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
     "apply_tooltip": "Applications open once the workshop dates are confirmed, check back soon.",
     "logistics": [
@@ -125,6 +124,10 @@ DEFAULT_CONTENT = {
             ],
         },
     },
+    # click-to-edit overrides for hardcoded landing page copy, keyed by the
+    # data-edit-id on the element in templates/index.html. empty means "show
+    # the page's own default text".
+    "text": {},
 }
 
 

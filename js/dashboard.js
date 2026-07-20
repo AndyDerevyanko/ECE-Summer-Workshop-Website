@@ -111,19 +111,99 @@ function isPreviewMode() {
   return /[?&]preview=1(&|$)/.test(window.location.search);
 }
 
+/* windows-1252's 0x80-0x9f block, the only range where it disagrees with
+   latin-1 (euro sign, smart quotes, en/em dash, etc). used by
+   repairMojibake() to reverse text that got typed as utf-8 then saved
+   somewhere that read those bytes back as cp1252. */
+var CP1252_C1 = [
+  0x20AC, 0x81, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
+  0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x8D, 0x017D, 0x8F,
+  0x90, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+  0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x9D, 0x017E, 0x0178
+];
+
+/**
+ * Reverses "typed/pasted as utf-8, misread as windows-1252" mojibake (eg.
+ * an en dash saved somewhere that reads bytes back as cp1252), without
+ * touching genuinely accented text: only fires if every character maps to
+ * a single cp1252 byte AND those bytes form valid utf-8, which plain
+ * latin-1 text almost never does by chance. Loops so text corrupted more
+ * than once unwraps fully in one call, capped so a weird string can't loop
+ * forever.
+ * @param str the string to check/repair
+ * @return the repaired string, or the original untouched if it wasn't mojibake
+ */
+function repairMojibake(str) {
+  if (typeof str !== "string" || !str.length) return str;
+  for (var pass = 0; pass < 4; pass++) {
+    var next = repairMojibakeOnce(str);
+    if (next === str) break;
+    str = next;
+  }
+  return str;
+}
+
+/**
+ * Reverses a single level of the mojibake described in repairMojibake().
+ * @param str the string to check/repair
+ * @return the repaired string, or the original untouched if it isn't mojibake
+ */
+function repairMojibakeOnce(str) {
+  var hasHighChar = false;
+  for (var j = 0; j < str.length; j++) {
+    if (str.charCodeAt(j) > 0x7f) { hasHighChar = true; break; }
+  }
+  if (!hasHighChar) return str;
+  var bytes = [];
+  for (var i = 0; i < str.length; i++) {
+    var code = str.charCodeAt(i);
+    if (code <= 0x7f || (code >= 0xa0 && code <= 0xff)) {
+      bytes.push(code);
+    } else {
+      var b = CP1252_C1.indexOf(code);
+      if (b === -1) return str; /* not representable as a single cp1252 byte, wasn't mojibake */
+      bytes.push(0x80 + b);
+    }
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(bytes));
+  } catch (e) {
+    return str; /* not valid utf-8 once reinterpreted, so it wasn't mojibake */
+  }
+}
+
+/**
+ * Walks a content blob and runs repairMojibake() on every string in it, so
+ * corrupted text anywhere in a loaded/restored blob fixes itself.
+ * @param val any content value (object, array, string, or other)
+ * @return the same shape with any mojibake strings repaired
+ */
+function repairMojibakeDeep(val) {
+  if (typeof val === "string") return repairMojibake(val);
+  if (Array.isArray(val)) return val.map(repairMojibakeDeep);
+  if (val && typeof val === "object") {
+    var out = {};
+    for (var k in val) out[k] = repairMojibakeDeep(val[k]);
+    return out;
+  }
+  return val;
+}
+
 /**
  * Resolves to the site content: the ta portal's unsaved snapshot in
- * preview mode, otherwise the live content from /api/content.
+ * preview mode, otherwise the live content from /api/content. Either way
+ * runs it through repairMojibakeDeep() first, so a stale corrupted preview
+ * snapshot or old saved blob never reaches a real student's screen.
  * @return a promise resolving to the content object
  */
 function fetchContent() {
   if (isPreviewMode()) {
     try {
       var raw = localStorage.getItem("preview_content");
-      if (raw) return Promise.resolve(JSON.parse(raw));
+      if (raw) return Promise.resolve(repairMojibakeDeep(JSON.parse(raw)));
     } catch (e) {}
   }
-  return fetch("/api/content").then(function (res) { return res.json(); });
+  return fetch("/api/content").then(function (res) { return res.json(); }).then(repairMojibakeDeep);
 }
 
 /**

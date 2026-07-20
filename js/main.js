@@ -53,7 +53,6 @@ var DEFAULT_LOGISTICS = [
   { big: "SFB520", lbl: "Sandford Fleming", icon: false },
   { big: "", lbl: "Certificate of completion", icon: true }
 ];
-var DEFAULT_CONTACT = "Questions? hardware.robotics@utoronto.ca";
 var DEFAULT_JOIN_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
 var DEFAULT_APPLY_TOOLTIP = "Applications open once the workshop dates are confirmed, check back soon.";
 
@@ -66,19 +65,99 @@ function isPreviewMode() {
   return /[?&]preview=1(&|$)/.test(window.location.search);
 }
 
+/* windows-1252's 0x80-0x9f block, the only range where it disagrees with
+   latin-1 (euro sign, smart quotes, en/em dash, etc). used by
+   repairMojibake() to reverse text that got typed as utf-8 then saved
+   somewhere that read those bytes back as cp1252. */
+var CP1252_C1 = [
+  0x20AC, 0x81, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
+  0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x8D, 0x017D, 0x8F,
+  0x90, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+  0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x9D, 0x017E, 0x0178
+];
+
+/**
+ * Reverses "typed/pasted as utf-8, misread as windows-1252" mojibake (eg.
+ * an en dash saved somewhere that reads bytes back as cp1252), without
+ * touching genuinely accented text: only fires if every character maps to
+ * a single cp1252 byte AND those bytes form valid utf-8, which plain
+ * latin-1 text almost never does by chance. Loops so text corrupted more
+ * than once unwraps fully in one call, capped so a weird string can't loop
+ * forever.
+ * @param str the string to check/repair
+ * @return the repaired string, or the original untouched if it wasn't mojibake
+ */
+function repairMojibake(str) {
+  if (typeof str !== "string" || !str.length) return str;
+  for (var pass = 0; pass < 4; pass++) {
+    var next = repairMojibakeOnce(str);
+    if (next === str) break;
+    str = next;
+  }
+  return str;
+}
+
+/**
+ * Reverses a single level of the mojibake described in repairMojibake().
+ * @param str the string to check/repair
+ * @return the repaired string, or the original untouched if it isn't mojibake
+ */
+function repairMojibakeOnce(str) {
+  var hasHighChar = false;
+  for (var j = 0; j < str.length; j++) {
+    if (str.charCodeAt(j) > 0x7f) { hasHighChar = true; break; }
+  }
+  if (!hasHighChar) return str;
+  var bytes = [];
+  for (var i = 0; i < str.length; i++) {
+    var code = str.charCodeAt(i);
+    if (code <= 0x7f || (code >= 0xa0 && code <= 0xff)) {
+      bytes.push(code);
+    } else {
+      var b = CP1252_C1.indexOf(code);
+      if (b === -1) return str; /* not representable as a single cp1252 byte, wasn't mojibake */
+      bytes.push(0x80 + b);
+    }
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(bytes));
+  } catch (e) {
+    return str; /* not valid utf-8 once reinterpreted, so it wasn't mojibake */
+  }
+}
+
+/**
+ * Walks a content blob and runs repairMojibake() on every string in it, so
+ * corrupted text anywhere in a loaded/restored blob fixes itself.
+ * @param val any content value (object, array, string, or other)
+ * @return the same shape with any mojibake strings repaired
+ */
+function repairMojibakeDeep(val) {
+  if (typeof val === "string") return repairMojibake(val);
+  if (Array.isArray(val)) return val.map(repairMojibakeDeep);
+  if (val && typeof val === "object") {
+    var out = {};
+    for (var k in val) out[k] = repairMojibakeDeep(val[k]);
+    return out;
+  }
+  return val;
+}
+
 /**
  * Resolves to the site content: the ta portal's unsaved snapshot in
- * preview mode, otherwise the live content from /api/content.
+ * preview mode, otherwise the live content from /api/content. Either way
+ * runs it through repairMojibakeDeep() first, so a stale corrupted preview
+ * snapshot or old saved blob never reaches a real visitor's screen.
  * @return a promise resolving to the content object
  */
 function fetchContent() {
   if (isPreviewMode()) {
     try {
       var raw = localStorage.getItem("preview_content");
-      if (raw) return Promise.resolve(JSON.parse(raw));
+      if (raw) return Promise.resolve(repairMojibakeDeep(JSON.parse(raw)));
     } catch (e) {}
   }
-  return fetch("/api/content").then(function (res) { return res.json(); });
+  return fetch("/api/content").then(function (res) { return res.json(); }).then(repairMojibakeDeep);
 }
 
 /**
@@ -156,6 +235,100 @@ function neuterLink(el) {
 }
 
 /**
+ * Checks whether the preview iframe is in click-to-edit mode (a toggle in
+ * preview.html, see js/preview.js). Meaningless outside of preview mode.
+ * @return true if &edit=1 is set
+ */
+function isEditMode() {
+  return /[?&]edit=1(&|$)/.test(window.location.search);
+}
+
+/**
+ * Applies saved text overrides on top of the page's own hardcoded copy.
+ * Every element carrying a data-edit-id keeps the template's default text
+ * until a ta overrides it via click-to-edit; stashes that default in a
+ * data attribute first so a later edit can tell if it's back to the
+ * original wording (see wireClickToEdit()'s blur handler).
+ * @param textMap {id: overrideHtml}, from content.text
+ */
+function applyTextOverrides(textMap) {
+  document.querySelectorAll("[data-edit-id]").forEach(function (el) {
+    el.setAttribute("data-default-html", el.innerHTML);
+    var id = el.getAttribute("data-edit-id");
+    if (textMap && textMap[id] !== undefined) el.innerHTML = textMap[id];
+  });
+}
+
+/**
+ * Turns every data-edit-id element into a click-to-edit field, only called
+ * in preview mode with the edit toggle on (see isEditMode()). Edits save
+ * straight into localStorage's preview_content snapshot (the same one
+ * js/ta.js's tryRestoreFromPreview() already restores unsaved work from),
+ * since the iframe is same-origin with the ta portal tab and shares it, so
+ * no postMessage plumbing is needed to get the edit back to the portal.
+ */
+function wireClickToEdit() {
+  document.body.classList.add("edit-mode");
+  document.querySelectorAll("[data-edit-id]").forEach(function (el) {
+    /* undo neuterLink()'s dimming, if any: an editable element should look
+       normal (own hover affordance) rather than disabled */
+    el.style.opacity = "";
+    el.style.cursor = "";
+
+    var beforeEdit = "";
+    el.addEventListener("click", function (e) {
+      if (el.isContentEditable) return; /* already editing, let the caret land normally */
+      e.preventDefault();
+      e.stopPropagation();
+      beforeEdit = el.innerHTML;
+      el.contentEditable = "true";
+      el.classList.add("editing");
+      el.focus();
+      var range = document.createRange();
+      range.selectNodeContents(el);
+      var sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    });
+
+    el.addEventListener("keydown", function (e) {
+      if (!el.isContentEditable) return;
+      if (e.key === "Enter") { e.preventDefault(); el.blur(); }
+      if (e.key === "Escape") { e.preventDefault(); el.innerHTML = beforeEdit; el.blur(); }
+    });
+
+    el.addEventListener("blur", function () {
+      if (!el.isContentEditable) return;
+      el.contentEditable = "false";
+      el.classList.remove("editing");
+      saveTextOverride(el.getAttribute("data-edit-id"), el.innerHTML, el.getAttribute("data-default-html"));
+    });
+  });
+}
+
+/**
+ * Persists one click-to-edit change into the preview snapshot in
+ * localStorage, so it round-trips through the same unsaved-draft mechanism
+ * as every other in-progress ta portal edit (see js/ta.js's
+ * tryRestoreFromPreview()/openPreview()). Drops the key entirely if the
+ * text was edited back to the page's own default, keeping saved blobs free
+ * of overrides that don't actually override anything.
+ * @param id the element's data-edit-id
+ * @param html the element's current innerHTML
+ * @param defaultHtml the template's original innerHTML for that element
+ */
+function saveTextOverride(id, html, defaultHtml) {
+  var raw;
+  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  if (!snapshot.text || typeof snapshot.text !== "object") snapshot.text = {};
+  if (html.trim() === (defaultHtml || "").trim()) delete snapshot.text[id];
+  else snapshot.text[id] = html;
+  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
  * Still logged in from a previous visit? Point the nav link back at your
  * portal and show a log out button, instead of always saying "Access
  * portal", which read as having been logged out. Skipped in preview mode:
@@ -204,7 +377,6 @@ document.addEventListener("DOMContentLoaded", function () {
 
   var slot = document.getElementById("heroCountdown");
   var grid = document.getElementById("logisticsGrid");
-  var contactLine = document.getElementById("contactLine");
   if (!slot) return;
 
   function renderTiles(list) {
@@ -231,15 +403,26 @@ document.addEventListener("DOMContentLoaded", function () {
       }
 
       renderTiles(resolveLogistics(data));
-      if (contactLine) contactLine.textContent = data.contact_text || DEFAULT_CONTACT;
       setJoinUrl(data.join_url || DEFAULT_JOIN_URL);
       setApplyTooltip(data.apply_tooltip || DEFAULT_APPLY_TOOLTIP);
+
+      /* the footer contact line used to be its own content.contact_text
+         field; it's click-to-edit now like the rest of the landing page
+         copy (content.text["footer.contact"]), but an old saved blob a ta
+         hasn't reopened the portal on since this shipped only has the old
+         field, so fall back to it here rather than losing their text */
+      var textMap = data.text ? Object.assign({}, data.text) : {};
+      if (textMap["footer.contact"] === undefined && data.contact_text) {
+        textMap["footer.contact"] = data.contact_text;
+      }
+      applyTextOverrides(textMap);
+      if (isPreviewMode() && isEditMode()) wireClickToEdit();
     })
     .catch(function () {
       slot.innerHTML = CD_TBA_HTML;
       renderTiles(DEFAULT_LOGISTICS);
-      if (contactLine) contactLine.textContent = DEFAULT_CONTACT;
       setJoinUrl(DEFAULT_JOIN_URL);
       setApplyTooltip(DEFAULT_APPLY_TOOLTIP);
+      applyTextOverrides({});
     });
 });

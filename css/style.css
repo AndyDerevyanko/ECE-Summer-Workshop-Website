@@ -1060,7 +1060,9 @@ h1, h2, h3 {
 }
 .pv-tab:hover { color: var(--text); }
 .pv-tab.active { background: var(--accent); color: #fff; }
-#pvEditToggle.active { background: var(--accent); color: #fff; }
+.ed-undo-row { display: flex; gap: 8px; }
+.btn:disabled { opacity: .4; cursor: default; }
+.btn:disabled:hover { filter: none; }
 .pv-frame-wrap {
   flex: 1;
   min-height: 0;
@@ -1182,10 +1184,10 @@ h1, h2, h3 {
 body.mono .eyebrow { color: var(--accent); }
 body.mono .progress-bar i { background: var(--accent); }
 
-/* click-to-edit, only active inside the preview iframe with the "Edit
-   text" toggle on (js/preview.js sets ?edit=1, js/main.js's
-   wireClickToEdit() adds this body class). outline instead of border so
-   nothing shifts layout when a field lights up. */
+/* click-to-edit, only active inside the visual editor's iframe
+   (editor.html/js/editor.js set ?edit=1, js/main.js's wireClickToEdit()
+   adds this body class). outline instead of border so nothing shifts
+   layout when a field lights up. */
 body.edit-mode [data-edit-id] {
   cursor: pointer;
   outline: 1px dashed transparent;
@@ -1199,5 +1201,22 @@ body.edit-mode [data-edit-id].editing {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
   background: var(--surface);
+}
+
+/* ta portal's own mini logistics-tile preview (js/ta.js's wireInlineEdit()):
+   click straight through to STATE, no edit-mode gate needed since this
+   panel is always click-to-edit */
+.inline-editable {
+  cursor: pointer;
+  outline: 1px dashed transparent;
+  outline-offset: 3px;
+  border-radius: 3px;
+  transition: outline-color .15s;
+}
+.inline-editable:hover { outline-color: var(--accent); }
+.inline-editable.editing {
+  cursor: text;
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
 }
 body.mono .day-card .daytag { color: var(--accent); }

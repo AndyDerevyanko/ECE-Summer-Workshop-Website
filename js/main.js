@@ -259,13 +259,19 @@ function applyTextOverrides(textMap) {
   });
 }
 
+/* undo/redo for click-to-edit, a plain stack of {id, before, after} commits.
+   a fresh edit clears the redo stack, same convention as any text editor. */
+var EDIT_UNDO = [];
+var EDIT_REDO = [];
+
 /**
  * Turns every data-edit-id element into a click-to-edit field, only called
- * in preview mode with the edit toggle on (see isEditMode()). Edits save
- * straight into localStorage's preview_content snapshot (the same one
- * js/ta.js's tryRestoreFromPreview() already restores unsaved work from),
- * since the iframe is same-origin with the ta portal tab and shares it, so
- * no postMessage plumbing is needed to get the edit back to the portal.
+ * in the standalone visual editor page (editor.html/js/editor.js) with
+ * &edit=1 set (see isEditMode()). Edits save straight into localStorage's
+ * preview_content snapshot (the same one js/ta.js's
+ * tryRestoreFromPreview() already restores unsaved work from), since the
+ * iframe is same-origin with the ta portal tab and shares it, so no
+ * postMessage plumbing is needed to get the edit back to the portal.
  */
 function wireClickToEdit() {
   document.body.classList.add("edit-mode");
@@ -301,9 +307,58 @@ function wireClickToEdit() {
       if (!el.isContentEditable) return;
       el.contentEditable = "false";
       el.classList.remove("editing");
-      saveTextOverride(el.getAttribute("data-edit-id"), el.innerHTML, el.getAttribute("data-default-html"));
+      var after = el.innerHTML;
+      if (after !== beforeEdit) {
+        EDIT_UNDO.push({ id: el.getAttribute("data-edit-id"), before: beforeEdit, after: after });
+        EDIT_REDO.length = 0;
+      }
+      saveTextOverride(el.getAttribute("data-edit-id"), after, el.getAttribute("data-default-html"));
     });
   });
+
+  document.addEventListener("keydown", function (e) {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    var key = e.key.toLowerCase();
+    if (key === "z" && !e.shiftKey) { e.preventDefault(); undoEdit(); }
+    else if (key === "y" || (key === "z" && e.shiftKey)) { e.preventDefault(); redoEdit(); }
+  });
+
+  /* exposed so editor.html's Undo/Redo buttons can drive this from the
+     parent frame (same-origin, so a direct contentWindow reference works) */
+  window.ClickEditHistory = {
+    undo: undoEdit,
+    redo: redoEdit,
+    canUndo: function () { return EDIT_UNDO.length > 0; },
+    canRedo: function () { return EDIT_REDO.length > 0; }
+  };
+}
+
+/** Reverts the most recent click-to-edit commit, moving it onto the redo stack. */
+function undoEdit() {
+  var action = EDIT_UNDO.pop();
+  if (!action) return;
+  applyHistoryAction(action, "before");
+  EDIT_REDO.push(action);
+}
+
+/** Reapplies the most recently undone commit, moving it back onto the undo stack. */
+function redoEdit() {
+  var action = EDIT_REDO.pop();
+  if (!action) return;
+  applyHistoryAction(action, "after");
+  EDIT_UNDO.push(action);
+}
+
+/**
+ * Writes one undo/redo stack entry's text back onto its element and saves it.
+ * @param action {id, before, after}
+ * @param side "before" or "after", which side of the action to restore
+ */
+function applyHistoryAction(action, side) {
+  var el = document.querySelector('[data-edit-id="' + action.id + '"]');
+  if (!el) return;
+  el.innerHTML = action[side];
+  saveTextOverride(action.id, action[side], el.getAttribute("data-default-html"));
 }
 
 /**

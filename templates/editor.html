@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Preview · ECE Workshops</title>
+  <title>Visual editor · ECE Workshops</title>
 
   <script>
     (function () {
@@ -26,7 +26,7 @@
       <a href="index.html" class="brand"><img src="assets/logo.png" class="brand-logo" alt="ECE Workshops" /> ECE Workshops</a>
       <div class="nav-links">
         <a href="instructor.html">Content manager</a>
-        <a href="editor.html">Visual editor</a>
+        <a href="preview.html">Preview</a>
       </div>
       <div class="nav-right">
         <button id="themeBtn" class="theme-btn" type="button" aria-label="Toggle theme">
@@ -47,33 +47,40 @@
   </nav>
 
   <!-- shown if you're not logged in with a ta key -->
-  <div class="gate" id="pvGate" style="display:none">
+  <div class="gate" id="edGate" style="display:none">
     <h2>TAs only</h2>
-    <p class="muted">Log in with a TA key to preview workshop content.</p>
+    <p class="muted">Log in with a TA key to edit workshop content.</p>
     <a class="btn btn-primary" href="login.html">Go to login</a>
   </div>
 
-  <main id="pvApp" class="pv-main" style="display:none">
+  <main id="edApp" class="pv-main" style="display:none">
     <div class="pv-wrap">
       <div class="pv-head">
         <div>
           <p class="eyebrow">TA portal</p>
-          <h1 class="pv-title">Preview</h1>
+          <h1 class="pv-title">Visual editor</h1>
         </div>
-        <div class="pv-tabs" role="tablist">
-          <button class="pv-tab" data-tab="landing" type="button" role="tab">Landing page</button>
-          <button class="pv-tab" data-tab="dashboard" type="button" role="tab">Student dashboard</button>
-          <button class="pv-tab" data-tab="gallery" type="button" role="tab">Gallery</button>
+        <div class="pv-tabs-row">
+          <div class="pv-tabs" role="tablist">
+            <button class="pv-tab" data-tab="landing" type="button" role="tab">Landing page</button>
+            <button class="pv-tab" data-tab="dashboard" type="button" role="tab">Student dashboard</button>
+            <button class="pv-tab" data-tab="gallery" type="button" role="tab">Gallery</button>
+          </div>
+          <div class="ed-undo-row">
+            <button class="btn btn-ghost" id="edUndo" type="button" disabled>Undo</button>
+            <button class="btn btn-ghost" id="edRedo" type="button" disabled>Redo</button>
+          </div>
         </div>
       </div>
+      <p class="muted" style="margin:0 0 12px">Click any highlighted text below to edit it in place. Enter saves, Esc cancels.</p>
       <div class="pv-frame-wrap">
-        <iframe id="pvFrame" class="pv-frame" title="Preview"></iframe>
+        <iframe id="edFrame" class="pv-frame" title="Visual editor"></iframe>
       </div>
     </div>
   </main>
 
   <script src="js/theme.js"></script>
   <script src="js/idle.js"></script>
-  <script src="js/preview.js"></script>
+  <script src="js/editor.js"></script>
 </body>
 </html>

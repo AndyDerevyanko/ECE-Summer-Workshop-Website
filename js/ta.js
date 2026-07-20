@@ -1,10 +1,6 @@
 /* ta portal. everything edits the in-memory STATE object below; loaded from
    and saved to /api/content, which is the single source of truth. */
 
-/* matches the fallback in js/main.js, used here only for the "current
-   selection" preview mirror when no footer text has been set yet */
-var DEFAULT_CONTACT = "Questions? hardware.robotics@utoronto.ca";
-
 /**
  * Returns a fresh default content blob, used for a brand-new profile and
  * to fill in missing fields in normalizeState().
@@ -174,6 +170,7 @@ var PROFILES = [];  /* saved drafts from /api/profiles */
 var EDITING = null; /* null = editing the live site, else the open profile */
 
 var previewWindow = null; /* the tab opened by openPreview(), if still around */
+var editorWindow = null; /* the tab opened by openEditor(), if still around */
 
 /**
  * Builds the Authorization header for a ta-only request.
@@ -361,8 +358,12 @@ var CHECK_ICON_SVG =
   'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12.5l5 5L20 6.5" /></svg>';
 
 /**
- * Builds one read-only preview tile, same markup as the real one on index.html.
- * @param t {big, lbl, icon} tile data
+ * Builds one preview tile, same markup as the real one on index.html, but
+ * click-to-edit: the big text and label are editable right here, and a
+ * commit writes straight back into the tile data (STATE.logistics, since
+ * this is a reference into that array) and refreshes the input list below
+ * (renderLogistics()) so the two views of the same data never drift apart.
+ * @param t {big, lbl, icon} tile data, a reference into STATE.logistics
  * @return the tile's card element
  */
 function logisticsPreviewTile(t) {
@@ -370,14 +371,58 @@ function logisticsPreviewTile(t) {
   card.className = "card stat ta-live-stat";
   var big = document.createElement("div");
   big.className = "big";
-  if (t.icon) big.innerHTML = CHECK_ICON_SVG;
-  else big.textContent = t.big;
+  if (t.icon) {
+    big.innerHTML = CHECK_ICON_SVG;
+  } else {
+    big.textContent = t.big;
+    wireInlineEdit(big, function (text) { t.big = text; renderLogistics(); });
+  }
   var lbl = document.createElement("div");
   lbl.className = "lbl";
   lbl.textContent = t.lbl;
+  wireInlineEdit(lbl, function (text) { t.lbl = text; renderLogistics(); });
   card.appendChild(big);
   card.appendChild(lbl);
   return card;
+}
+
+/**
+ * Turns one element into a click-to-edit text field: click makes it
+ * contenteditable, Enter/blur commits (calling onCommit with the new
+ * text), Escape cancels back to whatever it said before this edit. A
+ * smaller, local sibling of js/main.js's wireClickToEdit(): this edits
+ * STATE directly (no localStorage/undo stack) since it's mirroring fields
+ * that already have their own input in the form below, not a hardcoded
+ * page default the way index.html's copy is.
+ * @param el the element to make editable
+ * @param onCommit called with the trimmed text once an edit is committed
+ */
+function wireInlineEdit(el, onCommit) {
+  el.classList.add("inline-editable");
+  var before = "";
+  el.addEventListener("click", function () {
+    if (el.isContentEditable) return;
+    before = el.textContent;
+    el.contentEditable = "true";
+    el.classList.add("editing");
+    el.focus();
+    var range = document.createRange();
+    range.selectNodeContents(el);
+    var sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  });
+  el.addEventListener("keydown", function (e) {
+    if (!el.isContentEditable) return;
+    if (e.key === "Enter") { e.preventDefault(); el.blur(); }
+    if (e.key === "Escape") { e.preventDefault(); el.textContent = before; el.blur(); }
+  });
+  el.addEventListener("blur", function () {
+    if (!el.isContentEditable) return;
+    el.contentEditable = "false";
+    el.classList.remove("editing");
+    if (el.textContent !== before) onCommit(el.textContent);
+  });
 }
 
 /* same markup as the hero on index.html, tba box vs the (still stubbed) real clock */
@@ -459,11 +504,6 @@ function renderPreview() {
   if (logisticsSlot) {
     logisticsSlot.innerHTML = "";
     STATE.logistics.forEach(function (t) { logisticsSlot.appendChild(logisticsPreviewTile(t)); });
-  }
-
-  var contactPreview = document.getElementById("previewContact");
-  if (contactPreview) {
-    contactPreview.textContent = STATE.text["footer.contact"] || DEFAULT_CONTACT;
   }
 }
 
@@ -850,17 +890,43 @@ function renderAll() {
  * see tryRestoreFromPreview().
  */
 function openPreview() {
-  try {
-    localStorage.setItem("preview_content", JSON.stringify(STATE));
-    if (EDITING) localStorage.setItem("preview_editing", JSON.stringify(EDITING));
-    else localStorage.removeItem("preview_editing");
-  } catch (e) {}
+  writePreviewSnapshot();
   if (previewWindow && !previewWindow.closed) {
     previewWindow.location.reload();
     previewWindow.focus();
   } else {
     previewWindow = window.open("preview.html", "ta_preview");
   }
+}
+
+/**
+ * Opens the visual editor (editor.html) on the same unsaved-edits
+ * snapshot Preview uses, in its own named tab, so click-to-edit changes
+ * made there restore back into STATE the same way a Preview trip does
+ * (see tryRestoreFromPreview()), and nothing in progress here gets lost
+ * just from switching over to click around the live-looking page.
+ */
+function openEditor() {
+  writePreviewSnapshot();
+  if (editorWindow && !editorWindow.closed) {
+    editorWindow.location.reload();
+    editorWindow.focus();
+  } else {
+    editorWindow = window.open("editor.html", "ta_editor");
+  }
+}
+
+/**
+ * Snapshots STATE (and the open profile, if any) into localStorage, the
+ * hand-off preview.html/editor.html read from and tryRestoreFromPreview()
+ * restores back out of.
+ */
+function writePreviewSnapshot() {
+  try {
+    localStorage.setItem("preview_content", JSON.stringify(STATE));
+    if (EDITING) localStorage.setItem("preview_editing", JSON.stringify(EDITING));
+    else localStorage.removeItem("preview_editing");
+  } catch (e) {}
 }
 
 /** Clears the unsaved-edits snapshot used by the Preview button/page. */
@@ -1270,6 +1336,7 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   document.getElementById("taPreview").addEventListener("click", openPreview);
+  document.getElementById("navVisualEditor").addEventListener("click", openEditor);
   document.getElementById("taApply").addEventListener("click", applyContent);
   document.getElementById("taSave").addEventListener("click", saveToProfile);
 

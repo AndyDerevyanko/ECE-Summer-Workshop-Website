@@ -11,11 +11,16 @@
 
   /**
    * Applies a theme: sets data-theme, persists it, and updates the toggle icon.
+   * Doesn't persist in preview mode (js/preview.js's iframe): the toggle
+   * still flips the preview's own look, but shouldn't change the real
+   * site's saved theme just because it's shared localStorage.
    * @param t "dark" or "light"
    */
   function setTheme(t) {
     document.documentElement.setAttribute("data-theme", t);
-    try { localStorage.setItem("theme", t); } catch (e) {} /* private mode */
+    if (!/[?&]preview=1(&|$)/.test(window.location.search)) {
+      try { localStorage.setItem("theme", t); } catch (e) {} /* private mode */
+    }
     updateIcon(t);
   }
 

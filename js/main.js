@@ -143,6 +143,19 @@ function startCountdown(target) {
 }
 
 /**
+ * Strips a link's href and swallows its clicks, so it can't navigate the
+ * preview iframe away to a page a real visitor there shouldn't reach.
+ * @param el the link to neuter
+ */
+function neuterLink(el) {
+  if (!el) return;
+  el.removeAttribute("href");
+  el.style.opacity = ".5";
+  el.style.cursor = "default";
+  el.addEventListener("click", function (e) { e.preventDefault(); });
+}
+
+/**
  * Still logged in from a previous visit? Point the nav link back at your
  * portal and show a log out button, instead of always saying "Access
  * portal", which read as having been logged out. Skipped in preview mode:
@@ -150,7 +163,14 @@ function startCountdown(target) {
  * a real visitor wouldn't be, so the preview should show the logged-out nav.
  */
 function updatePortalLink() {
-  if (isPreviewMode()) return;
+  if (isPreviewMode()) {
+    /* previewing isn't a real visit: don't let "Access portal" or the
+       brand logo wander the ta off into another page while they're just
+       checking their edits */
+    neuterLink(document.getElementById("portalLink"));
+    neuterLink(document.querySelector(".brand"));
+    return;
+  }
   var link = document.getElementById("portalLink");
   var outBtn = document.getElementById("logoutBtn");
   var navJoin = document.getElementById("navJoinLink");

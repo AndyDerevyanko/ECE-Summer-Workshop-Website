@@ -103,13 +103,21 @@ var UNLOCK_SVG =
   '<path d="M8 11V8a4 4 0 0 1 7.5-2"/><path d="M12 14.5v2"/></svg>';
 
 /**
- * Resolves to the site content: the ta portal's unsaved snapshot when this
- * page was opened with ?preview=1 (see js/preview.js, js/ta.js), otherwise
- * the live content from /api/content.
+ * Checks whether this page was opened from the ta portal's preview page
+ * (see js/preview.js, js/ta.js) rather than by a real student.
+ * @return true if ?preview=1 is set
+ */
+function isPreviewMode() {
+  return /[?&]preview=1(&|$)/.test(window.location.search);
+}
+
+/**
+ * Resolves to the site content: the ta portal's unsaved snapshot in
+ * preview mode, otherwise the live content from /api/content.
  * @return a promise resolving to the content object
  */
 function fetchContent() {
-  if (/[?&]preview=1(&|$)/.test(window.location.search)) {
+  if (isPreviewMode()) {
     try {
       var raw = localStorage.getItem("preview_content");
       if (raw) return Promise.resolve(JSON.parse(raw));
@@ -248,10 +256,32 @@ function logout() {
   window.location.href = "login.html";
 }
 
+/**
+ * Strips a link's href and swallows its clicks, so it can't navigate the
+ * preview iframe away to a page a real student there shouldn't reach.
+ * @param el the link/button to neuter
+ */
+function neuterLink(el) {
+  if (!el) return;
+  el.removeAttribute("href");
+  el.style.opacity = ".5";
+  el.style.cursor = "default";
+  el.addEventListener("click", function (e) { e.preventDefault(); });
+}
+
 document.addEventListener("DOMContentLoaded", function () {
   var session = gateCheck();
   var logoutBtn = document.getElementById("logoutBtn");
-  if (logoutBtn) logoutBtn.addEventListener("click", logout);
+  if (isPreviewMode()) {
+    /* previewing isn't a real visit: don't let the brand logo wander the
+       ta off to another page, and don't let "Log out" fire for real either,
+       since it'd clear the session localStorage shares with the ta's own
+       portal tab, ending their actual login just from clicking a preview */
+    neuterLink(document.querySelector(".brand"));
+    neuterLink(logoutBtn);
+  } else if (logoutBtn) {
+    logoutBtn.addEventListener("click", logout);
+  }
   if (!session) return;
 
   fetchContent()

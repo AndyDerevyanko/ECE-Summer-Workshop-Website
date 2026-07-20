@@ -206,10 +206,11 @@ h1, h2, h3 {
   gap: 18px;
   height: 64px;
   /* keep it a single row: text stays on one line and never wraps onto a
-     second one. nav-links-dense below drops items before this has to clip
-     anything, so this is just a last-resort safety net, not a scrollbar. */
+     second one. nav-links-dense below drops items before the row actually
+     runs out of room, so there's nothing left to clip or scroll here (and
+     no overflow rule to accidentally clip the Apply Now hover tooltip,
+     which pops out below the nav link). */
   white-space: nowrap;
-  overflow: hidden;
 }
 .brand {
   font-family: var(--font-head);
@@ -222,7 +223,17 @@ h1, h2, h3 {
   gap: 9px;
 }
 .brand:hover { text-decoration: none; }
-.brand-logo { height: 36px; width: auto; display: block; }
+.brand-logo {
+  height: 36px;
+  width: auto;
+  display: block;
+  /* visually bigger without changing the box the flex layout sees, so
+     nothing else in the nav ever shifts: it grows left/up/down, away from
+     the wordmark text beside it, and just crops against the nav's edges
+     if it runs out of room rather than nudging anything else around */
+  transform: scale(1.25);
+  transform-origin: right center;
+}
 .nav-links {
   display: flex;
   gap: 30px;

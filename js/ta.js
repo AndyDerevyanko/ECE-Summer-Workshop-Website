@@ -504,7 +504,19 @@ function renderLogistics() {
 
 function isVidUrl(u) { return /\.mov$/i.test(u); }
 
-/* editable per-year photo/clip lists shown on gallery.html */
+var PREV_SVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>';
+
+var NEXT_SVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>';
+
+/* which image each year's mini viewer is sitting on, survives rerenders */
+var GY_IDX = {};
+
+/* editable per-year photo/clip lists shown on gallery.html. one image at a
+   time per year, same flip-through idea as the public gallery page. */
 function renderGallery() {
   var list = document.getElementById("galleryList");
   if (!list) return;
@@ -512,13 +524,29 @@ function renderGallery() {
 
   STATE.gallery.years.forEach(function (y) {
     var imgs = STATE.gallery.images[y] || [];
-    var thumbs = imgs.map(function (u, i) {
-      var media = isVidUrl(u) ?
-        '<video src="' + u + '" muted playsinline></video>' :
-        '<img src="' + u + '" alt="">';
-      return '<div class="gy-item">' + media +
-        '<button class="gy-rm" data-i="' + i + '" type="button" aria-label="Remove image">' + X_SVG + '</button></div>';
-    }).join("");
+    var i = GY_IDX[y] || 0;
+    if (i >= imgs.length) i = imgs.length ? imgs.length - 1 : 0;
+    GY_IDX[y] = i;
+
+    var viewer = "";
+    if (imgs.length) {
+      var cur = imgs[i];
+      var media = isVidUrl(cur) ?
+        '<video class="gy-media" src="' + cur + '" autoplay muted loop playsinline></video>' :
+        '<img class="gy-media" src="' + cur + '" alt="">';
+      viewer =
+        '<div class="gy-stage">' +
+          '<button class="gy-arrow gy-prev" type="button" aria-label="Previous image">' + PREV_SVG + '</button>' +
+          media +
+          '<button class="gy-arrow gy-next" type="button" aria-label="Next image">' + NEXT_SVG + '</button>' +
+        '</div>' +
+        '<div class="gy-bar">' +
+          '<span class="gy-count">' + (i + 1) + ' / ' + imgs.length + '</span>' +
+          '<button class="btn btn-ghost gy-rm" type="button">Remove this image</button>' +
+        '</div>';
+    } else {
+      viewer = '<p class="muted">No images yet.</p>';
+    }
 
     html +=
       '<div class="ta-panel" data-year="' + y + '">' +
@@ -526,7 +554,7 @@ function renderGallery() {
           '<span class="daytag">' + y + '</span>' +
           '<button class="btn btn-ghost gy-del" type="button">Remove year</button>' +
         '</div>' +
-        '<div class="gy-grid">' + (thumbs || '<p class="muted">No images yet.</p>') + '</div>' +
+        viewer +
         '<label class="btn btn-ghost ta-upload">' +
           '<svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
           'stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>' +
@@ -543,19 +571,31 @@ function renderGallery() {
 
   list.querySelectorAll(".ta-panel").forEach(function (p) {
     var y = p.getAttribute("data-year");
+    var imgs = STATE.gallery.images[y] || [];
 
     p.querySelector(".gy-del").addEventListener("click", function () {
       if (!confirm('Remove the "' + y + '" year and all its images from the gallery?')) return;
       STATE.gallery.years.splice(STATE.gallery.years.indexOf(y), 1);
       delete STATE.gallery.images[y];
+      delete GY_IDX[y];
       renderGallery();
     });
 
-    p.querySelectorAll(".gy-rm").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        STATE.gallery.images[y].splice(+this.getAttribute("data-i"), 1);
-        renderGallery();
-      });
+    var prevBtn = p.querySelector(".gy-prev");
+    if (prevBtn) prevBtn.addEventListener("click", function () {
+      GY_IDX[y] = (GY_IDX[y] - 1 + imgs.length) % imgs.length; /* wraps */
+      renderGallery();
+    });
+    var nextBtn = p.querySelector(".gy-next");
+    if (nextBtn) nextBtn.addEventListener("click", function () {
+      GY_IDX[y] = (GY_IDX[y] + 1) % imgs.length;
+      renderGallery();
+    });
+
+    var rmBtn = p.querySelector(".gy-rm");
+    if (rmBtn) rmBtn.addEventListener("click", function () {
+      imgs.splice(GY_IDX[y], 1);
+      renderGallery();
     });
 
     p.querySelector(".gy-file").addEventListener("change", function () {
@@ -565,6 +605,7 @@ function renderGallery() {
       Promise.all(files.map(uploadFile))
         .then(function (items) {
           items.forEach(function (it) { STATE.gallery.images[y].push(it.url); });
+          GY_IDX[y] = STATE.gallery.images[y].length - 1; /* show what was just added */
           showMsg("Uploaded. Don't forget to save your changes.", true);
           renderGallery();
         })
@@ -584,6 +625,7 @@ function renderGallery() {
       var v = linkInput.value.trim();
       if (!v) return;
       STATE.gallery.images[y].push(v);
+      GY_IDX[y] = STATE.gallery.images[y].length - 1;
       linkInput.value = "";
       renderGallery();
     }

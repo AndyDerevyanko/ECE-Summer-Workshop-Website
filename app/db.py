@@ -329,7 +329,15 @@ def get_content():
     conn = get_db()
     row = conn.execute("SELECT data FROM content WHERE id = 1").fetchone()
     conn.close()
-    return json.loads(row["data"]) if row else DEFAULT_CONTENT
+    if not row:
+        return DEFAULT_CONTENT
+    data = json.loads(row["data"])
+    # blobs saved before a key existed (gallery, apply_tooltip, ...) come
+    # back without it, fill those in from the defaults so the frontend
+    # always sees the full shape
+    for key, value in DEFAULT_CONTENT.items():
+        data.setdefault(key, value)
+    return data
 
 
 def save_content(data):

@@ -170,7 +170,10 @@ var PROFILES = [];  /* saved drafts from /api/profiles */
 var EDITING = null; /* null = editing the live site, else the open profile */
 
 var previewWindow = null; /* the tab opened by openPreview(), if still around */
-var editorWindow = null; /* the tab opened by openEditor(), if still around */
+
+/* "manager" (the form-based content manager) or "editor" (the embedded
+   click-to-edit iframe), see showMode(). Both views edit the same STATE. */
+var TA_MODE = "manager";
 
 /**
  * Builds the Authorization header for a ta-only request.
@@ -490,6 +493,62 @@ function tickPreviewCountdown(target) {
   previewTickHandle = setInterval(tick, 1000);
 }
 
+/**
+ * Reads a countdown text override from STATE.text (the same map the visual
+ * editor's click-to-edit fields write into, see js/main.js's
+ * saveEditedField()), falling back to the template's own default.
+ * @param id the data-edit-id key
+ * @param fallback the template's own default text
+ * @return the text to render
+ */
+function countdownText(id, fallback) {
+  return (STATE.text && STATE.text[id] !== undefined) ? STATE.text[id] : fallback;
+}
+
+/**
+ * Wires one countdown label/text node in the mini preview so a click edits
+ * it in place, writing straight into STATE.text under the same key the
+ * visual editor's click-to-edit fields use (js/main.js's data-edit-id
+ * "countdown.tba.label"/"countdown.tba.text"/"countdown.clock.label"), so
+ * an edit made here or there shows up in both places, same idea as
+ * wireInlineEdit() for logistics tiles. Deletes the key (falls back to the
+ * default) if edited back to match it, same rule saveEditedField() uses.
+ * @param el the element to wire
+ * @param id the STATE.text key
+ * @param fallback the template's own default text
+ */
+function wireCountdownEdit(el, id, fallback) {
+  el.classList.add("inline-editable");
+  var before = "";
+  el.addEventListener("click", function () {
+    if (el.isContentEditable) return;
+    before = el.textContent;
+    el.contentEditable = "true";
+    el.classList.add("editing");
+    el.focus();
+    var range = document.createRange();
+    range.selectNodeContents(el);
+    var sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  });
+  el.addEventListener("keydown", function (e) {
+    if (!el.isContentEditable) return;
+    if (e.key === "Enter") { e.preventDefault(); el.blur(); }
+    if (e.key === "Escape") { e.preventDefault(); el.textContent = before; el.blur(); }
+  });
+  el.addEventListener("blur", function () {
+    if (!el.isContentEditable) return;
+    el.contentEditable = "false";
+    el.classList.remove("editing");
+    var after = el.textContent;
+    if (after === before) return;
+    if (!STATE.text || typeof STATE.text !== "object") STATE.text = {};
+    if (after.trim() === fallback.trim()) delete STATE.text[id];
+    else STATE.text[id] = after;
+  });
+}
+
 /** Mirrors STATE back into the "current selection" preview box. */
 function renderPreview() {
   var slot = document.getElementById("previewCountdown");
@@ -498,7 +557,26 @@ function renderPreview() {
 
   var showClock = STATE.timer_mode === "actual" && STATE.timer_target;
   slot.innerHTML = showClock ? CD_CLOCK_HTML : CD_TBA_HTML;
-  if (showClock) tickPreviewCountdown(STATE.timer_target);
+
+  if (showClock) {
+    tickPreviewCountdown(STATE.timer_target);
+    var clockLabel = slot.querySelector(".cd-label");
+    if (clockLabel) {
+      clockLabel.textContent = countdownText("countdown.clock.label", "Workshop begins in");
+      wireCountdownEdit(clockLabel, "countdown.clock.label", "Workshop begins in");
+    }
+  } else {
+    var tbaLabel = slot.querySelector(".cd-label");
+    var tbaText = slot.querySelector(".cd-tba-txt");
+    if (tbaLabel) {
+      tbaLabel.textContent = countdownText("countdown.tba.label", "Date and time");
+      wireCountdownEdit(tbaLabel, "countdown.tba.label", "Date and time");
+    }
+    if (tbaText) {
+      tbaText.textContent = countdownText("countdown.tba.text", "To be announced");
+      wireCountdownEdit(tbaText, "countdown.tba.text", "To be announced");
+    }
+  }
 
   var logisticsSlot = document.getElementById("previewLogistics");
   if (logisticsSlot) {
@@ -887,9 +965,13 @@ function renderAll() {
  * from an earlier click is still open, refreshes it) so the ta can see
  * unsaved edits rendered in the real landing page and dashboard before
  * applying them. The snapshot also doubles as a "keep my edits" draft:
- * see tryRestoreFromPreview().
+ * see tryRestoreFromPreview(). Pulls in whatever the Visual editor tab's
+ * iframe last wrote first, if that's the tab currently open, so clicking
+ * Preview from there can't clobber an in-progress click-to-edit with the
+ * parent's now-stale copy of STATE.
  */
 function openPreview() {
+  if (TA_MODE === "editor") pullStateFromEditor();
   writePreviewSnapshot();
   if (previewWindow && !previewWindow.closed) {
     previewWindow.location.reload();
@@ -899,27 +981,109 @@ function openPreview() {
   }
 }
 
+/* which page the Visual editor tab's iframe is pointed at */
+var EDITOR_TAB_PAGES = {
+  landing: "index.html?preview=1&edit=1",
+  dashboard: "dashboard.html?preview=1&edit=1",
+  gallery: "gallery.html?preview=1&edit=1"
+};
+var editorSubTab = "landing";
+
 /**
- * Opens the visual editor (editor.html) on the same unsaved-edits
- * snapshot Preview uses, in its own named tab, so click-to-edit changes
- * made there restore back into STATE the same way a Preview trip does
- * (see tryRestoreFromPreview()), and nothing in progress here gets lost
- * just from switching over to click around the live-looking page.
+ * Points the Visual editor's iframe at the given sub-tab's page and marks
+ * it active.
+ * @param name "landing", "dashboard", or "gallery"
  */
-function openEditor() {
-  writePreviewSnapshot();
-  if (editorWindow && !editorWindow.closed) {
-    editorWindow.location.reload();
-    editorWindow.focus();
-  } else {
-    editorWindow = window.open("editor.html", "ta_editor");
+function showEditorSubTab(name) {
+  if (!EDITOR_TAB_PAGES[name]) name = "landing";
+  editorSubTab = name;
+  var frame = document.getElementById("edFrame");
+  if (frame) frame.src = EDITOR_TAB_PAGES[name];
+  document.querySelectorAll("#edSubTabs .pv-tab").forEach(function (btn) {
+    btn.classList.toggle("active", btn.getAttribute("data-tab") === name);
+  });
+}
+
+/** Reloads the Visual editor's iframe on its current sub-tab, so it picks up whatever's newest in the shared snapshot. */
+function reloadEditorFrame() {
+  var frame = document.getElementById("edFrame");
+  if (frame && frame.contentWindow) frame.contentWindow.location.reload();
+}
+
+/**
+ * Reads whatever the Visual editor's iframe last wrote into the shared
+ * localStorage snapshot (js/main.js's saveEditedField()) back into STATE,
+ * the same way tryRestoreFromPreview() does for a fresh page load. The
+ * iframe is a separate document, so its edits only ever land in
+ * localStorage, never directly in this page's STATE variable; call this
+ * before reading STATE (Apply/Save/Reset/Preview, or switching back to
+ * the Content manager tab) whenever the Visual editor was the active tab,
+ * so an in-progress click-to-edit is never silently dropped.
+ */
+function pullStateFromEditor() {
+  var raw;
+  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  if (!raw) return;
+  try { STATE = JSON.parse(raw); } catch (e) { return; }
+  var editingRaw;
+  try { editingRaw = localStorage.getItem("preview_editing"); } catch (e) { editingRaw = null; }
+  EDITING = editingRaw ? JSON.parse(editingRaw) : null;
+  normalizeState();
+}
+
+/**
+ * Switches between the Content manager form and the Visual editor iframe.
+ * Both are views of the same in-memory STATE/EDITING, not two separate
+ * drafts: leaving the Visual editor tab pulls its edits back into STATE
+ * (see pullStateFromEditor()) before showing the form, and entering it
+ * pushes the current STATE into the shared snapshot the iframe reads.
+ * This is also how a profile opened via the Profiles list carries over:
+ * whichever tab you're on, it's the same STATE/EDITING underneath.
+ * @param mode "manager" or "editor"
+ */
+function showMode(mode) {
+  if (mode !== "editor") mode = "manager";
+  if (mode === TA_MODE) return;
+  if (TA_MODE === "editor") {
+    pullStateFromEditor();
+    renderAll();
+    syncProfileBar();
+  }
+  TA_MODE = mode;
+  document.getElementById("managerView").style.display = mode === "manager" ? "block" : "none";
+  document.getElementById("editorView").style.display = mode === "editor" ? "block" : "none";
+  document.getElementById("taModeTitle").textContent = mode === "editor" ? "Visual editor" : "Content manager";
+  document.getElementById("taModeShell").className = "ta-mode-shell mode-" + mode;
+  document.querySelectorAll("#taModeTabs .ta-mode-tab").forEach(function (b) {
+    b.classList.toggle("active", b.getAttribute("data-mode") === mode);
+  });
+  if (mode === "editor") {
+    writePreviewSnapshot();
+    showEditorSubTab(editorSubTab);
   }
 }
 
 /**
+ * Reads the Visual editor iframe's undo/redo stack (js/main.js's
+ * window.ClickEditHistory) and enables/disables the toolbar buttons to
+ * match. Polled on an interval since edits happen inside the iframe with
+ * no event wired back out.
+ */
+function syncUndoButtons() {
+  var frame = document.getElementById("edFrame");
+  var undoBtn = document.getElementById("edUndo");
+  var redoBtn = document.getElementById("edRedo");
+  if (!frame || !undoBtn || !redoBtn) return;
+  var history;
+  try { history = frame.contentWindow.ClickEditHistory; } catch (e) { history = null; }
+  undoBtn.disabled = !history || !history.canUndo();
+  redoBtn.disabled = !history || !history.canRedo();
+}
+
+/**
  * Snapshots STATE (and the open profile, if any) into localStorage, the
- * hand-off preview.html/editor.html read from and tryRestoreFromPreview()
- * restores back out of.
+ * hand-off preview.html and the Visual editor's iframe both read from and
+ * tryRestoreFromPreview() restores back out of.
  */
 function writePreviewSnapshot() {
   try {
@@ -1072,7 +1236,9 @@ function backToLive(skipConfirm) {
   if (!skipConfirm && !confirm("Go back to the live content? Unsaved profile edits are discarded.")) return;
   EDITING = null;
   clearPreviewSnapshot();
-  loadLive();
+  loadLive().then(function () {
+    if (TA_MODE === "editor") { writePreviewSnapshot(); reloadEditorFrame(); }
+  });
   syncProfileBar();
   renderProfiles();
 }
@@ -1189,6 +1355,95 @@ function renderProfiles() {
   });
 }
 
+/**
+ * Apply = make what's on screen live for students. In profile mode it
+ * also saves the profile first so the two can't drift apart. Works from
+ * either tab: if the Visual editor is open, pulls in whatever it's
+ * written to the shared snapshot first, so an in-progress click-to-edit
+ * isn't dropped.
+ */
+function applyContent() {
+  if (TA_MODE === "editor") pullStateFromEditor();
+  if (EDITING && !confirm('Apply "' + profileLabel(EDITING) + '" to the live site? Students will see it right away.')) return;
+  showMsg("Applying...", true);
+  authedFetch("/api/content", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(STATE)
+  })
+    .then(function (res) {
+      if (!res.ok) throw new Error("apply failed");
+      renderAll();
+      if (TA_MODE === "editor") { writePreviewSnapshot(); reloadEditorFrame(); }
+      else clearPreviewSnapshot();
+      if (EDITING) {
+        EDITING.data = JSON.parse(JSON.stringify(STATE));
+        updateProfile(EDITING.id, { data: STATE });
+        showMsg("Profile applied. Students see it now.", true);
+      } else {
+        showMsg("Applied. Students see this now.", true);
+      }
+    })
+    .catch(function (err) {
+      if (err.message === "expired") return;
+      showMsg("Couldn't apply. Check you're still logged in and try again.", false);
+    });
+}
+
+/** Save = stash what's on screen in a profile, live site untouched. Same editor-tab pull as applyContent(). */
+function saveToProfile() {
+  if (TA_MODE === "editor") pullStateFromEditor();
+  if (EDITING) {
+    updateProfile(EDITING.id, { data: STATE }, function () {
+      EDITING.data = JSON.parse(JSON.stringify(STATE));
+      renderAll();
+      showMsg("Profile saved. The live site is unchanged.", true);
+    });
+    return;
+  }
+  var name = nextProfileName();
+  showMsg("Saving...", true);
+  authedFetch("/api/profiles", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: name, data: STATE })
+  })
+    .then(function (res) {
+      if (!res.ok) throw new Error("save failed");
+      return fetchProfiles();
+    })
+    .then(function () {
+      renderAll();
+      showMsg('Saved as "' + name + '". The live site is unchanged.', true);
+    })
+    .catch(function (err) {
+      if (err.message === "expired") return;
+      showMsg("Couldn't save. Check you're still logged in and try again.", false);
+    });
+}
+
+/**
+ * Reset = throw away unsaved edits: back to the live site, or the open
+ * profile's last saved data if one's being edited. Doesn't need an
+ * editor-tab pull first, unlike the other three actions: it's discarding
+ * whatever's unsaved anyway, in either tab.
+ */
+function resetContent() {
+  if (!confirm("Reset everything back to how it was last saved? This throws away your edits.")) return;
+  clearPreviewSnapshot();
+  if (EDITING) {
+    STATE = JSON.parse(JSON.stringify(EDITING.data));
+    normalizeState();
+    renderAll();
+    if (TA_MODE === "editor") { writePreviewSnapshot(); reloadEditorFrame(); }
+    showMsg("Reset to the profile's last saved version.", true);
+    return;
+  }
+  loadLive("Reset to the last saved version.").then(function () {
+    if (TA_MODE === "editor") { writePreviewSnapshot(); reloadEditorFrame(); }
+  });
+}
+
 document.addEventListener("DOMContentLoaded", function () {
   var logoutBtn = document.getElementById("logoutBtn");
   if (logoutBtn) logoutBtn.addEventListener("click", function () {
@@ -1277,79 +1532,41 @@ document.addEventListener("DOMContentLoaded", function () {
   document.getElementById("joinUrlInput").addEventListener("input", function () { STATE.join_url = this.value; });
   document.getElementById("applyTooltipInput").addEventListener("input", function () { STATE.apply_tooltip = this.value; });
 
-  /**
-   * Apply = make what's on screen live for students. In profile mode it
-   * also saves the profile first so the two can't drift apart.
-   */
-  function applyContent() {
-    if (EDITING && !confirm('Apply "' + profileLabel(EDITING) + '" to the live site? Students will see it right away.')) return;
-    showMsg("Applying...", true);
-    authedFetch("/api/content", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(STATE)
-    })
-      .then(function (res) {
-        if (!res.ok) throw new Error("apply failed");
-        clearPreviewSnapshot();
-        if (EDITING) {
-          EDITING.data = JSON.parse(JSON.stringify(STATE));
-          updateProfile(EDITING.id, { data: STATE });
-          showMsg("Profile applied. Students see it now.", true);
-        } else {
-          showMsg("Applied. Students see this now.", true);
-        }
-      })
-      .catch(function (err) {
-        if (err.message === "expired") return;
-        showMsg("Couldn't apply. Check you're still logged in and try again.", false);
-      });
-  }
-
-  /** Save = stash what's on screen in a profile, live site untouched. */
-  function saveToProfile() {
-    if (EDITING) {
-      updateProfile(EDITING.id, { data: STATE }, function () {
-        EDITING.data = JSON.parse(JSON.stringify(STATE));
-        showMsg("Profile saved. The live site is unchanged.", true);
-      });
-      return;
-    }
-    var name = nextProfileName();
-    showMsg("Saving...", true);
-    authedFetch("/api/profiles", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: name, data: STATE })
-    })
-      .then(function (res) {
-        if (!res.ok) throw new Error("save failed");
-        return fetchProfiles();
-      })
-      .then(function () {
-        showMsg('Saved as "' + name + '". The live site is unchanged.', true);
-      })
-      .catch(function (err) {
-        if (err.message === "expired") return;
-        showMsg("Couldn't save. Check you're still logged in and try again.", false);
-      });
-  }
-
   document.getElementById("taPreview").addEventListener("click", openPreview);
-  document.getElementById("taVisualEditor").addEventListener("click", openEditor);
   document.getElementById("taApply").addEventListener("click", applyContent);
   document.getElementById("taSave").addEventListener("click", saveToProfile);
+  document.getElementById("taReset").addEventListener("click", resetContent);
 
-  document.getElementById("taReset").addEventListener("click", function () {
-    if (!confirm("Reset everything back to how it was last saved? This throws away your edits.")) return;
-    clearPreviewSnapshot();
-    if (EDITING) {
-      STATE = JSON.parse(JSON.stringify(EDITING.data));
-      normalizeState();
-      renderAll();
-      showMsg("Reset to the profile's last saved version.", true);
-      return;
-    }
-    loadLive("Reset to the last saved version.");
+  /* Content manager <-> Visual editor tabs, both views of the same STATE */
+  document.querySelectorAll("#taModeTabs .ta-mode-tab").forEach(function (btn) {
+    btn.addEventListener("click", function () { showMode(this.getAttribute("data-mode")); });
   });
+
+  /* landing/dashboard/gallery sub-tabs inside the Visual editor */
+  document.querySelectorAll("#edSubTabs .pv-tab").forEach(function (btn) {
+    btn.addEventListener("click", function () { showEditorSubTab(this.getAttribute("data-tab")); });
+  });
+
+  document.getElementById("edUndo").addEventListener("click", function () {
+    var frame = document.getElementById("edFrame");
+    if (frame.contentWindow.ClickEditHistory) frame.contentWindow.ClickEditHistory.undo();
+    syncUndoButtons();
+  });
+  document.getElementById("edRedo").addEventListener("click", function () {
+    var frame = document.getElementById("edFrame");
+    if (frame.contentWindow.ClickEditHistory) frame.contentWindow.ClickEditHistory.redo();
+    syncUndoButtons();
+  });
+  setInterval(syncUndoButtons, 400);
+
+  /* the Day panels/Extras/Gallery/Landing/Profiles nav links only make
+     sense in the Content manager view, so jump back to it before the
+     browser scrolls to the target anchor */
+  document.querySelectorAll("#taSectionNav a").forEach(function (a) {
+    a.addEventListener("click", function () { showMode("manager"); });
+  });
+
+  /* lets preview.html's "Visual editor" link (?tab=editor) land straight
+     on that tab instead of the content manager */
+  if (/[?&]tab=editor(&|$)/.test(window.location.search)) showMode("editor");
 });

@@ -2,8 +2,9 @@
    page and dashboard by loading them in an iframe with ?preview=1, which
    tells js/main.js and js/dashboard.js to read the "preview_content"
    snapshot in localStorage (written by js/ta.js's Preview button) instead
-   of fetching /api/content. look-only: click-to-edit lives on its own page,
-   editor.html/js/editor.js, same engine (js/main.js's wireClickToEdit()). */
+   of fetching /api/content. look-only: click-to-edit lives in the ta portal's
+   own Visual editor tab (instructor.html/js/ta.js), same engine
+   (js/main.js's wireClickToEdit()). */
 
 /* only ta keys get in here */
 function gateCheck() {

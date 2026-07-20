@@ -268,12 +268,6 @@ def page_preview(request: Request):
     return templates.TemplateResponse(request, "preview.html")
 
 
-@app.get("/editor.html")
-def page_editor(request: Request):
-    """renders the ta-only visual editor (click-to-edit landing page copy)."""
-    return templates.TemplateResponse(request, "editor.html")
-
-
 @app.get("/accounts.html")
 def page_accounts(request: Request):
     """renders the ta-only account manager."""

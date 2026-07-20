@@ -236,12 +236,18 @@ function startCountdown(target) {
  * Strips a link's href and swallows its clicks, so it can't navigate the
  * preview iframe away to a page a real visitor there shouldn't reach.
  * @param el the link to neuter
+ * @param dim false to skip the disabled-looking dimming, for a link that
+ *   wraps an editable data-edit-id child (e.g. the brand text): the whole
+ *   link still shouldn't navigate, but it shouldn't look disabled either
+ *   since part of it is a live editable field
  */
-function neuterLink(el) {
+function neuterLink(el, dim) {
   if (!el) return;
   el.removeAttribute("href");
-  el.style.opacity = ".5";
-  el.style.cursor = "default";
+  if (dim !== false) {
+    el.style.opacity = ".5";
+    el.style.cursor = "default";
+  }
   el.addEventListener("click", function (e) { e.preventDefault(); });
 }
 
@@ -259,11 +265,21 @@ function isEditMode() {
  * Every element carrying a data-edit-id keeps the template's default text
  * until a ta overrides it via click-to-edit; stashes that default in a
  * data attribute first so a later edit can tell if it's back to the
- * original wording (see wireClickToEdit()'s blur handler).
+ * original wording (see wireClickToEdit()'s blur handler). Skips
+ * #portalLink on a real (non-preview) load where a session is already
+ * logged in: updatePortalLink() runs earlier in DOMContentLoaded and has
+ * already swapped its text to "TA portal"/"Dashboard" for this visitor, so
+ * capturing that swapped text as the "default" (or overwriting it with a
+ * saved "Access portal" override meant for logged-out visitors) would
+ * break the per-session label. In preview mode updatePortalLink() never
+ * reaches that swap (it neuters and returns early instead), so the ta
+ * previewing/editing still gets a normal, fully editable field.
  * @param textMap {id: overrideHtml}, from content.text
  */
 function applyTextOverrides(textMap) {
+  var skipPortalLink = !isPreviewMode() && localStorage.getItem("session") && localStorage.getItem("role");
   document.querySelectorAll("[data-edit-id]").forEach(function (el) {
+    if (skipPortalLink && el.id === "portalLink") return;
     el.setAttribute("data-default-html", el.innerHTML);
     var id = el.getAttribute("data-edit-id");
     if (textMap && textMap[id] !== undefined) el.innerHTML = textMap[id];
@@ -277,7 +293,7 @@ var EDIT_REDO = [];
 
 /**
  * Turns every data-edit-id element into a click-to-edit field, only called
- * in the standalone visual editor page (editor.html/js/editor.js) with
+ * in the ta portal's Visual editor tab (instructor.html/js/ta.js) with
  * &edit=1 set (see isEditMode()). Edits save straight into localStorage's
  * preview_content snapshot (the same one js/ta.js's
  * tryRestoreFromPreview() already restores unsaved work from), since the
@@ -324,6 +340,7 @@ function wireClickToEdit() {
         EDIT_REDO.length = 0;
       }
       saveEditedField(el.getAttribute("data-edit-id"), after, el.getAttribute("data-default-html"));
+      mirrorEditedField(el.getAttribute("data-edit-id"), after, el);
     });
   });
 
@@ -334,7 +351,7 @@ function wireClickToEdit() {
     else if (key === "y" || (key === "z" && e.shiftKey)) { e.preventDefault(); redoEdit(); }
   });
 
-  /* exposed so editor.html's Undo/Redo buttons can drive this from the
+  /* exposed so instructor.html's Undo/Redo buttons can drive this from the
      parent frame (same-origin, so a direct contentWindow reference works) */
   window.ClickEditHistory = {
     undo: undoEdit,
@@ -342,6 +359,21 @@ function wireClickToEdit() {
     canUndo: function () { return EDIT_UNDO.length > 0; },
     canRedo: function () { return EDIT_REDO.length > 0; }
   };
+}
+
+/**
+ * Copies a committed edit onto every other element sharing the same
+ * data-edit-id (e.g. the brand wordmark appears in both the nav and the
+ * footer), so they stay in sync within the same page load instead of only
+ * matching up again after a reload re-runs applyTextOverrides().
+ * @param id the edited element's data-edit-id
+ * @param html its new innerHTML
+ * @param editedEl the element that was just edited, skipped in the sync
+ */
+function mirrorEditedField(id, html, editedEl) {
+  document.querySelectorAll('[data-edit-id="' + id + '"]').forEach(function (el) {
+    if (el !== editedEl) el.innerHTML = html;
+  });
 }
 
 /** Reverts the most recent click-to-edit commit, moving it onto the redo stack. */
@@ -366,10 +398,10 @@ function redoEdit() {
  * @param side "before" or "after", which side of the action to restore
  */
 function applyHistoryAction(action, side) {
-  var el = document.querySelector('[data-edit-id="' + action.id + '"]');
-  if (!el) return;
-  el.innerHTML = action[side];
-  saveEditedField(action.id, action[side], el.getAttribute("data-default-html"));
+  var els = document.querySelectorAll('[data-edit-id="' + action.id + '"]');
+  if (!els.length) return;
+  els.forEach(function (el) { el.innerHTML = action[side]; });
+  saveEditedField(action.id, action[side], els[0].getAttribute("data-default-html"));
 }
 
 /**
@@ -425,7 +457,7 @@ function updatePortalLink() {
        page while they're just checking their edits (the gallery gets its
        own preview tab, separate from the landing page, see js/preview.js) */
     neuterLink(document.getElementById("portalLink"));
-    neuterLink(document.querySelector(".brand"));
+    neuterLink(document.querySelector(".brand"), false);
     neuterLink(document.getElementById("galleryLink"));
     return;
   }

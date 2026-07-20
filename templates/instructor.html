@@ -24,7 +24,7 @@
   <nav class="nav">
     <div class="wrap nav-inner">
       <a href="index.html" class="brand"><img src="assets/logo.png" class="brand-logo" alt="ECE Workshops" /> ECE Workshops</a>
-      <div class="nav-links nav-links-dense">
+      <div class="nav-links nav-links-dense" id="taSectionNav">
         <a href="#panels">Day panels</a>
         <a href="#extras">Extra attachments</a>
         <a href="#gallery">Gallery</a>
@@ -62,167 +62,210 @@
       <div class="wrap dash-head-row">
         <div>
           <p class="eyebrow">TA portal</p>
-          <h1>Content manager</h1>
+          <h1 id="taModeTitle">Content manager</h1>
         </div>
-        <button class="btn btn-primary btn-lg" id="taVisualEditor" type="button">Visual editor</button>
       </div>
     </section>
 
-    <!-- shown while a saved profile is open in the editor instead of the live content -->
-    <div class="prof-bar" id="profileBar" style="display:none">
-      <div class="wrap prof-bar-inner">
-        <span id="profileBarText"></span>
-        <button class="btn btn-ghost" id="profileBack" type="button">Back to live content</button>
-      </div>
-    </div>
-
-    <section class="section-sm" id="panels">
-      <div class="wrap">
-        <h2 style="font-size:1.4rem;margin-bottom:6px">Day panels</h2>
-        <div class="ta-card ta-card-hl" style="margin-bottom:28px">
-          <div class="field">
-            <label for="totalDaysInput">Total workshop days</label>
-            <input id="totalDaysInput" type="number" min="1">
+    <!-- full-bleed shell: the active tab's color continues down as the
+         background of everything below it, so which mode you're in is
+         obvious at a glance, not just a label. see .ta-mode-* in style.css -->
+    <div class="ta-mode-shell mode-manager" id="taModeShell">
+      <div class="ta-mode-strip">
+        <div class="wrap">
+          <div class="ta-mode-tabs" role="tablist" id="taModeTabs">
+            <button class="ta-mode-tab active" data-mode="manager" type="button" role="tab">Content manager</button>
+            <button class="ta-mode-tab" data-mode="editor" type="button" role="tab">Visual editor</button>
           </div>
-          <p class="muted" style="margin:6px 0 0">"__ of TOTAL days unlocked" progress bar on student dashboard</p>
-        </div>
-        <div id="panelList">
-          <!-- filled in by ta.js -->
-        </div>
-        <button class="btn btn-ghost" id="addPanel" type="button">
-          <svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-            stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-          New panel
-        </button>
-      </div>
-    </section>
-
-    <section class="section-sm" id="extras" style="background:var(--bg-2)">
-      <div class="wrap">
-        <h2 style="font-size:1.4rem;margin-bottom:6px">Extra attachments</h2>
-        <p class="muted" style="margin-top:0;margin-bottom:18px">
-          Files here show up on every student's dashboard, outside the day panels.
-        </p>
-        <div class="res-list" id="extraList">
-          <!-- filled in by ta.js -->
-        </div>
-        <label class="btn btn-ghost ta-upload" style="margin-top:14px">
-          <svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-            stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-          Add attachment
-          <input type="file" id="extraFile" multiple hidden>
-        </label>
-        <button class="btn btn-ghost" id="extraLinkBtn" type="button" style="margin-top:14px;margin-left:10px">
-          <svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M9 17H7a5 5 0 0 1 0-10h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8"/></svg>
-          Add link
-        </button>
-        <div class="ta-link-row" id="extraLinkRow" style="display:none">
-          <input type="url" id="extraLinkInput" placeholder="https://...">
-          <button class="btn btn-primary" id="extraLinkAdd" type="button">Add</button>
         </div>
       </div>
-    </section>
 
-    <section class="section-sm" id="gallery">
-      <div class="wrap">
-        <h2 style="font-size:1.4rem;margin-bottom:6px">Gallery</h2>
-        <p class="muted" style="margin-top:0;margin-bottom:18px">
-          Photos and clips shown on the public gallery page, grouped by year.
-        </p>
-        <div id="galleryList">
-          <!-- filled in by ta.js -->
-        </div>
-        <div class="ta-row" style="align-items:end">
-          <div class="field">
-            <label for="newYearInput">Add a year</label>
-            <input id="newYearInput" type="text" placeholder="e.g. 2027">
+      <div class="ta-mode-panel">
+        <!-- shown while a saved profile is open in the editor instead of the live content -->
+        <div class="prof-bar" id="profileBar" style="display:none">
+          <div class="wrap prof-bar-inner">
+            <span id="profileBarText"></span>
+            <button class="btn btn-ghost" id="profileBack" type="button">Back to live content</button>
           </div>
-          <button class="btn btn-ghost" id="addGalleryYear" type="button">
+        </div>
+
+        <!-- shared by both tabs below: they edit the same in-memory STATE, so
+             one action row applies/saves/resets whichever one you're looking at -->
+        <div class="wrap" style="padding:22px 0 30px">
+          <div class="ta-actions">
+            <button class="btn btn-ghost" id="taPreview" type="button">Preview</button>
+            <button class="btn btn-primary" id="taApply" type="button">Apply changes</button>
+            <button class="btn btn-ghost" id="taSave" type="button">Save to profile</button>
+            <button class="btn btn-ghost" id="taReset" type="button">Reset</button>
+          </div>
+          <p class="form-msg" id="taMsg"></p>
+        </div>
+
+        <div id="managerView">
+      <section class="section-sm" id="panels">
+        <div class="wrap">
+          <h2 style="font-size:1.4rem;margin-bottom:6px">Day panels</h2>
+          <div class="ta-card ta-card-hl" style="margin-bottom:28px">
+            <div class="field">
+              <label for="totalDaysInput">Total workshop days</label>
+              <input id="totalDaysInput" type="number" min="1">
+            </div>
+            <p class="muted" style="margin:6px 0 0">"__ of TOTAL days unlocked" progress bar on student dashboard</p>
+          </div>
+          <div id="panelList">
+            <!-- filled in by ta.js -->
+          </div>
+          <button class="btn btn-ghost" id="addPanel" type="button">
             <svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
               stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-            Add year
+            New panel
           </button>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <section class="section-sm" id="landing">
-      <div class="wrap">
-        <h2 style="font-size:1.4rem;margin-bottom:6px">Landing page</h2>
-        <div class="ta-live">
-          <p class="muted" style="margin:0 0 14px;font-weight:600">This is what your current selection looks like:</p>
-          <div class="ta-live-preview">
-            <div id="previewCountdown"></div>
+      <section class="section-sm" id="extras" style="background:var(--bg-2)">
+        <div class="wrap">
+          <h2 style="font-size:1.4rem;margin-bottom:6px">Extra attachments</h2>
+          <p class="muted" style="margin-top:0;margin-bottom:18px">
+            Files here show up on every student's dashboard, outside the day panels.
+          </p>
+          <div class="res-list" id="extraList">
+            <!-- filled in by ta.js -->
           </div>
-          <div class="grid grid-4" id="previewLogistics" style="margin-top:14px">
-            <!-- filled in by ta.js, click any tile's text to edit it in place -->
+          <label class="btn btn-ghost ta-upload" style="margin-top:14px">
+            <svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+            Add attachment
+            <input type="file" id="extraFile" multiple hidden>
+          </label>
+          <button class="btn btn-ghost" id="extraLinkBtn" type="button" style="margin-top:14px;margin-left:10px">
+            <svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M9 17H7a5 5 0 0 1 0-10h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8"/></svg>
+            Add link
+          </button>
+          <div class="ta-link-row" id="extraLinkRow" style="display:none">
+            <input type="url" id="extraLinkInput" placeholder="https://...">
+            <button class="btn btn-primary" id="extraLinkAdd" type="button">Add</button>
           </div>
         </div>
+      </section>
 
-        <div class="ta-card">
-          <div class="field">
-            <label>Countdown timer</label>
-            <label class="ta-radio"><input type="radio" name="cdMode" value="tentative" checked>
-              Tentative, shows "To be announced"</label>
-            <label class="ta-radio"><input type="radio" name="cdMode" value="actual">
-              Actual countdown</label>
+      <section class="section-sm" id="gallery">
+        <div class="wrap">
+          <h2 style="font-size:1.4rem;margin-bottom:6px">Gallery</h2>
+          <p class="muted" style="margin-top:0;margin-bottom:18px">
+            Photos and clips shown on the public gallery page, grouped by year.
+          </p>
+          <div id="galleryList">
+            <!-- filled in by ta.js -->
           </div>
-          <div class="ta-row">
+          <div class="ta-row" style="align-items:end">
             <div class="field">
-              <label for="cdTarget">Counts down to</label>
-              <input id="cdTarget" type="datetime-local">
+              <label for="newYearInput">Add a year</label>
+              <input id="newYearInput" type="text" placeholder="e.g. 2027">
+            </div>
+            <button class="btn btn-ghost" id="addGalleryYear" type="button">
+              <svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+              Add year
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section class="section-sm" id="landing">
+        <div class="wrap">
+          <h2 style="font-size:1.4rem;margin-bottom:6px">Landing page</h2>
+          <div class="ta-live">
+            <p class="muted" style="margin:0 0 14px;font-weight:600">This is what your current selection looks like:</p>
+            <div class="ta-live-preview">
+              <div id="previewCountdown"></div>
+            </div>
+            <div class="grid grid-4" id="previewLogistics" style="margin-top:14px">
+              <!-- filled in by ta.js, click any tile's text to edit it in place -->
+            </div>
+          </div>
+
+          <div class="ta-card">
+            <div class="field">
+              <label>Countdown timer</label>
+              <label class="ta-radio"><input type="radio" name="cdMode" value="tentative" checked>
+                Tentative, shows "To be announced"</label>
+              <label class="ta-radio"><input type="radio" name="cdMode" value="actual">
+                Actual countdown</label>
+            </div>
+            <div class="ta-row">
+              <div class="field">
+                <label for="cdTarget">Counts down to</label>
+                <input id="cdTarget" type="datetime-local">
+              </div>
+            </div>
+          </div>
+
+          <div class="ta-card">
+            <div class="field">
+              <label>Info tiles</label>
+            </div>
+            <div id="logisticsList">
+              <!-- filled in by ta.js -->
+            </div>
+            <button class="btn btn-ghost" id="addLogistics" type="button">
+              <svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+              New tile
+            </button>
+          </div>
+
+          <div class="ta-card">
+            <div class="field">
+              <label for="joinUrlInput">"Apply Now" button link</label>
+              <input id="joinUrlInput" type="url" placeholder="https://...">
+            </div>
+          </div>
+
+          <div class="ta-card">
+            <div class="field">
+              <label for="applyTooltipInput">"Apply Now" hover tooltip</label>
+              <textarea id="applyTooltipInput" rows="2" placeholder="Shown when a visitor hovers over Apply Now"></textarea>
             </div>
           </div>
         </div>
+      </section>
 
-        <div class="ta-card">
-          <div class="field">
-            <label>Info tiles</label>
-          </div>
-          <div id="logisticsList">
+      <section class="section-sm" id="profiles" style="background:var(--bg-2)">
+        <div class="wrap">
+          <h2 style="font-size:1.4rem;margin-bottom:18px">Profiles</h2>
+          <div class="res-list" id="profileList">
             <!-- filled in by ta.js -->
           </div>
-          <button class="btn btn-ghost" id="addLogistics" type="button">
-            <svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-              stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-            New tile
-          </button>
         </div>
+      </section>
+    </div>
 
-        <div class="ta-card">
-          <div class="field">
-            <label for="joinUrlInput">"Apply Now" button link</label>
-            <input id="joinUrlInput" type="url" placeholder="https://...">
+    <div id="editorView" style="display:none">
+      <section class="section-sm" style="padding-top:0">
+        <div class="wrap">
+          <div class="pv-head">
+            <div class="pv-tabs" role="tablist" id="edSubTabs">
+              <button class="pv-tab" data-tab="landing" type="button" role="tab">Landing page</button>
+              <button class="pv-tab" data-tab="dashboard" type="button" role="tab">Student dashboard</button>
+              <button class="pv-tab" data-tab="gallery" type="button" role="tab">Gallery</button>
+            </div>
+            <div class="ed-undo-row">
+              <button class="btn btn-ghost" id="edUndo" type="button" disabled>Undo</button>
+              <button class="btn btn-ghost" id="edRedo" type="button" disabled>Redo</button>
+            </div>
+          </div>
+          <p class="muted" style="margin:0 0 12px">Click any highlighted text below to edit it in place. Enter saves, Esc cancels.</p>
+          <div class="pv-frame-wrap" style="height:72vh">
+            <iframe id="edFrame" class="pv-frame" title="Visual editor"></iframe>
           </div>
         </div>
-
-        <div class="ta-card">
-          <div class="field">
-            <label for="applyTooltipInput">"Apply Now" hover tooltip</label>
-            <textarea id="applyTooltipInput" rows="2" placeholder="Shown when a visitor hovers over Apply Now"></textarea>
-          </div>
-        </div>
-
-        <div class="ta-actions">
-          <button class="btn btn-ghost" id="taPreview" type="button">Preview</button>
-          <button class="btn btn-primary" id="taApply" type="button">Apply changes</button>
-          <button class="btn btn-ghost" id="taSave" type="button">Save to profile</button>
-          <button class="btn btn-ghost" id="taReset" type="button">Reset</button>
-        </div>
-        <p class="form-msg" id="taMsg"></p>
+      </section>
+    </div>
       </div>
-    </section>
-
-    <section class="section-sm" id="profiles" style="background:var(--bg-2)">
-      <div class="wrap">
-        <h2 style="font-size:1.4rem;margin-bottom:18px">Profiles</h2>
-        <div class="res-list" id="profileList">
-          <!-- filled in by ta.js -->
-        </div>
-      </div>
-    </section>
+    </div>
   </main>
 
   <footer class="footer">

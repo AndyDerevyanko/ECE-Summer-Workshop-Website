@@ -808,6 +808,36 @@ h1, h2, h3 {
 /* instructor.html only: puts the Visual editor button beside the title
    instead of stacked under it like the student dashboard's greeting */
 .dash-head-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 20px; }
+/* ---------- ta portal mode tabs ---------- */
+/* full-bleed: the active tab's color continues straight down as the
+   background of the whole panel below it (actions row + whichever view is
+   showing), and switching tabs swaps that fill color, so which mode you're
+   in reads from across the room, not just from a small pill in a corner */
+/* no color of its own, so an inactive tab blends into the header above it;
+   only the active tab (and the panel below) carry the mode's color */
+.ta-mode-strip { background: var(--bg); }
+.ta-mode-tabs { display: flex; gap: 4px; }
+.ta-mode-tab {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-head);
+  font-weight: 600;
+  font-size: .95rem;
+  padding: 15px 24px;
+  cursor: pointer;
+  border-radius: 10px 10px 0 0;
+}
+.ta-mode-tab:hover { color: var(--text); }
+.ta-mode-tab.active { background: var(--bg); color: var(--text); }
+.ta-mode-panel { background: var(--bg); transition: background-color .2s ease; }
+/* editor mode gets a faint accent wash instead of a second hue, so it stays
+   inside the site's few-colors palette while still reading as "different" */
+.ta-mode-shell.mode-editor .ta-mode-panel,
+.ta-mode-shell.mode-editor .ta-mode-tab.active {
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg));
+}
+
 .progress-wrap { margin-top: 18px; }
 .progress-bar {
   height: 12px;
@@ -1189,17 +1219,19 @@ body.mono .eyebrow { color: var(--accent); }
 body.mono .progress-bar i { background: var(--accent); }
 
 /* click-to-edit, only active inside the visual editor's iframe
-   (editor.html/js/editor.js set ?edit=1, js/main.js's wireClickToEdit()
+   (instructor.html/js/ta.js set ?edit=1, js/main.js's wireClickToEdit()
    adds this body class). outline instead of border so nothing shifts
-   layout when a field lights up. */
+   layout when a field lights up. always visible (not just on hover) so
+   it's obvious at a glance which text is editable; hover just firms up
+   the dashed line into a solid one. */
 body.edit-mode [data-edit-id] {
   cursor: pointer;
-  outline: 1px dashed transparent;
+  outline: 1px dashed var(--accent);
   outline-offset: 3px;
   border-radius: 3px;
-  transition: outline-color .15s;
+  transition: outline-style .15s;
 }
-body.edit-mode [data-edit-id]:hover { outline-color: var(--accent); }
+body.edit-mode [data-edit-id]:hover { outline-style: solid; }
 body.edit-mode [data-edit-id].editing {
   cursor: text;
   outline: 2px solid var(--accent);
@@ -1212,12 +1244,12 @@ body.edit-mode [data-edit-id].editing {
    panel is always click-to-edit */
 .inline-editable {
   cursor: pointer;
-  outline: 1px dashed transparent;
+  outline: 1px dashed var(--accent);
   outline-offset: 3px;
   border-radius: 3px;
-  transition: outline-color .15s;
+  transition: outline-style .15s;
 }
-.inline-editable:hover { outline-color: var(--accent); }
+.inline-editable:hover { outline-style: solid; }
 .inline-editable.editing {
   cursor: text;
   outline: 2px solid var(--accent);

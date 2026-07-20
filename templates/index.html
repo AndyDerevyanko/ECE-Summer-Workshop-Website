@@ -40,7 +40,7 @@
         <a href="#schedule">Schedule</a>
         <a href="#prizes">Prizes</a>
         <!-- hidden while logged in, see updatePortalLink() in js/main.js -->
-        <a href="https://www.youtube.com/watch?v=dQw4w9WgXcQ" target="_blank" rel="noopener" class="join-link" id="navJoinLink">Join Us</a>
+        <a href="https://www.youtube.com/watch?v=dQw4w9WgXcQ" target="_blank" rel="noopener" class="join-link" id="navJoinLink">Apply Now</a>
       </div>
       <div class="nav-right">
         <button id="themeBtn" class="theme-btn" type="button" aria-label="Toggle theme">
@@ -53,6 +53,7 @@
             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />
           </svg>
+          <span class="tic-label"></span>
         </button>
         <a class="btn btn-accent2" href="login.html" id="portalLink">Access portal</a>
         <button class="btn btn-ghost" id="logoutBtn" type="button" style="display:none">Log out</button>
@@ -81,7 +82,7 @@
             hands-on projects.
           </p>
           <div class="hero-btns">
-            <a class="btn btn-primary apply-bob join-link" href="https://www.youtube.com/watch?v=dQw4w9WgXcQ" target="_blank" rel="noopener">Join Us</a>
+            <a class="btn btn-primary apply-bob join-link" href="https://www.youtube.com/watch?v=dQw4w9WgXcQ" target="_blank" rel="noopener">Apply Now</a>
             <a class="btn btn-ghost" href="#learn">See what you'll build</a>
           </div>
         </div>
@@ -146,65 +147,77 @@
 
     <div class="wrap grid grid-3 reveal">
       <div class="card">
-        <svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
-          stroke-linejoin="round" aria-hidden="true">
-          <path d="M2 12h3" />
-          <path d="M19 12h3" />
-          <path d="M5 12c2-7 4-7 6 0s4 7 6 0" />
-        </svg>
-        <h3>Electronics &amp; Circuit Design</h3>
+        <div class="card-head">
+          <svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+            stroke-linejoin="round" aria-hidden="true">
+            <path d="M2 12h3" />
+            <path d="M19 12h3" />
+            <path d="M5 12c2-7 4-7 6 0s4 7 6 0" />
+          </svg>
+          <h3>Electronics &amp; Circuit Design</h3>
+        </div>
         <p class="muted">Build and debug real circuits using oscilloscopes, multimeters, function generators, and
           power supplies. Learn circuit analysis, prototyping, testing, and troubleshooting techniques.</p>
       </div>
       <div class="card">
-        <svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
-          stroke-linejoin="round" aria-hidden="true">
-          <path d="M3 12h6" />
-          <path d="M21 12h-6" />
-          <path d="M9 7l6 5-6 5z" />
-          <path d="M15 7v10" />
-        </svg>
-        <h3>Transistors, Diodes, Capacitors &amp; Inductors</h3>
+        <div class="card-head">
+          <svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+            stroke-linejoin="round" aria-hidden="true">
+            <path d="M3 12h6" />
+            <path d="M21 12h-6" />
+            <path d="M9 7l6 5-6 5z" />
+            <path d="M15 7v10" />
+          </svg>
+          <h3>Transistors, Diodes, Capacitors &amp; Inductors</h3>
+        </div>
         <p class="muted">Learn how fundamental electronic components work, giving you a head start in 2nd-year courses
           like ECE231 and ECE212.</p>
       </div>
       <div class="card">
-        <svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
-          stroke-linejoin="round" aria-hidden="true">
-          <path d="M13 7l4 4L7 21H3v-4z" />
-          <path d="M15 5l2-2 4 4-2 2" />
-        </svg>
-        <h3>Soldering &amp; PCB Assembly</h3>
+        <div class="card-head">
+          <svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+            stroke-linejoin="round" aria-hidden="true">
+            <path d="M13 7l4 4L7 21H3v-4z" />
+            <path d="M15 5l2-2 4 4-2 2" />
+          </svg>
+          <h3>Soldering &amp; PCB Assembly</h3>
+        </div>
         <p class="muted">Learn professional soldering techniques, component placement, rework, and PCB assembly.</p>
       </div>
       <div class="card">
-        <svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
-          stroke-linejoin="round" aria-hidden="true">
-          <rect x="6" y="6" width="12" height="12" rx="1.5" />
-          <path d="M9 3v3M12 3v3M15 3v3M9 18v3M12 18v3M15 18v3M3 9h3M3 12h3M3 15h3M18 9h3M18 12h3M18 15h3" />
-        </svg>
-        <h3>Embedded Systems</h3>
+        <div class="card-head">
+          <svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+            stroke-linejoin="round" aria-hidden="true">
+            <rect x="6" y="6" width="12" height="12" rx="1.5" />
+            <path d="M9 3v3M12 3v3M15 3v3M9 18v3M12 18v3M15 18v3M3 9h3M3 12h3M3 15h3M18 9h3M18 12h3M18 15h3" />
+          </svg>
+          <h3>Embedded Systems</h3>
+        </div>
         <p class="muted">Program an Arduino-compatible microcontroller to read sensors, generate signals, control
           motors, and talk to external hardware.</p>
       </div>
       <div class="card">
-        <svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
-          stroke-linejoin="round" aria-hidden="true">
-          <path d="M12 2l9 5v10l-9 5-9-5V7z" />
-          <path d="M12 12l9-5M12 12v10M12 12L3 7" />
-        </svg>
-        <h3>CAD &amp; 3D Printing</h3>
+        <div class="card-head">
+          <svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+            stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 2l9 5v10l-9 5-9-5V7z" />
+            <path d="M12 12l9-5M12 12v10M12 12L3 7" />
+          </svg>
+          <h3>CAD &amp; 3D Printing</h3>
+        </div>
         <p class="muted">Learn the basics of Fusion 360 and 3D printing to design, manufacture, and assemble your own
           robot.</p>
       </div>
       <div class="card">
-        <svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
-          stroke-linejoin="round" aria-hidden="true">
-          <path d="M6 3v18" />
-          <path d="M6 4h13v8H6z" />
-          <path d="M6 4h4.3v4H6zM14.7 4H19v4h-4.3zM10.3 8h4.4v4h-4.4z" fill="currentColor" stroke="none" />
-        </svg>
-        <h3>Robotics Competition</h3>
+        <div class="card-head">
+          <svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+            stroke-linejoin="round" aria-hidden="true">
+            <path d="M6 3v18" />
+            <path d="M6 4h13v8H6z" />
+            <path d="M6 4h4.3v4H6zM14.7 4H19v4h-4.3zM10.3 8h4.4v4h-4.4z" fill="currentColor" stroke="none" />
+          </svg>
+          <h3>Robotics Competition</h3>
+        </div>
         <p class="muted">Bring your robot to life and race it head-to-head against the rest.</p>
       </div>
     </div>
@@ -385,7 +398,7 @@
               <circle cx="12" cy="15.5" r="2" />
             </svg>
           </p>
-          <a class="btn btn-primary apply-bob join-link" href="https://www.youtube.com/watch?v=dQw4w9WgXcQ" target="_blank" rel="noopener" style="margin-top:10px">Join Us</a>
+          <a class="btn btn-primary apply-bob join-link" href="https://www.youtube.com/watch?v=dQw4w9WgXcQ" target="_blank" rel="noopener" style="margin-top:10px">Apply Now</a>
         </div>
         <img src="assets/certificate.png" alt="sample workshop completion certificate" class="cert-img">
       </div>

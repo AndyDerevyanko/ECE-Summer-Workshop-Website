@@ -162,6 +162,34 @@ h1, h2, h3 {
 }
 .btn-ghost:hover { background: color-mix(in srgb, var(--text) 9%, var(--surface-2)); }
 
+/* hover tooltip on the Apply Now buttons, text is ta-editable (content.apply_tooltip) */
+.join-link[data-tooltip] { position: relative; }
+.join-link[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: 220px;
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-family: var(--font-body);
+  font-size: .78rem;
+  font-weight: 400;
+  line-height: 1.4;
+  text-align: center;
+  box-shadow: var(--shadow);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .15s ease;
+  z-index: 60;
+}
+.join-link[data-tooltip]:hover::after,
+.join-link[data-tooltip]:focus-visible::after { opacity: 1; }
+
 /* ---------- nav ---------- */
 .nav {
   position: sticky;
@@ -214,24 +242,27 @@ h1, h2, h3 {
 
 /* theme toggle button */
 .theme-btn {
-  width: 40px;
   height: 40px;
-  border-radius: 50%;
+  padding: 0 16px 0 12px;
+  border-radius: 20px;
   border: none;
   background: var(--surface-2);
   color: var(--text);
-  font-size: 1.1rem;
+  font-size: .88rem;
+  font-family: var(--font-body);
+  font-weight: 500;
   cursor: pointer;
-  display: grid;
-  place-items: center;
-  transition: transform .2s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 .theme-btn:hover { color: var(--accent); }
 /* sun shows in dark mode, moon in light, swapped by [data-theme] */
-.tic { width: 20px; height: 20px; }
+.tic { width: 20px; height: 20px; flex: none; }
 .tic.moon { display: none; }
 [data-theme="light"] .tic.sun { display: none; }
 [data-theme="light"] .tic.moon { display: block; }
+.tic-label { white-space: nowrap; }
 
 /* ---------- hero ---------- */
 .hero {
@@ -381,6 +412,8 @@ h1, h2, h3 {
   transition: transform .2s ease, border-color .2s ease;
 }
 .card h3 { font-size: 1.05rem; }
+.card-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.card-head h3 { margin: 0; }
 .card .emoji { font-size: 1.9rem; display: block; margin-bottom: 10px; }
 
 /* placeholder image box, no real assets yet */
@@ -638,7 +671,7 @@ h1, h2, h3 {
 .apply-bob { animation: bob 1.8s ease-in-out infinite; }
 
 /* monochrome inline icons (single color, no emoji) */
-.cic { width: 30px; height: 30px; display: block; margin-bottom: 12px; color: var(--accent); }
+.cic { width: 30px; height: 30px; display: block; flex: none; color: var(--accent); }
 .iic { width: 1.3em; height: 1.3em; vertical-align: -0.28em; }
 .big-ic { width: 46px; height: 46px; color: var(--muted); }
 

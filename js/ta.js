@@ -13,6 +13,7 @@ function seed() {
     timer_target: "",
     contact_text: "Questions? hardware.robotics@utoronto.ca",
     join_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    apply_tooltip: "Applications open once the workshop dates are confirmed, check back soon.",
     logistics: [
       { big: "2 weeks", lbl: "Tentative start date", icon: false },
       { big: "4 hours", lbl: "1:30pm–5:30pm", icon: false },
@@ -45,6 +46,9 @@ function normalizeState() {
   delete STATE.end_date;
   if (STATE.contact_text === undefined) STATE.contact_text = "Questions? hardware.robotics@utoronto.ca";
   if (STATE.join_url === undefined) STATE.join_url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+  if (STATE.apply_tooltip === undefined) {
+    STATE.apply_tooltip = "Applications open once the workshop dates are confirmed, check back soon.";
+  }
   if (!STATE.total_days) STATE.total_days = 10;
 }
 
@@ -497,6 +501,7 @@ function syncLanding() {
   document.getElementById("cdTarget").value = STATE.timer_target;
   document.getElementById("contactInput").value = STATE.contact_text;
   document.getElementById("joinUrlInput").value = STATE.join_url;
+  document.getElementById("applyTooltipInput").value = STATE.apply_tooltip;
 }
 
 function renderAll() {
@@ -779,6 +784,7 @@ document.addEventListener("DOMContentLoaded", function () {
   document.getElementById("cdTarget").addEventListener("input", function () { STATE.timer_target = this.value; renderPreview(); });
   document.getElementById("contactInput").addEventListener("input", function () { STATE.contact_text = this.value; renderPreview(); });
   document.getElementById("joinUrlInput").addEventListener("input", function () { STATE.join_url = this.value; });
+  document.getElementById("applyTooltipInput").addEventListener("input", function () { STATE.apply_tooltip = this.value; });
 
   /* apply = make what's on screen live for students. in profile mode it
      also saves the profile first so the two can't drift apart. */

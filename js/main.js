@@ -51,6 +51,7 @@ var DEFAULT_LOGISTICS = [
 ];
 var DEFAULT_CONTACT = "Questions? hardware.robotics@utoronto.ca";
 var DEFAULT_JOIN_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+var DEFAULT_APPLY_TOOLTIP = "Applications open once the workshop dates are confirmed, check back soon.";
 
 function formatDateRange(start, end) {
   var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -112,7 +113,7 @@ function updatePortalLink() {
   if (!session || !role) return;
   link.textContent = role === "ta" ? "TA portal" : "Dashboard";
   link.href = role === "ta" ? "instructor.html" : "dashboard.html";
-  /* Join Us next to Gallery would be a dead prompt to sign up again,
+  /* Apply Now next to Gallery would be a dead prompt to sign up again,
      hide it while logged in (only in this nav bar, not the rest of the page) */
   if (navJoin) navJoin.style.display = "none";
   if (!outBtn) return;
@@ -147,6 +148,10 @@ document.addEventListener("DOMContentLoaded", function () {
     document.querySelectorAll(".join-link").forEach(function (a) { a.href = url; });
   }
 
+  function setApplyTooltip(text) {
+    document.querySelectorAll(".join-link").forEach(function (a) { a.setAttribute("data-tooltip", text); });
+  }
+
   fetch("/api/content")
     .then(function (res) { return res.json(); })
     .then(function (data) {
@@ -160,11 +165,13 @@ document.addEventListener("DOMContentLoaded", function () {
       renderTiles(resolveLogistics(data));
       if (contactLine) contactLine.textContent = data.contact_text || DEFAULT_CONTACT;
       setJoinUrl(data.join_url || DEFAULT_JOIN_URL);
+      setApplyTooltip(data.apply_tooltip || DEFAULT_APPLY_TOOLTIP);
     })
     .catch(function () {
       slot.innerHTML = CD_TBA_HTML;
       renderTiles(DEFAULT_LOGISTICS);
       if (contactLine) contactLine.textContent = DEFAULT_CONTACT;
       setJoinUrl(DEFAULT_JOIN_URL);
+      setApplyTooltip(DEFAULT_APPLY_TOOLTIP);
     });
 });

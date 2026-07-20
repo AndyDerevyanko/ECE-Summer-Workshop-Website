@@ -108,7 +108,7 @@ function profileLabel(p) {
 
 /**
  * Reads the ta portal's unsaved-edits snapshot, the same one this page's
- * click-to-edit fields save into (js/main.js's saveTextOverride()).
+ * click-to-edit fields save into (js/main.js's saveEditedField()).
  * @return the content object, or null if there's nothing to read
  */
 function readSnapshot() {

@@ -7,8 +7,8 @@ var CD_TBA_HTML =
     '<svg class="cd-cal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
     'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
     '<rect x="3" y="5" width="18" height="16" rx="2" /><path d="M3 9h18M8 3v4M16 3v4" /></svg>' +
-    '<div><span class="cd-label accent">Date and time</span>' +
-    '<b class="cd-tba-txt">To be announced</b></div>' +
+    '<div><span class="cd-label accent" data-edit-id="countdown.tba.label">Date and time</span>' +
+    '<b class="cd-tba-txt" data-edit-id="countdown.tba.text">To be announced</b></div>' +
   '</div>';
 
 var CHECK_ICON_SVG =
@@ -17,19 +17,30 @@ var CHECK_ICON_SVG =
 
 /**
  * Builds one logistics tile ("2 weeks", "4 hours", "SFB520", certificate, etc).
+ * Text is click-to-editable in the visual editor (see wireClickToEdit()), tagged
+ * with the tile's index so an edit writes straight back into content.logistics
+ * instead of a template-default override, the content manager's "Info tiles"
+ * list shows the same array. Adding/removing tiles stays a content-manager-only
+ * action, this view is text-only.
  * @param t {big, lbl, icon} tile data
+ * @param i the tile's index in the logistics array
  * @return the tile's card element
  */
-function logisticsTile(t) {
+function logisticsTile(t, i) {
   var card = document.createElement("div");
   card.className = "card stat";
   var big = document.createElement("div");
   big.className = "big";
-  if (t.icon) big.innerHTML = CHECK_ICON_SVG;
-  else big.textContent = t.big;
+  if (t.icon) {
+    big.innerHTML = CHECK_ICON_SVG;
+  } else {
+    big.textContent = t.big;
+    big.setAttribute("data-edit-id", "logistics." + i + ".big");
+  }
   var lbl = document.createElement("div");
   lbl.className = "lbl";
   lbl.textContent = t.lbl;
+  lbl.setAttribute("data-edit-id", "logistics." + i + ".lbl");
   card.appendChild(big);
   card.appendChild(lbl);
   return card;
@@ -37,7 +48,7 @@ function logisticsTile(t) {
 
 var CD_CLOCK_HTML =
   '<div class="countdown" id="countdown">' +
-    '<span class="cd-label">Workshop begins in</span>' +
+    '<span class="cd-label" data-edit-id="countdown.clock.label">Workshop begins in</span>' +
     '<div class="cd-clock">' +
       '<div class="cd-unit"><b id="cd-d">00</b><span>days</span></div>' +
       '<div class="cd-unit"><b id="cd-h">00</b><span>hrs</span></div>' +
@@ -312,7 +323,7 @@ function wireClickToEdit() {
         EDIT_UNDO.push({ id: el.getAttribute("data-edit-id"), before: beforeEdit, after: after });
         EDIT_REDO.length = 0;
       }
-      saveTextOverride(el.getAttribute("data-edit-id"), after, el.getAttribute("data-default-html"));
+      saveEditedField(el.getAttribute("data-edit-id"), after, el.getAttribute("data-default-html"));
     });
   });
 
@@ -358,28 +369,45 @@ function applyHistoryAction(action, side) {
   var el = document.querySelector('[data-edit-id="' + action.id + '"]');
   if (!el) return;
   el.innerHTML = action[side];
-  saveTextOverride(action.id, action[side], el.getAttribute("data-default-html"));
+  saveEditedField(action.id, action[side], el.getAttribute("data-default-html"));
 }
 
 /**
  * Persists one click-to-edit change into the preview snapshot in
  * localStorage, so it round-trips through the same unsaved-draft mechanism
  * as every other in-progress ta portal edit (see js/ta.js's
- * tryRestoreFromPreview()/openPreview()). Drops the key entirely if the
- * text was edited back to the page's own default, keeping saved blobs free
- * of overrides that don't actually override anything.
+ * tryRestoreFromPreview()/openPreview()). Routes logistics tile text
+ * (data-edit-id "logistics.<i>.big"/"logistics.<i>.lbl") straight into
+ * content.logistics itself, the same array the content manager's "Info
+ * tiles" list reads/writes, so editing a tile here shows up there too, not
+ * just as a separate override. Everything else (hardcoded template copy)
+ * keeps using content.text, dropping the key entirely once it's edited back
+ * to the page's own default so saved blobs don't carry no-op overrides.
  * @param id the element's data-edit-id
  * @param html the element's current innerHTML
  * @param defaultHtml the template's original innerHTML for that element
  */
-function saveTextOverride(id, html, defaultHtml) {
+function saveEditedField(id, html, defaultHtml) {
   var raw;
   try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
   var snapshot;
   try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
-  if (!snapshot.text || typeof snapshot.text !== "object") snapshot.text = {};
-  if (html.trim() === (defaultHtml || "").trim()) delete snapshot.text[id];
-  else snapshot.text[id] = html;
+
+  if (id.indexOf("logistics.") === 0) {
+    var parts = id.split(".");
+    var idx = parseInt(parts[1], 10);
+    var field = parts[2];
+    if (!Array.isArray(snapshot.logistics)) snapshot.logistics = [];
+    if (!snapshot.logistics[idx]) snapshot.logistics[idx] = { big: "", lbl: "", icon: false };
+    var tmp = document.createElement("div");
+    tmp.innerHTML = html;
+    snapshot.logistics[idx][field] = tmp.textContent;
+  } else {
+    if (!snapshot.text || typeof snapshot.text !== "object") snapshot.text = {};
+    if (html.trim() === (defaultHtml || "").trim()) delete snapshot.text[id];
+    else snapshot.text[id] = html;
+  }
+
   try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
 }
 
@@ -437,7 +465,7 @@ document.addEventListener("DOMContentLoaded", function () {
   function renderTiles(list) {
     if (!grid) return;
     grid.innerHTML = "";
-    list.forEach(function (t) { grid.appendChild(logisticsTile(t)); });
+    list.forEach(function (t, i) { grid.appendChild(logisticsTile(t, i)); });
   }
 
   function setJoinUrl(url) {

@@ -105,12 +105,16 @@ function startCountdown(target) {
 function updatePortalLink() {
   var link = document.getElementById("portalLink");
   var outBtn = document.getElementById("logoutBtn");
+  var navJoin = document.getElementById("navJoinLink");
   if (!link) return;
   var session = localStorage.getItem("session");
   var role = localStorage.getItem("role");
   if (!session || !role) return;
   link.textContent = role === "ta" ? "TA portal" : "Dashboard";
   link.href = role === "ta" ? "instructor.html" : "dashboard.html";
+  /* Join Us next to Gallery would be a dead prompt to sign up again,
+     hide it while logged in (only in this nav bar, not the rest of the page) */
+  if (navJoin) navJoin.style.display = "none";
   if (!outBtn) return;
   outBtn.style.display = "";
   outBtn.addEventListener("click", function () {
@@ -120,6 +124,7 @@ function updatePortalLink() {
     localStorage.removeItem("last_active");
     link.textContent = "Access portal";
     link.href = "login.html";
+    if (navJoin) navJoin.style.display = "";
     outBtn.style.display = "none";
   });
 }

@@ -148,6 +148,14 @@ h1, h2, h3 {
 }
 .btn-primary:hover { filter: brightness(0.94); }
 
+/* nav-bar "Access portal" button: deliberately not --accent, so it doesn't
+   read as just another Join Us button */
+.btn-accent2 {
+  background: var(--teal);
+  color: #06121a;
+}
+.btn-accent2:hover { filter: brightness(0.94); }
+
 .btn-ghost {
   background: var(--surface-2);
   color: var(--text);

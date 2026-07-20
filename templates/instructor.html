@@ -88,15 +88,24 @@
       <p class="form-msg" id="taMsg"></p>
     </div>
 
-    <!-- full-bleed shell: the active tab's color continues down as the
-         background of everything below it, so which mode you're in is
-         obvious at a glance, not just a label. see .ta-mode-* in style.css -->
-    <div class="ta-mode-shell mode-manager" id="taModeShell">
+    <!-- which mode you're in reads off the tab's icon + accent underline,
+         same as the icon-per-tile convention used everywhere else on the site -->
+    <div class="ta-mode-shell" id="taModeShell">
       <div class="ta-mode-strip">
         <div class="wrap">
           <div class="ta-mode-tabs" role="tablist" id="taModeTabs">
-            <button class="ta-mode-tab active" data-mode="manager" type="button" role="tab">Content manager</button>
-            <button class="ta-mode-tab" data-mode="editor" type="button" role="tab">Visual editor</button>
+            <button class="ta-mode-tab active" data-mode="manager" type="button" role="tab">
+              <svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+              Content manager
+            </button>
+            <button class="ta-mode-tab" data-mode="editor" type="button" role="tab">
+              <svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+              Visual editor
+            </button>
           </div>
         </div>
       </div>

@@ -1336,7 +1336,7 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   document.getElementById("taPreview").addEventListener("click", openPreview);
-  document.getElementById("navVisualEditor").addEventListener("click", openEditor);
+  document.getElementById("taVisualEditor").addEventListener("click", openEditor);
   document.getElementById("taApply").addEventListener("click", applyContent);
   document.getElementById("taSave").addEventListener("click", saveToProfile);
 

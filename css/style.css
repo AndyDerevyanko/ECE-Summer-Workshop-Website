@@ -141,6 +141,7 @@ h1, h2, h3 {
   transition: background .15s ease, border-color .15s ease, color .15s ease;
 }
 .btn:hover { text-decoration: none; }
+.btn-lg { font-size: 1.05rem; padding: 16px 28px; }
 
 .btn-primary {
   background: var(--accent);
@@ -804,6 +805,9 @@ h1, h2, h3 {
   padding: 40px 0 10px;
 }
 .dash-head h1 { font-size: 1.9rem; }
+/* instructor.html only: puts the Visual editor button beside the title
+   instead of stacked under it like the student dashboard's greeting */
+.dash-head-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 20px; }
 .progress-wrap { margin-top: 18px; }
 .progress-bar {
   height: 12px;

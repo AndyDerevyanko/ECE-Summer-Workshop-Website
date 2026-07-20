@@ -58,13 +58,21 @@ var DEFAULT_JOIN_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
 var DEFAULT_APPLY_TOOLTIP = "Applications open once the workshop dates are confirmed, check back soon.";
 
 /**
- * Resolves to the site content: the ta portal's unsaved snapshot when this
- * page was opened with ?preview=1 (see js/preview.js, js/ta.js), otherwise
- * the live content from /api/content.
+ * Checks whether this page was opened from the ta portal's preview page
+ * (see js/preview.js, js/ta.js) rather than by a real visitor.
+ * @return true if ?preview=1 is set
+ */
+function isPreviewMode() {
+  return /[?&]preview=1(&|$)/.test(window.location.search);
+}
+
+/**
+ * Resolves to the site content: the ta portal's unsaved snapshot in
+ * preview mode, otherwise the live content from /api/content.
  * @return a promise resolving to the content object
  */
 function fetchContent() {
-  if (/[?&]preview=1(&|$)/.test(window.location.search)) {
+  if (isPreviewMode()) {
     try {
       var raw = localStorage.getItem("preview_content");
       if (raw) return Promise.resolve(JSON.parse(raw));
@@ -137,9 +145,12 @@ function startCountdown(target) {
 /**
  * Still logged in from a previous visit? Point the nav link back at your
  * portal and show a log out button, instead of always saying "Access
- * portal", which read as having been logged out.
+ * portal", which read as having been logged out. Skipped in preview mode:
+ * a ta previewing the landing page is always logged in as themselves, but
+ * a real visitor wouldn't be, so the preview should show the logged-out nav.
  */
 function updatePortalLink() {
+  if (isPreviewMode()) return;
   var link = document.getElementById("portalLink");
   var outBtn = document.getElementById("logoutBtn");
   var navJoin = document.getElementById("navJoinLink");

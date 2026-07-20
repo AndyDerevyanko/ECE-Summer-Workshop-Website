@@ -197,16 +197,19 @@ h1, h2, h3 {
   z-index: 50;
   background: var(--surface-2);
 }
+/* the ta portal packs in more nav links than any other page, give the nav
+   row itself more room than the page content column gets */
+.nav .wrap { max-width: 1400px; }
 .nav-inner {
   display: flex;
   align-items: center;
   gap: 18px;
   height: 64px;
-  /* keep it a single row: text stays on one line, and the row scrolls
-     sideways instead of wrapping if a page's nav has too much in it */
+  /* keep it a single row: text stays on one line and never wraps onto a
+     second one. nav-links-dense below drops items before this has to clip
+     anything, so this is just a last-resort safety net, not a scrollbar. */
   white-space: nowrap;
-  overflow-x: auto;
-  overflow-y: hidden;
+  overflow: hidden;
 }
 .brand {
   font-family: var(--font-head);
@@ -1131,6 +1134,15 @@ h1, h2, h3 {
 
 
 /* ---------- responsive ---------- */
+/* the ta portal's nav (nav-links-dense) has more links than it has room
+   for once the window narrows; drop the least-essential ones first
+   instead of wrapping or scrolling the nav row */
+@media (max-width: 1300px) {
+  .nav-links-dense a:nth-last-child(-n+2) { display: none; }
+}
+@media (max-width: 1150px) {
+  .nav-links-dense a:nth-last-child(-n+4) { display: none; }
+}
 @media (max-width: 860px) {
   .grid-3, .grid-4 { grid-template-columns: repeat(2, 1fr); }
   .split { grid-template-columns: 1fr; }

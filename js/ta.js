@@ -740,19 +740,60 @@ function renderAll() {
 }
 
 /**
- * Snapshots the in-editor STATE into localStorage and opens preview.html
- * (or, if a preview tab from an earlier click is still open, refreshes it)
- * so the ta can see unsaved edits rendered in the real landing page and
- * dashboard before applying them.
+ * Snapshots the in-editor STATE (and which profile, if any, is being
+ * edited) into localStorage and opens preview.html (or, if a preview tab
+ * from an earlier click is still open, refreshes it) so the ta can see
+ * unsaved edits rendered in the real landing page and dashboard before
+ * applying them. The snapshot also doubles as a "keep my edits" draft:
+ * see tryRestoreFromPreview().
  */
 function openPreview() {
-  try { localStorage.setItem("preview_content", JSON.stringify(STATE)); } catch (e) {}
+  try {
+    localStorage.setItem("preview_content", JSON.stringify(STATE));
+    if (EDITING) localStorage.setItem("preview_editing", JSON.stringify(EDITING));
+    else localStorage.removeItem("preview_editing");
+  } catch (e) {}
   if (previewWindow && !previewWindow.closed) {
     previewWindow.location.reload();
     previewWindow.focus();
   } else {
     previewWindow = window.open("preview.html", "ta_preview");
   }
+}
+
+/** Clears the unsaved-edits snapshot used by the Preview button/page. */
+function clearPreviewSnapshot() {
+  try {
+    localStorage.removeItem("preview_content");
+    localStorage.removeItem("preview_editing");
+  } catch (e) {}
+}
+
+/**
+ * If the ta previewed unsaved edits and came back (a fresh page load of
+ * instructor.html, e.g. via the preview page's "Content manager" link)
+ * without applying or resetting them first, restores STATE from that
+ * snapshot instead of fetching the live content, so a trip through
+ * Preview never discards in-progress work.
+ * @return true if STATE was restored from a snapshot
+ */
+function tryRestoreFromPreview() {
+  var raw;
+  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  if (!raw) return false;
+  try {
+    STATE = JSON.parse(raw);
+  } catch (e) {
+    return false;
+  }
+  var editingRaw;
+  try { editingRaw = localStorage.getItem("preview_editing"); } catch (e) { editingRaw = null; }
+  EDITING = editingRaw ? JSON.parse(editingRaw) : null;
+  normalizeState();
+  renderAll();
+  syncProfileBar();
+  showMsg("Restored your unsaved edits from before you previewed them.", true);
+  return true;
 }
 
 /**
@@ -862,6 +903,7 @@ function openProfile(p) {
 function backToLive(skipConfirm) {
   if (!skipConfirm && !confirm("Go back to the live content? Unsaved profile edits are discarded.")) return;
   EDITING = null;
+  clearPreviewSnapshot();
   loadLive();
   syncProfileBar();
   renderProfiles();
@@ -990,7 +1032,7 @@ document.addEventListener("DOMContentLoaded", function () {
   });
   if (!gateCheck()) return;
 
-  loadLive();
+  if (!tryRestoreFromPreview()) loadLive();
   fetchProfiles();
 
   document.getElementById("profileBack").addEventListener("click", function () {
@@ -1082,6 +1124,7 @@ document.addEventListener("DOMContentLoaded", function () {
     })
       .then(function (res) {
         if (!res.ok) throw new Error("apply failed");
+        clearPreviewSnapshot();
         if (EDITING) {
           EDITING.data = JSON.parse(JSON.stringify(STATE));
           updateProfile(EDITING.id, { data: STATE });
@@ -1131,6 +1174,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
   document.getElementById("taReset").addEventListener("click", function () {
     if (!confirm("Reset everything back to how it was last saved? This throws away your edits.")) return;
+    clearPreviewSnapshot();
     if (EDITING) {
       STATE = JSON.parse(JSON.stringify(EDITING.data));
       normalizeState();

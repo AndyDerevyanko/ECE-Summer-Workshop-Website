@@ -66,6 +66,28 @@
       </div>
     </section>
 
+    <!-- shown while a saved profile is open in the editor instead of the live content;
+         applies to both tabs so it sits above the mode switcher, not inside it -->
+    <div class="prof-bar" id="profileBar" style="display:none">
+      <div class="wrap prof-bar-inner">
+        <span id="profileBarText"></span>
+        <button class="btn btn-ghost" id="profileBack" type="button">Back to live content</button>
+      </div>
+    </div>
+
+    <!-- shared by both tabs below: they edit the same in-memory STATE, so
+         one action row applies/saves/resets whichever one you're looking at.
+         sits above the mode switcher since it isn't specific to either tab -->
+    <div class="wrap" style="padding:22px 0 30px">
+      <div class="ta-actions">
+        <button class="btn btn-ghost" id="taPreview" type="button">Preview</button>
+        <button class="btn btn-primary" id="taApply" type="button">Apply changes</button>
+        <button class="btn btn-ghost" id="taSave" type="button">Save to profile</button>
+        <button class="btn btn-ghost" id="taReset" type="button">Reset</button>
+      </div>
+      <p class="form-msg" id="taMsg"></p>
+    </div>
+
     <!-- full-bleed shell: the active tab's color continues down as the
          background of everything below it, so which mode you're in is
          obvious at a glance, not just a label. see .ta-mode-* in style.css -->
@@ -80,26 +102,6 @@
       </div>
 
       <div class="ta-mode-panel">
-        <!-- shown while a saved profile is open in the editor instead of the live content -->
-        <div class="prof-bar" id="profileBar" style="display:none">
-          <div class="wrap prof-bar-inner">
-            <span id="profileBarText"></span>
-            <button class="btn btn-ghost" id="profileBack" type="button">Back to live content</button>
-          </div>
-        </div>
-
-        <!-- shared by both tabs below: they edit the same in-memory STATE, so
-             one action row applies/saves/resets whichever one you're looking at -->
-        <div class="wrap" style="padding:22px 0 30px">
-          <div class="ta-actions">
-            <button class="btn btn-ghost" id="taPreview" type="button">Preview</button>
-            <button class="btn btn-primary" id="taApply" type="button">Apply changes</button>
-            <button class="btn btn-ghost" id="taSave" type="button">Save to profile</button>
-            <button class="btn btn-ghost" id="taReset" type="button">Reset</button>
-          </div>
-          <p class="form-msg" id="taMsg"></p>
-        </div>
-
         <div id="managerView">
       <section class="section-sm" id="panels">
         <div class="wrap">

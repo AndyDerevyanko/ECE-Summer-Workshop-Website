@@ -22,6 +22,46 @@ var yearLbl = document.getElementById("gvYear");
 var yearsWrap = document.getElementById("gvYears");
 
 /**
+ * Checks whether this page was opened from the ta portal's preview page
+ * (see js/preview.js, js/ta.js) rather than by a real visitor. The gallery
+ * gets its own preview tab, separate from the landing page, so unsaved
+ * gallery edits (new years/images not yet applied) can be checked on their
+ * own instead of only showing whatever was last saved live.
+ * @return true if ?preview=1 is set
+ */
+function isPreviewMode() {
+  return /[?&]preview=1(&|$)/.test(window.location.search);
+}
+
+/**
+ * Resolves to the site content: the ta portal's unsaved snapshot in
+ * preview mode, otherwise the live content from /api/content.
+ * @return a promise resolving to the content object
+ */
+function fetchContent() {
+  if (isPreviewMode()) {
+    try {
+      var raw = localStorage.getItem("preview_content");
+      if (raw) return Promise.resolve(JSON.parse(raw));
+    } catch (e) {}
+  }
+  return fetch("/api/content").then(function (res) { return res.json(); });
+}
+
+/**
+ * Strips a link's href and swallows its clicks, so it can't navigate the
+ * preview iframe away to a page a real visitor there shouldn't reach.
+ * @param el the link to neuter
+ */
+function neuterLink(el) {
+  if (!el) return;
+  el.removeAttribute("href");
+  el.style.opacity = ".5";
+  el.style.cursor = "default";
+  el.addEventListener("click", function (e) { e.preventDefault(); });
+}
+
+/**
  * Checks whether a gallery url is a video clip.
  * @param u the media url
  * @return true if it's a .MOV clip
@@ -110,7 +150,15 @@ function init(gallery) {
   show();
 }
 
-fetch("/api/content")
-  .then(function (res) { return res.json(); })
+if (isPreviewMode()) {
+  /* previewing isn't a real visit: the gallery is its own preview tab now,
+     don't let the brand logo or the other nav links wander the ta off to
+     a non-preview page while they're just checking unsaved gallery edits */
+  neuterLink(document.querySelector(".brand"));
+  neuterLink(document.querySelector(".nav-back"));
+  document.querySelectorAll(".nav-links a").forEach(neuterLink);
+}
+
+fetchContent()
   .then(function (data) { init(data.gallery || DEFAULT_GALLERY); })
   .catch(function () { init(DEFAULT_GALLERY); });

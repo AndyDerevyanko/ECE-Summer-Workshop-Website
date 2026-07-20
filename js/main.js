@@ -164,11 +164,13 @@ function neuterLink(el) {
  */
 function updatePortalLink() {
   if (isPreviewMode()) {
-    /* previewing isn't a real visit: don't let "Access portal" or the
-       brand logo wander the ta off into another page while they're just
-       checking their edits */
+    /* previewing isn't a real visit: don't let "Access portal", the brand
+       logo, or "See more in the gallery" wander the ta off into another
+       page while they're just checking their edits (the gallery gets its
+       own preview tab, separate from the landing page, see js/preview.js) */
     neuterLink(document.getElementById("portalLink"));
     neuterLink(document.querySelector(".brand"));
+    neuterLink(document.getElementById("galleryLink"));
     return;
   }
   var link = document.getElementById("portalLink");

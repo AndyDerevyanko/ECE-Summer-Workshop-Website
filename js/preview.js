@@ -16,7 +16,8 @@ function gateCheck() {
 
 var TAB_PAGES = {
   landing: "index.html?preview=1",
-  dashboard: "dashboard.html?preview=1"
+  dashboard: "dashboard.html?preview=1",
+  gallery: "gallery.html?preview=1"
 };
 
 /**

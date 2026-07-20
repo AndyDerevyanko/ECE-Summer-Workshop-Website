@@ -1052,7 +1052,6 @@ function showMode(mode) {
   TA_MODE = mode;
   document.getElementById("managerView").style.display = mode === "manager" ? "block" : "none";
   document.getElementById("editorView").style.display = mode === "editor" ? "block" : "none";
-  document.getElementById("taModeTitle").textContent = mode === "editor" ? "Visual editor" : "Content manager";
   document.getElementById("taModeShell").className = "ta-mode-shell mode-" + mode;
   document.querySelectorAll("#taModeTabs .ta-mode-tab").forEach(function (b) {
     b.classList.toggle("active", b.getAttribute("data-mode") === mode);

@@ -832,10 +832,17 @@ h1, h2, h3 {
 .ta-mode-tab.active { background: var(--bg); color: var(--text); }
 .ta-mode-panel { background: var(--bg); transition: background-color .2s ease; }
 /* editor mode gets a faint accent wash instead of a second hue, so it stays
-   inside the site's few-colors palette while still reading as "different" */
+   inside the site's few-colors palette while still reading as "different".
+   --surface/--surface-2 are rescaled off the same wash (not the plain dark
+   theme values) so ghost buttons and sub-tabs sitting on it still read as
+   lighter than the background, instead of nearly matching it */
 .ta-mode-shell.mode-editor .ta-mode-panel,
 .ta-mode-shell.mode-editor .ta-mode-tab.active {
   background: color-mix(in srgb, var(--accent) 18%, var(--bg));
+}
+.ta-mode-shell.mode-editor .ta-mode-panel {
+  --surface: color-mix(in srgb, var(--accent) 30%, var(--bg));
+  --surface-2: color-mix(in srgb, var(--accent) 42%, var(--bg));
 }
 
 .progress-wrap { margin-top: 18px; }

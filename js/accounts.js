@@ -96,7 +96,7 @@ function fetchUsers() {
  * @param u the user row {username, role, password}
  */
 function removeUser(u) {
-  var what = u.role === "ta" ? "TA" : "student";
+  var what = u.role === "ta" ? "staff" : "student";
   if (!confirm("Remove " + what + ' "' + u.username + '"? They won\'t be able to log in anymore.')) return;
   authedFetch("/api/users/" + encodeURIComponent(u.username), { method: "DELETE" })
     .then(function (res) {
@@ -159,7 +159,7 @@ function renderList(el, role, emptyText) {
 /** Renders both the student and ta account lists. */
 function renderUsers() {
   renderList(document.getElementById("studentList"), "student", "No student accounts yet.");
-  renderList(document.getElementById("taList"), "ta", "No TA accounts yet.");
+  renderList(document.getElementById("taList"), "ta", "No staff accounts yet.");
 }
 
 /**
@@ -175,7 +175,7 @@ function addUser(role, userInput, passInput) {
     showMsg("Both a username and a password are needed.", false);
     return;
   }
-  if (role === "ta" && !confirm('Add "' + username + '" as a TA? They get full access to this portal.')) return;
+  if (role === "ta" && !confirm('Add "' + username + '" as staff? They get full access to this portal.')) return;
   authedFetch("/api/users", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

@@ -268,7 +268,7 @@ function isEditMode() {
  * original wording (see wireClickToEdit()'s blur handler). Skips
  * #portalLink on a real (non-preview) load where a session is already
  * logged in: updatePortalLink() runs earlier in DOMContentLoaded and has
- * already swapped its text to "TA portal"/"Dashboard" for this visitor, so
+ * already swapped its text to "Staff portal"/"Dashboard" for this visitor, so
  * capturing that swapped text as the "default" (or overwriting it with a
  * saved "Access portal" override meant for logged-out visitors) would
  * break the per-session label. In preview mode updatePortalLink() never
@@ -468,7 +468,7 @@ function updatePortalLink() {
   var session = localStorage.getItem("session");
   var role = localStorage.getItem("role");
   if (!session || !role) return;
-  link.textContent = role === "ta" ? "TA portal" : "Dashboard";
+  link.textContent = role === "ta" ? "Staff portal" : "Dashboard";
   link.href = role === "ta" ? "instructor.html" : "dashboard.html";
   /* Apply Now next to Gallery would be a dead prompt to sign up again,
      hide it while logged in (only in this nav bar, not the rest of the page) */

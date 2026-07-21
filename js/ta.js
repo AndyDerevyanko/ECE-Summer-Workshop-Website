@@ -1284,7 +1284,7 @@ function renderProfiles() {
       html += '<span class="rname">' + profileLabel(p) + '</span>';
     }
     if (p.shared) {
-      html += '<span class="shared-flag" title="Every TA can see and edit this profile">' + SHARE_SVG_CHIP + 'shared</span>' +
+      html += '<span class="shared-flag" title="Every staff member can see and edit this profile">' + SHARE_SVG_CHIP + 'shared</span>' +
         '<button class="btn btn-ghost pr-unshare" type="button">Unshare</button>';
     }
     html += '<span class="prof-btns">' +
@@ -1322,7 +1322,7 @@ function renderProfiles() {
       updateProfile(p.id, { shared: true }, function () {
         p.shared = true;
         renderProfiles();
-        showMsg('Shared. Every TA can see "' + p.name + '" now.', true);
+        showMsg('Shared. Every staff member can see "' + p.name + '" now.', true);
       });
     });
 

@@ -26,7 +26,7 @@
       <a href="index.html" class="brand"><img src="assets/logo.png" class="brand-logo" alt="ECE Workshops" /> ECE Workshops</a>
       <div class="nav-links">
         <a href="#students">Students</a>
-        <a href="#tas">TAs</a>
+        <a href="#tas">Staff</a>
       </div>
       <div class="nav-right">
         <a class="btn btn-ghost" href="instructor.html">Content manager</a>
@@ -49,15 +49,15 @@
 
   <!-- shown if you're not logged in with a ta key -->
   <div class="gate" id="accGate" style="display:none">
-    <h2>TAs only</h2>
-    <p class="muted">Log in with a TA key to manage accounts.</p>
+    <h2>Staff only</h2>
+    <p class="muted">Log in with a staff key to manage accounts.</p>
     <a class="btn btn-primary" href="login.html">Go to login</a>
   </div>
 
   <main id="accApp" style="display:none">
     <section class="dash-head">
       <div class="wrap">
-        <p class="eyebrow">TA portal</p>
+        <p class="eyebrow">Staff portal</p>
         <h1>Accounts</h1>
       </div>
     </section>
@@ -83,7 +83,7 @@
 
     <section class="section-sm" id="tas" style="background:var(--bg-2)">
       <div class="wrap">
-        <h2 style="font-size:1.4rem;margin-bottom:18px">TAs</h2>
+        <h2 style="font-size:1.4rem;margin-bottom:18px">Staff</h2>
         <div class="res-list" id="taList">
           <!-- filled in by accounts.js -->
         </div>
@@ -94,7 +94,7 @@
             <div class="field"><label for="taPass">Password</label>
               <input type="text" id="taPass" autocomplete="off"></div>
             <div class="field"><label>&nbsp;</label>
-              <button class="btn btn-primary" id="taAdd" type="button">Add TA</button></div>
+              <button class="btn btn-primary" id="taAdd" type="button">Add staff</button></div>
           </div>
         </div>
         <p class="form-msg" id="accMsg"></p>
@@ -103,7 +103,7 @@
   </main>
 
   <footer class="footer">
-    <div class="wrap">ECE Workshops · TA area</div>
+    <div class="wrap">ECE Workshops · Staff area</div>
   </footer>
 
   <script src="js/theme.js"></script>

@@ -41,7 +41,7 @@
         window.location.href = data.role === "ta" ? "instructor.html" : "dashboard.html";
       })
       .catch(function () {
-        if (msg) msg.textContent = "Wrong username or password. Check with your TA.";
+        if (msg) msg.textContent = "Wrong username or password. Check with a staff member.";
       });
   });
 })();

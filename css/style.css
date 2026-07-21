@@ -809,8 +809,11 @@ h1, h2, h3 {
    instead of stacked under it like the student dashboard's greeting */
 .dash-head-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 20px; }
 /* ---------- ta portal mode tabs ---------- */
-/* which mode you're in reads off the icon + label and the accent underline,
-   not a background color wash, same idea as the icon on every other tile */
+/* which mode you're in reads off the icon + label, the accent underline, and
+   a flat surface-color tint (no gradient/accent wash) behind the whole strip
+   + panel below it, so the two read as one block instead of floating text */
+.ta-mode-shell.mode-manager { background: var(--bg-2); }
+.ta-mode-shell.mode-editor { background: var(--surface); }
 .ta-mode-tabs { display: flex; gap: 4px; }
 .ta-mode-tab {
   display: flex;
@@ -1125,17 +1128,8 @@ h1, h2, h3 {
   flex-wrap: wrap;
   margin-top: 10px;
 }
-/* banner shown while a saved profile is open instead of the live content */
-.prof-bar { background: color-mix(in srgb, var(--accent) 14%, transparent); }
-.prof-bar-inner {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 14px 0;
-  font-size: .92rem;
-  font-weight: 600;
-}
+/* shown next to the "TA portal" title while a saved profile is open instead of the live content */
+.profile-bar-text { margin: 6px 0 0; font-size: .92rem; font-weight: 600; }
 /* profile rows reuse .res-row, buttons grouped so they don't each float right */
 .prof-row { flex-wrap: wrap; }
 .prof-row .pr-name {

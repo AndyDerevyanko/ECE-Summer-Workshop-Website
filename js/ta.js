@@ -1052,6 +1052,7 @@ function showMode(mode) {
   TA_MODE = mode;
   document.getElementById("managerView").style.display = mode === "manager" ? "block" : "none";
   document.getElementById("editorView").style.display = mode === "editor" ? "block" : "none";
+  document.getElementById("taModeShell").className = "ta-mode-shell mode-" + mode;
   document.querySelectorAll("#taModeTabs .ta-mode-tab").forEach(function (b) {
     b.classList.toggle("active", b.getAttribute("data-mode") === mode);
   });
@@ -1193,19 +1194,21 @@ function updateProfile(id, fields, onOk) {
     });
 }
 
-/** Swaps the action buttons and the banner between live mode and profile mode. */
+/** Swaps the action buttons and the header banner between live mode and profile mode. */
 function syncProfileBar() {
-  var bar = document.getElementById("profileBar");
   var txt = document.getElementById("profileBarText");
+  var back = document.getElementById("profileBack");
   var apply = document.getElementById("taApply");
   var save = document.getElementById("taSave");
   if (EDITING) {
-    bar.style.display = "block";
+    txt.style.display = "block";
+    back.style.display = "inline-flex";
     txt.textContent = 'Editing "' + profileLabel(EDITING) + '". Students see none of this until you apply it.';
     apply.textContent = "Apply this profile";
     save.textContent = "Save profile";
   } else {
-    bar.style.display = "none";
+    txt.style.display = "none";
+    back.style.display = "none";
     apply.textContent = "Apply changes";
     save.textContent = "Save to profile";
   }

@@ -62,18 +62,12 @@
       <div class="wrap dash-head-row">
         <div>
           <h1>TA portal</h1>
+          <!-- shown while a saved profile is open in the editor instead of the live content -->
+          <p class="muted profile-bar-text" id="profileBarText" style="display:none"></p>
         </div>
+        <button class="btn btn-ghost" id="profileBack" type="button" style="display:none">Back to live content</button>
       </div>
     </section>
-
-    <!-- shown while a saved profile is open in the editor instead of the live content;
-         applies to both tabs so it sits above the mode switcher, not inside it -->
-    <div class="prof-bar" id="profileBar" style="display:none">
-      <div class="wrap prof-bar-inner">
-        <span id="profileBarText"></span>
-        <button class="btn btn-ghost" id="profileBack" type="button">Back to live content</button>
-      </div>
-    </div>
 
     <!-- shared by both tabs below: they edit the same in-memory STATE, so
          one action row applies/saves/resets whichever one you're looking at.
@@ -88,9 +82,11 @@
       <p class="form-msg" id="taMsg"></p>
     </div>
 
-    <!-- which mode you're in reads off the tab's icon + accent underline,
-         same as the icon-per-tile convention used everywhere else on the site -->
-    <div class="ta-mode-shell" id="taModeShell">
+    <!-- which mode you're in reads off the tab's icon + accent underline plus a
+         flat surface tint behind the whole strip and panel (see .mode-manager/
+         .mode-editor in style.css), same as the icon-per-tile convention used
+         everywhere else on the site -->
+    <div class="ta-mode-shell mode-manager" id="taModeShell">
       <div class="ta-mode-strip">
         <div class="wrap">
           <div class="ta-mode-tabs" role="tablist" id="taModeTabs">
@@ -133,7 +129,7 @@
         </div>
       </section>
 
-      <section class="section-sm" id="extras" style="background:var(--bg-2)">
+      <section class="section-sm" id="extras" style="background:var(--bg)">
         <div class="wrap">
           <h2 style="font-size:1.4rem;margin-bottom:6px">Extra attachments</h2>
           <p class="muted" style="margin-top:0;margin-bottom:18px">
@@ -243,7 +239,7 @@
         </div>
       </section>
 
-      <section class="section-sm" id="profiles" style="background:var(--bg-2)">
+      <section class="section-sm" id="profiles" style="background:var(--bg)">
         <div class="wrap">
           <h2 style="font-size:1.4rem;margin-bottom:18px">Profiles</h2>
           <div class="res-list" id="profileList">
@@ -254,7 +250,7 @@
     </div>
 
     <div id="editorView" style="display:none">
-      <section class="section-sm" style="padding-top:0">
+      <section class="section-sm">
         <div class="wrap">
           <div class="pv-head">
             <div class="pv-tabs" role="tablist" id="edSubTabs">
@@ -267,7 +263,6 @@
               <button class="btn btn-ghost" id="edRedo" type="button" disabled>Redo</button>
             </div>
           </div>
-          <p class="muted" style="margin:0 0 12px">Click any highlighted text below to edit it in place. Enter saves, Esc cancels.</p>
           <div class="pv-frame-wrap" style="height:72vh">
             <iframe id="edFrame" class="pv-frame" title="Visual editor"></iframe>
           </div>

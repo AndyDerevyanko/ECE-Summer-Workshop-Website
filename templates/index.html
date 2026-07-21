@@ -29,10 +29,10 @@
 <body class="mono">
 
   <!-- ===== nav ===== -->
-  <nav class="nav">
+  <nav class="nav" data-resize-id="box.nav">
     <div class="wrap nav-inner">
-      <a href="index.html" class="brand"><img src="assets/logo.png" class="brand-logo"
-          alt="ECE Workshops" /> <span data-edit-id="nav.brand">ECE Workshops</span></a>
+      <a href="index.html" class="brand" data-resize-id="box.brand"><img src="assets/logo.png" class="brand-logo"
+          data-resize-id="img.brand.nav" alt="ECE Workshops" /> <span data-edit-id="nav.brand">ECE Workshops</span></a>
       <div class="nav-links">
         <a href="#about" data-edit-id="nav.link.about">About</a>
         <a href="#gallery" data-edit-id="nav.link.gallery">Gallery</a>
@@ -43,7 +43,7 @@
         <a href="https://www.youtube.com/watch?v=dQw4w9WgXcQ" target="_blank" rel="noopener" class="join-link" id="navJoinLink" data-edit-id="nav.link.apply">Apply Now</a>
       </div>
       <div class="nav-right">
-        <button id="themeBtn" class="theme-btn" type="button" aria-label="Toggle theme">
+        <button id="themeBtn" class="theme-btn" type="button" aria-label="Toggle theme" data-resize-id="box.themeBtn">
           <svg class="tic sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <circle cx="12" cy="12" r="4" />
@@ -56,7 +56,7 @@
           <span class="tic-label"></span>
         </button>
         <a class="btn btn-accent2" href="login.html" id="portalLink" data-edit-id="nav.portal">Access portal</a>
-        <button class="btn btn-ghost" id="logoutBtn" type="button" style="display:none">Log out</button>
+        <button class="btn btn-ghost" id="logoutBtn" type="button" style="display:none" data-resize-id="box.logoutBtn">Log out</button>
       </div>
     </div>
   </nav>
@@ -65,7 +65,7 @@
   <!-- hero-media = full-screen video hero. to undo, just remove "hero-media"
        from this class list, the video/scrim stay hidden and it's the old
        plain hero again -->
-  <header class="hero hero-media">
+  <header class="hero hero-media" data-resize-id="box.hero">
     <!-- cover-video.mp4 is robot-moving/-2/-3 + bluetooth-robot trimmed and
          merged into one clip (see git history for the ffmpeg steps), so the
          loop is seamless instead of jumping between separate <video> sources -->
@@ -94,7 +94,7 @@
   </header>
 
   <!-- ===== about ===== -->
-  <section class="section" id="about">
+  <section class="section" id="about" data-resize-id="box.section.about">
     <!-- faint upscaled logo mark (no text), contained to this section only -->
     <img class="bg-logo" src="assets/logo-mark.png" alt="" aria-hidden="true" />
     <div class="wrap split" id="gallery">
@@ -122,14 +122,14 @@
 
     <!-- little burst lines on both sides to pull the eye in -->
     <div class="wrap reveal gal-cta" style="margin-top:18px">
-      <svg class="cta-lines" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+      <svg class="cta-lines" data-resize-id="icon.about.cta.left" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
         stroke-linecap="round" aria-hidden="true">
         <path d="M10 12H2" />
         <path d="M11 7L4 3" />
         <path d="M11 17l-7 4" />
       </svg>
       <a class="btn btn-ghost" id="galleryLink" href="gallery.html" data-edit-id="about.cta">See more in the gallery</a>
-      <svg class="cta-lines flip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+      <svg class="cta-lines flip" data-resize-id="icon.about.cta.right" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
         stroke-linecap="round" aria-hidden="true">
         <path d="M10 12H2" />
         <path d="M11 7L4 3" />
@@ -139,7 +139,7 @@
   </section>
 
   <!-- ===== what you'll learn ===== -->
-  <section class="section" id="learn" style="background:var(--bg-2)">
+  <section class="section" id="learn" style="background:var(--bg-2)" data-resize-id="box.section.learn">
     <div class="reveal wrap" style="text-align:center;margin-bottom:34px">
       <h2 data-edit-id="learn.heading">You will learn about:</h2>
       <p class="sub" style="margin:0 auto" data-edit-id="learn.sub">No textbooks. You learn it by building it.</p>
@@ -233,7 +233,7 @@
   </section>
 
   <!-- ===== schedule ===== -->
-  <section class="section" id="schedule">
+  <section class="section" id="schedule" data-resize-id="box.section.schedule">
     <div class="wrap">
       <div class="reveal" style="margin-bottom:26px">
         <h2 data-edit-id="schedule.heading">ECE Workshop Schedule:</h2>
@@ -249,7 +249,7 @@
 
       <h3 style="margin-bottom:14px" data-edit-id="schedule.hw.heading">Hardware</h3>
       <div class="timeline reveal" style="margin-bottom:30px">
-        <div class="day-row"><span class="daytag" data-edit-id="schedule.hw.day1.tag">Day 1</span>
+        <div class="day-row" data-resize-id="box.schedule.hw.day1"><span class="daytag" data-edit-id="schedule.hw.day1.tag">Day 1</span>
           <div>
             <h4 data-edit-id="schedule.hw.day1.title">Circuit Foundations</h4>
             <p data-edit-id="schedule.hw.day1.count">4 activities</p>
@@ -260,7 +260,7 @@
             <path d="M9 19h6M10 22h4" />
           </svg>
         </div>
-        <div class="day-row"><span class="daytag" data-edit-id="schedule.hw.day2.tag">Day 2</span>
+        <div class="day-row" data-resize-id="box.schedule.hw.day2"><span class="daytag" data-edit-id="schedule.hw.day2.tag">Day 2</span>
           <div>
             <h4 data-edit-id="schedule.hw.day2.title">Wave Manipulation &amp; Flashing Circuits</h4>
             <p data-edit-id="schedule.hw.day2.count">3 activities</p>
@@ -271,7 +271,7 @@
             <path d="M20 7h2" />
           </svg>
         </div>
-        <div class="day-row"><span class="daytag" data-edit-id="schedule.hw.day3.tag">Day 3</span>
+        <div class="day-row" data-resize-id="box.schedule.hw.day3"><span class="daytag" data-edit-id="schedule.hw.day3.tag">Day 3</span>
           <div>
             <h4 data-edit-id="schedule.hw.day3.title">Signal Amplification</h4>
             <p data-edit-id="schedule.hw.day3.count">2 activities</p>
@@ -282,7 +282,7 @@
             <path d="M2 9h5M2 15h5M19 12h3" />
           </svg>
         </div>
-        <div class="day-row"><span class="daytag" data-edit-id="schedule.hw.day4.tag">Day 4</span>
+        <div class="day-row" data-resize-id="box.schedule.hw.day4"><span class="daytag" data-edit-id="schedule.hw.day4.tag">Day 4</span>
           <div>
             <h4 data-edit-id="schedule.hw.day4.title">Motors &amp; Magnetic Induction</h4>
             <p data-edit-id="schedule.hw.day4.count">2 activities</p>
@@ -293,7 +293,7 @@
             <path d="M5 8h4M15 8h4" />
           </svg>
         </div>
-        <div class="day-row"><span class="daytag" data-edit-id="schedule.hw.day5.tag">Day 5</span>
+        <div class="day-row" data-resize-id="box.schedule.hw.day5"><span class="daytag" data-edit-id="schedule.hw.day5.tag">Day 5</span>
           <div>
             <h4 data-edit-id="schedule.hw.day5.title">Power Harvesting &amp; Competition</h4>
             <p data-edit-id="schedule.hw.day5.count">3 activities</p>
@@ -307,7 +307,7 @@
 
       <h3 style="margin-bottom:14px" data-edit-id="schedule.rb.heading">Robotics</h3>
       <div class="timeline reveal">
-        <div class="day-row"><span class="daytag" data-edit-id="schedule.rb.day1.tag">Day 1</span>
+        <div class="day-row" data-resize-id="box.schedule.rb.day1"><span class="daytag" data-edit-id="schedule.rb.day1.tag">Day 1</span>
           <div>
             <h4 data-edit-id="schedule.rb.day1.title">Design &amp; 3D Modeling</h4>
             <p data-edit-id="schedule.rb.day1.count">2 activities</p>
@@ -319,7 +319,7 @@
             <path d="M8.2 15a7 7 0 0 0 7.6 0" />
           </svg>
         </div>
-        <div class="day-row"><span class="daytag" data-edit-id="schedule.rb.day2.tag">Day 2</span>
+        <div class="day-row" data-resize-id="box.schedule.rb.day2"><span class="daytag" data-edit-id="schedule.rb.day2.tag">Day 2</span>
           <div>
             <h4 data-edit-id="schedule.rb.day2.title">Mechanical Assembly &amp; Microcontrollers</h4>
             <p data-edit-id="schedule.rb.day2.count">2 activities</p>
@@ -330,7 +330,7 @@
               d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
           </svg>
         </div>
-        <div class="day-row"><span class="daytag" data-edit-id="schedule.rb.day3.tag">Day 3</span>
+        <div class="day-row" data-resize-id="box.schedule.rb.day3"><span class="daytag" data-edit-id="schedule.rb.day3.tag">Day 3</span>
           <div>
             <h4 data-edit-id="schedule.rb.day3.title">Electrical Integration</h4>
             <p data-edit-id="schedule.rb.day3.count">2 activities</p>
@@ -342,7 +342,7 @@
             <path d="M12 16v6" />
           </svg>
         </div>
-        <div class="day-row"><span class="daytag" data-edit-id="schedule.rb.day4.tag">Day 4</span>
+        <div class="day-row" data-resize-id="box.schedule.rb.day4"><span class="daytag" data-edit-id="schedule.rb.day4.tag">Day 4</span>
           <div>
             <h4 data-edit-id="schedule.rb.day4.title">Logic &amp; Programming</h4>
             <p data-edit-id="schedule.rb.day4.count">2 activities</p>
@@ -352,7 +352,7 @@
             <path d="M8 7l-5 5 5 5M16 7l5 5-5 5" />
           </svg>
         </div>
-        <div class="day-row"><span class="daytag" data-edit-id="schedule.rb.day5.tag">Day 5</span>
+        <div class="day-row" data-resize-id="box.schedule.rb.day5"><span class="daytag" data-edit-id="schedule.rb.day5.tag">Day 5</span>
           <div>
             <h4 data-edit-id="schedule.rb.day5.title">Calibration &amp; Track Competition</h4>
             <p data-edit-id="schedule.rb.day5.count">2 activities</p>
@@ -369,14 +369,14 @@
   </section>
 
   <!-- ===== logistics ===== -->
-  <section class="section-sm" style="background:var(--bg-2)">
+  <section class="section-sm" style="background:var(--bg-2)" data-resize-id="box.section.logistics">
     <div class="wrap grid grid-4 reveal" id="logisticsGrid">
       <!-- tiles filled in by js/main.js from /api/content -->
     </div>
   </section>
 
   <!-- ===== prizes ===== -->
-  <section class="section" id="prizes">
+  <section class="section" id="prizes" data-resize-id="box.section.prizes">
     <div class="wrap">
       <div class="banner reveal" data-resize-id="container.prizes.banner">
         <div class="banner-left">
@@ -408,11 +408,11 @@
   </section>
 
   <!-- ===== footer ===== -->
-  <footer class="footer">
+  <footer class="footer" data-resize-id="box.footer">
     <div class="wrap foot-grid">
       <div>
         <div class="brand" style="margin-bottom:6px"><img src="assets/logo.png" class="brand-logo"
-            alt="ECE Workshops" /> <span data-edit-id="nav.brand">ECE Workshops</span></div>
+            data-resize-id="img.brand.footer" alt="ECE Workshops" /> <span data-edit-id="nav.brand">ECE Workshops</span></div>
         <div data-edit-id="footer.org">University of Toronto ECE</div>
       </div>
       <div>

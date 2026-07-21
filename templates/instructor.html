@@ -61,7 +61,7 @@
     <section class="dash-head">
       <div class="wrap dash-head-row">
         <div>
-          <h1>Staff portal</h1>
+          <h1>Staff Portal</h1>
           <!-- shown while a saved profile is open in the editor instead of the live content -->
           <p class="muted profile-bar-text" id="profileBarText" style="display:none"></p>
         </div>
@@ -277,7 +277,7 @@
     </div>
 
     <div id="editorView" style="display:none">
-      <section class="section-sm">
+      <section class="section-sm" id="edSection">
         <div class="wrap">
           <div class="pv-head">
             <div class="pv-tabs" role="tablist" id="edSubTabs">
@@ -288,6 +288,7 @@
             <div class="ed-undo-row">
               <button class="btn btn-ghost" id="edUndo" type="button" disabled>Undo</button>
               <button class="btn btn-ghost" id="edRedo" type="button" disabled>Redo</button>
+              <button class="btn btn-ghost" id="edFullscreen" type="button">Fullscreen</button>
             </div>
           </div>
           <div class="pv-frame-wrap" style="height:72vh">

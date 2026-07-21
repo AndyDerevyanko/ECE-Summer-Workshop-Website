@@ -1121,20 +1121,23 @@ h1, h2, h3 {
 .pv-tabs-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .pv-tabs { display: flex; gap: 8px; }
 .pv-tab {
-  border: none;
+  border: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
   padding: 12px 18px;
   border-radius: 10px;
-  background: var(--surface);
-  color: var(--muted);
+  background: var(--surface-2);
+  color: var(--text);
   font-family: var(--font-head);
   font-weight: 600;
   font-size: .95rem;
   cursor: pointer;
 }
-.pv-tab:hover { color: var(--text); }
-.pv-tab.active { background: var(--accent); color: #fff; }
+.pv-tab:hover { border-color: color-mix(in srgb, var(--text) 32%, transparent); }
+.pv-tab.active { background: var(--accent); color: #fff; border-color: transparent; }
 .ed-undo-row { display: flex; gap: 8px; }
-.btn:disabled { opacity: .4; cursor: default; }
+.ed-undo-row .btn {
+  border: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
+}
+.btn:disabled { opacity: .55; cursor: default; }
 .btn:disabled:hover { filter: none; }
 .pv-frame-wrap {
   flex: 1;
@@ -1145,6 +1148,21 @@ h1, h2, h3 {
   background: var(--surface);
 }
 .pv-frame { width: 100%; height: 100%; border: none; display: block; }
+/* visual editor fullscreen mode: the frame section pops out to cover the
+   whole viewport instead of sharing the page with the content manager's
+   other sections, "Exit fullscreen" is the only way back */
+.ed-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+  background: var(--bg);
+  padding: 16px 24px;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+}
+.ed-fullscreen .wrap { max-width: none; flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.ed-fullscreen .pv-frame-wrap { height: auto !important; flex: 1; }
 /* .field label/input rules hit these too, needs the extra specificity */
 .field .ta-radio {
   display: flex;
@@ -1279,20 +1297,25 @@ body.edit-mode [data-resize-id] {
 }
 body.edit-mode [data-resize-id]:hover { outline-style: solid; }
 
-/* custom drag-to-resize handle, replacing the native CSS `resize` property:
-   `resize` doesn't reliably show up (or grab correctly) on a contenteditable
-   text field since the browser's own text-selection dragging competes for
-   the same corner pixels, and a flex/grid parent can silently override an
-   explicit width/height anyway. makeResizable() in js/main.js wraps every
-   resizable field once in edit mode and drives the resize itself with
-   plain mousemove math, which always wins. the grip only shows on hover
-   (or while a text field is actively being edited) so 90-odd fields don't
-   all show a handle at once. */
-.resize-wrap { position: relative; display: inline-block; max-width: 100%; vertical-align: top; }
+/* custom drag-to-resize/move handles, replacing the native CSS `resize`
+   property: `resize` doesn't reliably show up (or grab correctly) on a
+   contenteditable text field since the browser's own text-selection
+   dragging competes for the same corner pixels, and a flex/grid parent
+   can silently override an explicit width/height anyway. wireResizable()
+   in js/main.js wraps every resizable element once in edit mode and
+   drives both the resize and the move itself with a CSS transform
+   (scale/translate), which never affects layout and always wins. left/top
+   are NOT hardcoded here (unlike a plain corner-anchored handle would be):
+   since the wrapped element itself moves/scales via transform while its
+   wrap (a plain, untransformed anchor) doesn't, positionGrips() in
+   js/main.js recalculates and writes them after every drag so a grip
+   always sits at the element's actual current visual corner, not where
+   it used to be before the transform. the grips only show on hover (or
+   while a text field is actively being edited) so 100-odd elements don't
+   all show handles at once. */
+.resize-wrap { position: relative; display: inline-block; vertical-align: top; }
 .resize-grip {
   position: absolute;
-  right: -5px;
-  bottom: -5px;
   width: 13px;
   height: 13px;
   border-radius: 3px;
@@ -1300,16 +1323,14 @@ body.edit-mode [data-resize-id]:hover { outline-style: solid; }
   cursor: nwse-resize;
   opacity: 0;
   transition: opacity .15s;
-  z-index: 5;
+  z-index: 10000;
 }
 .resize-wrap:hover .resize-grip, .resize-wrap.has-editing .resize-grip { opacity: 1; }
 
-/* drag-to-move handle, text fields only (see wireMovable() in js/main.js),
-   opposite corner from the resize grip so the two can't be grabbed at once */
+/* drag-to-move handle, opposite corner from the resize grip so the two
+   can't be grabbed at once */
 .move-grip {
   position: absolute;
-  left: -5px;
-  top: -5px;
   width: 13px;
   height: 13px;
   border-radius: 3px;
@@ -1317,7 +1338,7 @@ body.edit-mode [data-resize-id]:hover { outline-style: solid; }
   cursor: move;
   opacity: 0;
   transition: opacity .15s;
-  z-index: 5;
+  z-index: 10000;
 }
 .resize-wrap:hover .move-grip, .resize-wrap.has-editing .move-grip { opacity: 1; }
 

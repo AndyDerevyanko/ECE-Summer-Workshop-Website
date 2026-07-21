@@ -1185,6 +1185,20 @@ function showEditorSubTab(name) {
   });
 }
 
+/**
+ * Toggles the Visual editor's frame section between its normal spot in the
+ * page and a fixed overlay that covers the whole viewport, so a ta editing
+ * fiddly small details (text, icons, resize handles) can work with more
+ * screen space than the 72vh frame normally gets. "Fullscreen" is the only
+ * way in, "Exit fullscreen" (same button) or Escape is the only way out.
+ */
+function toggleEditorFullscreen() {
+  var section = document.getElementById("edSection");
+  var btn = document.getElementById("edFullscreen");
+  var on = section.classList.toggle("ed-fullscreen");
+  btn.textContent = on ? "Exit fullscreen" : "Fullscreen";
+}
+
 /** Reloads the Visual editor's iframe on its current sub-tab, so it picks up whatever's newest in the shared snapshot. */
 function reloadEditorFrame() {
   var frame = document.getElementById("edFrame");
@@ -1229,6 +1243,8 @@ function showMode(mode) {
     pullStateFromEditor();
     renderAll();
     syncProfileBar();
+    var section = document.getElementById("edSection");
+    if (section.classList.contains("ed-fullscreen")) toggleEditorFullscreen();
   }
   TA_MODE = mode;
   document.getElementById("managerView").style.display = mode === "manager" ? "block" : "none";
@@ -1762,6 +1778,13 @@ document.addEventListener("DOMContentLoaded", function () {
     syncUndoButtons();
   });
   setInterval(syncUndoButtons, 400);
+
+  document.getElementById("edFullscreen").addEventListener("click", toggleEditorFullscreen);
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && document.getElementById("edSection").classList.contains("ed-fullscreen")) {
+      toggleEditorFullscreen();
+    }
+  });
 
   /* the Day panels/Extras/Gallery/Landing/Profiles nav links only make
      sense in the Content manager view, so jump back to it before the

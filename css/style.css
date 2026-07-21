@@ -1068,6 +1068,37 @@ h1, h2, h3 {
 /* photo vs video tag so a still frame isn't mistaken for a photo */
 .gy-kind { display: inline-flex; align-items: center; gap: 5px; font-size: .82rem; color: var(--muted); }
 .gy-bar .gy-rm { margin-left: auto; }
+/* reorder mode: filenames only, no <img>/<video>, so dragging a year's
+   photos around never has to render all of them (some are huge phone
+   shots) just to show a thumbnail grid */
+.gy-reorder-list { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.gy-reorder-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: var(--surface-2);
+  cursor: grab;
+}
+.gy-reorder-row.dragging { opacity: .4; }
+.gy-reorder-row.drag-over { outline: 2px dashed var(--accent); outline-offset: -2px; }
+.gy-ro-handle { flex: none; width: 14px; height: 14px; color: var(--muted); }
+.gy-ro-num { flex: none; width: 20px; color: var(--muted); font-size: .82rem; }
+.gy-ro-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .88rem; }
+.gy-ro-move { display: flex; gap: 2px; flex: none; }
+.gy-ro-move button {
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 4px;
+}
+.gy-ro-move button:hover:not(:disabled) { color: var(--text); }
+.gy-ro-move button:disabled { opacity: .3; cursor: default; }
+.gy-ro-move svg { width: 14px; height: 14px; }
 /* ---------- ta preview page ---------- */
 /* whole page fills the viewport and the frame stretches to fill whatever's
    left after the nav/header/tabs, so there's no scrolling to see it all */

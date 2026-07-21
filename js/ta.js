@@ -813,13 +813,34 @@ var NEXT_SVG =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
   'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>';
 
+var UP_SVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 15l7-7 7 7"/></svg>';
+
+var DOWN_SVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 9l-7 7-7-7"/></svg>';
+
+/* drag handle, six dots */
+var GRIP_SVG =
+  '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">' +
+  '<circle cx="9" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/>' +
+  '<circle cx="15" cy="6" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>';
+
 /* which image each year's mini viewer is sitting on, survives rerenders */
 var GY_IDX = {};
+
+/* which years are currently showing the reorder list instead of the
+   single-image viewer, survives rerenders */
+var GY_REORDER = {};
 
 /**
  * Renders the editable per-year photo/clip lists shown on gallery.html.
  * One image at a time per year, same flip-through idea as the public
- * gallery page.
+ * gallery page. A year with 2+ images gets a "Reorder" toggle that swaps
+ * the viewer for a flat list of filenames, no <img>/<video> elements, so
+ * dragging things around never has to render every photo at once (some of
+ * these are 8-20mb phone shots, a thumbnail grid of all of them would lag).
  */
 function renderGallery() {
   var list = document.getElementById("galleryList");
@@ -831,9 +852,28 @@ function renderGallery() {
     var i = GY_IDX[y] || 0;
     if (i >= imgs.length) i = imgs.length ? imgs.length - 1 : 0;
     GY_IDX[y] = i;
+    var reordering = GY_REORDER[y] && imgs.length > 1;
 
     var viewer = "";
-    if (imgs.length) {
+    if (!imgs.length) {
+      viewer = '<p class="muted">No images yet.</p>';
+    } else if (reordering) {
+      viewer = '<ul class="gy-reorder-list">' +
+        imgs.map(function (u, idx) {
+          var name = u.split("/").pop();
+          return '<li class="gy-reorder-row" draggable="true" data-idx="' + idx + '">' +
+            '<span class="gy-ro-handle">' + GRIP_SVG + '</span>' +
+            '<span class="gy-ro-num">' + (idx + 1) + '</span>' +
+            (isVidUrl(u) ? VID_SVG_CHIP : IMAGE_SVG_CHIP) +
+            '<span class="gy-ro-name">' + name + '</span>' +
+            '<span class="gy-ro-move">' +
+              '<button class="gy-ro-up" type="button" aria-label="Move up"' + (idx === 0 ? " disabled" : "") + '>' + UP_SVG + '</button>' +
+              '<button class="gy-ro-down" type="button" aria-label="Move down"' + (idx === imgs.length - 1 ? " disabled" : "") + '>' + DOWN_SVG + '</button>' +
+            '</span>' +
+          '</li>';
+        }).join("") +
+      '</ul>';
+    } else {
       var cur = imgs[i];
       var media = isVidUrl(cur) ?
         '<video class="gy-media" src="' + cur + '" autoplay muted loop playsinline></video>' :
@@ -849,14 +889,14 @@ function renderGallery() {
           '<span class="gy-kind">' + (isVidUrl(cur) ? VID_SVG_CHIP + 'Video clip' : IMAGE_SVG_CHIP + 'Photo') + '</span>' +
           '<button class="btn btn-ghost gy-rm" type="button">Remove</button>' +
         '</div>';
-    } else {
-      viewer = '<p class="muted">No images yet.</p>';
     }
 
     html +=
       '<div class="ta-panel" data-year="' + y + '">' +
         '<div class="ta-panel-head">' +
           '<span class="daytag">' + y + '</span>' +
+          (imgs.length > 1 ? '<button class="btn btn-ghost gy-reorder-btn" type="button">' +
+            (reordering ? "Done reordering" : "Reorder") + '</button>' : "") +
           '<button class="btn btn-ghost gy-del" type="button">Remove year</button>' +
         '</div>' +
         viewer +
@@ -883,6 +923,7 @@ function renderGallery() {
       STATE.gallery.years.splice(STATE.gallery.years.indexOf(y), 1);
       delete STATE.gallery.images[y];
       delete GY_IDX[y];
+      delete GY_REORDER[y];
       renderGallery();
     });
 
@@ -901,6 +942,54 @@ function renderGallery() {
     if (rmBtn) rmBtn.addEventListener("click", function () {
       imgs.splice(GY_IDX[y], 1);
       renderGallery();
+    });
+
+    var reorderBtn = p.querySelector(".gy-reorder-btn");
+    if (reorderBtn) reorderBtn.addEventListener("click", function () {
+      GY_REORDER[y] = !GY_REORDER[y];
+      renderGallery();
+    });
+
+    p.querySelectorAll(".gy-reorder-row").forEach(function (row) {
+      var idx = parseInt(row.getAttribute("data-idx"), 10);
+
+      row.addEventListener("dragstart", function (e) {
+        e.dataTransfer.setData("text/plain", String(idx));
+        e.dataTransfer.effectAllowed = "move";
+        row.classList.add("dragging");
+      });
+      row.addEventListener("dragend", function () {
+        row.classList.remove("dragging");
+      });
+      row.addEventListener("dragover", function (e) {
+        e.preventDefault();
+        row.classList.add("drag-over");
+      });
+      row.addEventListener("dragleave", function () {
+        row.classList.remove("drag-over");
+      });
+      row.addEventListener("drop", function (e) {
+        e.preventDefault();
+        row.classList.remove("drag-over");
+        var from = parseInt(e.dataTransfer.getData("text/plain"), 10);
+        if (isNaN(from) || from === idx) return;
+        var moved = imgs.splice(from, 1)[0];
+        imgs.splice(idx, 0, moved);
+        renderGallery();
+      });
+
+      var upBtn = row.querySelector(".gy-ro-up");
+      upBtn.addEventListener("click", function () {
+        if (idx === 0) return;
+        var tmp = imgs[idx - 1]; imgs[idx - 1] = imgs[idx]; imgs[idx] = tmp;
+        renderGallery();
+      });
+      var downBtn = row.querySelector(".gy-ro-down");
+      downBtn.addEventListener("click", function () {
+        if (idx === imgs.length - 1) return;
+        var tmp = imgs[idx + 1]; imgs[idx + 1] = imgs[idx]; imgs[idx] = tmp;
+        renderGallery();
+      });
     });
 
     p.querySelector(".gy-file").addEventListener("change", function () {

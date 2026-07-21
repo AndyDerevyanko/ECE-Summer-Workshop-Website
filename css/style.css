@@ -1304,6 +1304,23 @@ body.edit-mode [data-resize-id]:hover { outline-style: solid; }
 }
 .resize-wrap:hover .resize-grip, .resize-wrap.has-editing .resize-grip { opacity: 1; }
 
+/* drag-to-move handle, text fields only (see wireMovable() in js/main.js),
+   opposite corner from the resize grip so the two can't be grabbed at once */
+.move-grip {
+  position: absolute;
+  left: -5px;
+  top: -5px;
+  width: 13px;
+  height: 13px;
+  border-radius: 3px;
+  background: var(--accent-2, var(--accent));
+  cursor: move;
+  opacity: 0;
+  transition: opacity .15s;
+  z-index: 5;
+}
+.resize-wrap:hover .move-grip, .resize-wrap.has-editing .move-grip { opacity: 1; }
+
 /* A-/A+ font-size buttons, shown above a text field only while it's
    actively being edited (real character size, not the field's box) */
 .font-size-ctl {

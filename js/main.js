@@ -3,7 +3,7 @@
    floaties were removed earlier, this file is countdown-only now. */
 
 var CD_TBA_HTML =
-  '<div class="countdown cd-tba">' +
+  '<div class="countdown cd-tba" data-resize-id="container.countdown">' +
     '<svg class="cd-cal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
     'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
     '<rect x="3" y="5" width="18" height="16" rx="2" /><path d="M3 9h18M8 3v4M16 3v4" /></svg>' +
@@ -48,7 +48,7 @@ function logisticsTile(t, i) {
 }
 
 var CD_CLOCK_HTML =
-  '<div class="countdown" id="countdown">' +
+  '<div class="countdown" id="countdown" data-resize-id="container.countdown">' +
     '<span class="cd-label" data-edit-id="countdown.clock.label">Workshop begins in</span>' +
     '<div class="cd-clock">' +
       '<div class="cd-unit"><b id="cd-d">00</b><span>days</span></div>' +
@@ -343,6 +343,25 @@ function applyFontSizeOverrides(sizes) {
   document.querySelectorAll("[data-edit-id]").forEach(function (el) {
     var id = el.getAttribute("data-edit-id");
     if (sizes[id]) el.style.fontSize = sizes[id];
+  });
+}
+
+/**
+ * Applies saved left/top offsets (from a move-handle drag, see
+ * wireMovable()) on top of the page's own default flow position, for every
+ * text field that carries one. Runs on every load, live site included,
+ * same as applyTextOverrides().
+ * @param positions content.positions, {id: {x, y}}
+ */
+function applyPositionOverrides(positions) {
+  positions = positions || {};
+  document.querySelectorAll("[data-edit-id]").forEach(function (el) {
+    var id = el.getAttribute("data-edit-id");
+    var p = positions[id];
+    if (!p) return;
+    el.style.position = "relative";
+    el.style.left = p.x;
+    el.style.top = p.y;
   });
 }
 
@@ -870,6 +889,7 @@ document.addEventListener("DOMContentLoaded", function () {
       applyTextOverrides(textMap);
       applySizeOverrides(data.sizes);
       applyFontSizeOverrides(data.font_sizes);
+      applyPositionOverrides(data.positions);
       if (isPreviewMode() && isEditMode()) { wireResizable(); wireClickToEdit(); }
     })
     .catch(function () {

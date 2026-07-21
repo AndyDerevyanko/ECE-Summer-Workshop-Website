@@ -60,7 +60,10 @@ function seed() {
        boxes) or data-resize-id (images/icons), {id: {w, h}} in css px */
     sizes: {},
     /* A-/A+ font-size bumps in the visual editor, keyed by data-edit-id */
-    font_sizes: {}
+    font_sizes: {},
+    /* move-handle drags in the visual editor, text fields only, keyed by
+       data-edit-id, {id: {x, y}} left/top offsets in css px */
+    positions: {}
   };
 }
 
@@ -184,6 +187,7 @@ function normalizeState() {
   if (!STATE.text || typeof STATE.text !== "object") STATE.text = {};
   if (!STATE.sizes || typeof STATE.sizes !== "object") STATE.sizes = {};
   if (!STATE.font_sizes || typeof STATE.font_sizes !== "object") STATE.font_sizes = {};
+  if (!STATE.positions || typeof STATE.positions !== "object") STATE.positions = {};
   /* footer contact line used to be its own field, edited from a dedicated
      input in this section; now it's click-to-edit like the rest of the
      landing page copy, so fold any already-saved value in once and stop

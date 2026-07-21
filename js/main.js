@@ -66,6 +66,7 @@ var DEFAULT_LOGISTICS = [
 ];
 var DEFAULT_JOIN_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
 var DEFAULT_APPLY_TOOLTIP = "Applications open once the workshop dates are confirmed, check back soon.";
+var DEFAULT_HERO_VIDEO = "assets/cover-video.mp4";
 
 /**
  * Checks whether this page was opened from the ta portal's preview page
@@ -508,6 +509,18 @@ document.addEventListener("DOMContentLoaded", function () {
     document.querySelectorAll(".join-link").forEach(function (a) { a.setAttribute("data-tooltip", text); });
   }
 
+  /**
+   * Points the hero's background video at a staff-uploaded clip instead of
+   * the hardcoded default, reloading it so the new src actually takes.
+   * @param url video url (staff upload or the default assets/cover-video.mp4)
+   */
+  function setHeroVideo(url) {
+    var video = document.querySelector(".hero-bg");
+    if (!video || video.getAttribute("src") === url) return;
+    video.setAttribute("src", url);
+    video.load();
+  }
+
   fetchContent()
     .then(function (data) {
       if (data.timer_mode === "actual" && data.timer_target) {
@@ -520,6 +533,7 @@ document.addEventListener("DOMContentLoaded", function () {
       renderTiles(resolveLogistics(data));
       setJoinUrl(data.join_url || DEFAULT_JOIN_URL);
       setApplyTooltip(data.apply_tooltip || DEFAULT_APPLY_TOOLTIP);
+      setHeroVideo(data.hero_video_url || DEFAULT_HERO_VIDEO);
 
       /* the footer contact line used to be its own content.contact_text
          field; it's click-to-edit now like the rest of the landing page

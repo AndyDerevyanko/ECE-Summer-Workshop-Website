@@ -18,6 +18,7 @@ function seed() {
     timer_target: "",
     join_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
     apply_tooltip: "Applications open once the workshop dates are confirmed, check back soon.",
+    hero_video_url: "assets/cover-video.mp4",
     logistics: [
       { big: "2 weeks", lbl: "Tentative start date", icon: false },
       { big: "4 hours", lbl: "1:30pm–5:30pm", icon: false },
@@ -151,6 +152,7 @@ function normalizeState() {
     STATE.apply_tooltip = "Applications open once the workshop dates are confirmed, check back soon.";
   }
   if (!STATE.total_days) STATE.total_days = 10;
+  if (STATE.hero_video_url === undefined) STATE.hero_video_url = "assets/cover-video.mp4";
   if (!STATE.gallery || !Array.isArray(STATE.gallery.years)) STATE.gallery = seed().gallery;
 
   if (!STATE.text || typeof STATE.text !== "object") STATE.text = {};
@@ -946,6 +948,13 @@ function syncLanding() {
   document.getElementById("cdTarget").value = STATE.timer_target;
   document.getElementById("joinUrlInput").value = STATE.join_url;
   document.getElementById("applyTooltipInput").value = STATE.apply_tooltip;
+
+  var nameEl = document.getElementById("heroVideoName");
+  var isDefault = STATE.hero_video_url === "assets/cover-video.mp4";
+  nameEl.textContent = isDefault ?
+    "Using the default clip." :
+    "Custom: " + STATE.hero_video_url.split("/").pop();
+  document.getElementById("heroVideoReset").disabled = isDefault;
 }
 
 /** Re-renders every editor section from STATE. */
@@ -1505,6 +1514,28 @@ document.addEventListener("DOMContentLoaded", function () {
         if (err.message === "expired") return;
         showMsg("Couldn't upload one of the files. Try again.", false);
       });
+  });
+
+  document.getElementById("heroVideoFile").addEventListener("change", function () {
+    var file = this.files[0];
+    this.value = "";
+    if (!file) return;
+    showMsg("Uploading...", true);
+    uploadFile(file)
+      .then(function (item) {
+        STATE.hero_video_url = item.url;
+        showMsg("Uploaded. Don't forget to save your changes.", true);
+        syncLanding();
+      })
+      .catch(function (err) {
+        if (err.message === "expired") return;
+        showMsg("Couldn't upload the video. Try again.", false);
+      });
+  });
+
+  document.getElementById("heroVideoReset").addEventListener("click", function () {
+    STATE.hero_video_url = "assets/cover-video.mp4";
+    syncLanding();
   });
 
   var extraLinkRow = document.getElementById("extraLinkRow");

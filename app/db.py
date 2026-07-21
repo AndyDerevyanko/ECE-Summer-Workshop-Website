@@ -46,6 +46,7 @@ DEFAULT_CONTENT = {
     "timer_target": "",
     "join_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
     "apply_tooltip": "Applications open once the workshop dates are confirmed, check back soon.",
+    "hero_video_url": "assets/cover-video.mp4",
     "logistics": [
         {"big": "2 weeks", "lbl": "Tentative start date", "icon": False},
         {"big": "4 hours", "lbl": "1:30pm–5:30pm", "icon": False},

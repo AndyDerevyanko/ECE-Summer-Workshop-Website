@@ -138,6 +138,12 @@ DEFAULT_CONTENT = {
     # data-edit-id on the element in templates/index.html. empty means "show
     # the page's own default text".
     "text": {},
+    # resize-handle drags in the visual editor, keyed by data-edit-id (text
+    # boxes) or data-resize-id (images/icons), {id: {w, h}} in css px.
+    "sizes": {},
+    # A-/A+ font-size bumps in the visual editor, keyed by data-edit-id, css
+    # px string.
+    "font_sizes": {},
 }
 
 

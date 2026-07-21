@@ -55,7 +55,12 @@ function seed() {
        schedule, etc), keyed by the data-edit-id on the element in
        index.html. empty means "show the page's own default text". set from
        the click-to-edit ui in preview.html, see js/main.js's editMode(). */
-    text: {}
+    text: {},
+    /* resize-handle drags in the visual editor, keyed by data-edit-id (text
+       boxes) or data-resize-id (images/icons), {id: {w, h}} in css px */
+    sizes: {},
+    /* A-/A+ font-size bumps in the visual editor, keyed by data-edit-id */
+    font_sizes: {}
   };
 }
 
@@ -177,6 +182,8 @@ function normalizeState() {
   if (!STATE.gallery || !Array.isArray(STATE.gallery.years)) STATE.gallery = seed().gallery;
 
   if (!STATE.text || typeof STATE.text !== "object") STATE.text = {};
+  if (!STATE.sizes || typeof STATE.sizes !== "object") STATE.sizes = {};
+  if (!STATE.font_sizes || typeof STATE.font_sizes !== "object") STATE.font_sizes = {};
   /* footer contact line used to be its own field, edited from a dedicated
      input in this section; now it's click-to-edit like the rest of the
      landing page copy, so fold any already-saved value in once and stop

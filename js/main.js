@@ -33,6 +33,7 @@ function logisticsTile(t, i) {
   big.className = "big";
   if (t.icon) {
     big.innerHTML = CHECK_ICON_SVG;
+    big.querySelector("svg").setAttribute("data-resize-id", "logistics." + i + ".icon");
   } else {
     big.textContent = t.big;
     big.setAttribute("data-edit-id", "logistics." + i + ".big");
@@ -303,10 +304,238 @@ function applyTextOverrides(textMap) {
   });
 }
 
+/**
+ * Applies saved width/height overrides (from a resize-handle drag, see
+ * makeResizable()) on top of the page's own default sizing, for every text
+ * box, image, or icon that carries either a data-edit-id or a
+ * data-resize-id. Runs on every load (live site included), same as
+ * applyTextOverrides().
+ * @param sizes content.sizes, {id: {w, h}}
+ */
+function applySizeOverrides(sizes) {
+  sizes = sizes || {};
+  document.querySelectorAll("[data-edit-id], [data-resize-id]").forEach(function (el) {
+    var id = el.getAttribute("data-edit-id") || el.getAttribute("data-resize-id");
+    var s = sizes[id];
+    if (!s) return;
+    el.style.width = s.w;
+    el.style.height = s.h;
+    /* same overrides makeResizable() sets mid-drag, needed here too since
+       this runs outside the visual editor (no .resize-wrap involved, el is
+       its own flex/grid item): otherwise the site's global "img { max-width:
+       100% }" reset, or a flex/grid parent's default stretch, would silently
+       clamp the saved size straight back down on a normal page load */
+    el.style.maxWidth = "none";
+    el.style.flex = "none";
+    el.style.alignSelf = "start";
+    el.style.justifySelf = "start";
+  });
+}
+
+/**
+ * Applies saved font-size overrides (from the A-/A+ buttons, see
+ * ensureFontSizeCtl()) on top of the page's own default type scale, for
+ * every click-to-edit text field that carries one.
+ * @param sizes content.font_sizes, {id: px}
+ */
+function applyFontSizeOverrides(sizes) {
+  sizes = sizes || {};
+  document.querySelectorAll("[data-edit-id]").forEach(function (el) {
+    var id = el.getAttribute("data-edit-id");
+    if (sizes[id]) el.style.fontSize = sizes[id];
+  });
+}
+
 /* undo/redo for click-to-edit, a plain stack of {id, before, after} commits.
    a fresh edit clears the redo stack, same convention as any text editor. */
 var EDIT_UNDO = [];
 var EDIT_REDO = [];
+
+/**
+ * Wraps el in a positioned <span class="resize-wrap"> (skipped if already
+ * wrapped) and gives it a small drag handle in the bottom-right corner.
+ * Dragging sets el.style.width/height directly in px on every mousemove,
+ * which (unlike the CSS `resize` property this replaces) can't be
+ * swallowed by a contenteditable field's own text-selection dragging and
+ * always wins over a flex/grid parent's normal stretch sizing. Wrapping
+ * happens once per element, at wireResizable() time; the wrap and grip stay
+ * in the DOM for the rest of the edit session regardless of whether that
+ * particular field is the one currently being text-edited (see
+ * .resize-wrap:hover in css/style.css for how the grip shows itself).
+ * The wrap's own display is matched to el's natural one (block stays
+ * block, inline becomes inline-block): forcing every wrap to inline-block
+ * regardless used to pull block-level siblings (eg. a heading and the
+ * paragraph under it) onto the same line the moment both got wrapped,
+ * since two inline-block boxes sit side by side instead of stacking.
+ * @param el the element to make resizable
+ * @param onCommit called with (widthPx, heightPx) once a drag ends, or
+ *   (null, null) if double-clicking the grip reset it back to default
+ * @return the wrap element
+ */
+function makeResizable(el, onCommit) {
+  var wrap = el.parentNode;
+  if (wrap && wrap.classList && wrap.classList.contains("resize-wrap")) return wrap;
+
+  var naturalDisplay = getComputedStyle(el).display;
+  wrap = document.createElement("span");
+  wrap.className = "resize-wrap";
+  wrap.style.display = naturalDisplay === "inline" ? "inline-block" : "block";
+  el.parentNode.insertBefore(wrap, el);
+  wrap.appendChild(el);
+
+  var grip = document.createElement("span");
+  grip.className = "resize-grip";
+  grip.setAttribute("contenteditable", "false");
+  wrap.appendChild(grip);
+
+  grip.addEventListener("mousedown", function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    var startX = e.clientX, startY = e.clientY;
+    var rect = el.getBoundingClientRect();
+    var startW = rect.width, startH = rect.height;
+    /* an explicit width/height only sticks if:
+       - wrap (the actual flex/grid item, since el is one level deeper)
+         isn't forced to stretch across its cell, and
+       - el itself isn't capped by the site's global "img { max-width:
+         100% }" reset (or .resize-wrap's own max-width:100%), both meant
+         to stop an image overflowing its column under normal sizing, not
+         a size the ta picked on purpose */
+    wrap.style.flex = "none";
+    wrap.style.alignSelf = "start";
+    wrap.style.justifySelf = "start";
+    wrap.style.maxWidth = "none";
+    el.style.maxWidth = "none";
+
+    function onMove(ev) {
+      el.style.width = Math.max(20, startW + (ev.clientX - startX)) + "px";
+      el.style.height = Math.max(16, startH + (ev.clientY - startY)) + "px";
+    }
+    function onUp() {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      onCommit(el.style.width, el.style.height);
+    }
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  });
+
+  grip.addEventListener("dblclick", function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    el.style.width = "";
+    el.style.height = "";
+    onCommit(null, null);
+  });
+
+  return wrap;
+}
+
+/**
+ * Adds a small move handle to a text field's resize wrap (skipped if it
+ * already has one), letting it be dragged off its normal flow position.
+ * Nudges the wrap with position:relative + left/top (not a transform),
+ * which keeps the field's normal layout space reserved, so dragging one
+ * field out of the way doesn't reflow everything after it, it just visibly
+ * floats from where it used to be.
+ * @param wrap the field's resize-wrap (see makeResizable())
+ * @param onCommit called with (leftPx, topPx) once a drag ends, or
+ *   (null, null) if double-clicking the handle reset it back to place
+ */
+function wireMovable(wrap, onCommit) {
+  if (wrap.querySelector(".move-grip")) return;
+
+  var grip = document.createElement("span");
+  grip.className = "move-grip";
+  grip.setAttribute("contenteditable", "false");
+  grip.title = "Drag to move";
+  wrap.appendChild(grip);
+
+  grip.addEventListener("mousedown", function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    var startX = e.clientX, startY = e.clientY;
+    var baseLeft = parseFloat(wrap.style.left) || 0;
+    var baseTop = parseFloat(wrap.style.top) || 0;
+    wrap.style.position = "relative";
+
+    function onMove(ev) {
+      wrap.style.left = (baseLeft + ev.clientX - startX) + "px";
+      wrap.style.top = (baseTop + ev.clientY - startY) + "px";
+    }
+    function onUp() {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      onCommit(wrap.style.left, wrap.style.top);
+    }
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  });
+
+  grip.addEventListener("dblclick", function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    wrap.style.left = "";
+    wrap.style.top = "";
+    onCommit(null, null);
+  });
+}
+
+/**
+ * Makes every text field, image, icon, and container box on the page
+ * (anything carrying a data-edit-id or data-resize-id) resizable via a
+ * drag handle, and every text field additionally movable off its normal
+ * flow position, only called in the ta portal's Visual editor tab
+ * alongside wireClickToEdit().
+ */
+function wireResizable() {
+  document.querySelectorAll("[data-edit-id], [data-resize-id]").forEach(function (el) {
+    var editId = el.getAttribute("data-edit-id");
+    var id = editId || el.getAttribute("data-resize-id");
+    var wrap = makeResizable(el, function (w, h) { saveEditedSize(id, w, h); });
+    if (editId) wireMovable(wrap, function (x, y) { saveEditedPosition(editId, x, y); });
+  });
+}
+
+/**
+ * Adds the A-/A+ font-size buttons to a text field's resize wrap, if it
+ * doesn't have them yet. Mousedown on the buttons is swallowed before it
+ * can steal focus away from el, so bumping the size repeatedly doesn't
+ * blur (and thereby end) the current edit.
+ * @param el the text field being edited
+ * @param wrap el's resize-wrap
+ * @return the control, existing or newly created
+ */
+function ensureFontSizeCtl(el, wrap) {
+  var ctl = wrap.querySelector(".font-size-ctl");
+  if (ctl) return ctl;
+
+  ctl = document.createElement("span");
+  ctl.className = "font-size-ctl";
+  ctl.setAttribute("contenteditable", "false");
+  ctl.innerHTML =
+    '<button type="button" class="fs-dn" title="Smaller text">A-</button>' +
+    '<button type="button" class="fs-up" title="Larger text">A+</button>';
+  wrap.appendChild(ctl);
+
+  var id = el.getAttribute("data-edit-id");
+  function bump(delta) {
+    var cur = parseFloat(getComputedStyle(el).fontSize) || 16;
+    var next = Math.max(8, Math.min(120, Math.round(cur + delta)));
+    el.style.fontSize = next + "px";
+    saveFontSize(id, next + "px");
+  }
+  ["fs-dn", "fs-up"].forEach(function (cls) {
+    var btn = ctl.querySelector("." + cls);
+    btn.addEventListener("mousedown", function (e) { e.preventDefault(); e.stopPropagation(); });
+    btn.addEventListener("click", function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      bump(cls === "fs-dn" ? -2 : 2);
+    });
+  });
+  return ctl;
+}
 
 /**
  * Turns every data-edit-id element into a click-to-edit field, only called
@@ -331,12 +560,14 @@ function wireClickToEdit() {
       e.preventDefault();
       e.stopPropagation();
       beforeEdit = el.innerHTML;
-      /* stamp the field's current rendered width before switching it to a
-         resizable inline-block, so becoming resizable doesn't itself
-         reflow the page */
-      el.style.width = el.getBoundingClientRect().width + "px";
       el.contentEditable = "true";
       el.classList.add("editing");
+      /* el was already wrapped by wireResizable(); light up its resize grip
+         and reveal the A-/A+ font-size buttons while text is being edited */
+      if (el.parentNode.classList.contains("resize-wrap")) {
+        el.parentNode.classList.add("has-editing");
+        ensureFontSizeCtl(el, el.parentNode);
+      }
       el.focus();
       var range = document.createRange();
       range.selectNodeContents(el);
@@ -355,10 +586,7 @@ function wireClickToEdit() {
       if (!el.isContentEditable) return;
       el.contentEditable = "false";
       el.classList.remove("editing");
-      /* drop the stamped width and any manual resize, both are only
-         meant to apply while the box is actively being edited */
-      el.style.width = "";
-      el.style.height = "";
+      if (el.parentNode.classList.contains("resize-wrap")) el.parentNode.classList.remove("has-editing");
       var after = el.innerHTML;
       if (after !== beforeEdit) {
         EDIT_UNDO.push({ id: el.getAttribute("data-edit-id"), before: beforeEdit, after: after });
@@ -465,6 +693,61 @@ function saveEditedField(id, html, defaultHtml) {
     else snapshot.text[id] = html;
   }
 
+  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
+ * Persists a resize-handle drag (see makeResizable()) into the preview
+ * snapshot, the same localStorage draft saveEditedField() uses, so a
+ * resized image, icon, or text box round-trips through Apply/profiles
+ * exactly like an edited caption does.
+ * @param id the element's data-edit-id or data-resize-id
+ * @param w new width (css px string), or null to clear back to default
+ * @param h new height (css px string), or null to clear back to default
+ */
+function saveEditedSize(id, w, h) {
+  var raw;
+  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  if (!snapshot.sizes || typeof snapshot.sizes !== "object") snapshot.sizes = {};
+  if (!w || !h) delete snapshot.sizes[id];
+  else snapshot.sizes[id] = { w: w, h: h };
+  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
+ * Persists a font-size bump from the A-/A+ buttons (see
+ * ensureFontSizeCtl()) into the preview snapshot, the same draft
+ * everything else here uses.
+ * @param id the element's data-edit-id
+ * @param px new font-size (css px string)
+ */
+function saveFontSize(id, px) {
+  var raw;
+  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  if (!snapshot.font_sizes || typeof snapshot.font_sizes !== "object") snapshot.font_sizes = {};
+  snapshot.font_sizes[id] = px;
+  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
+ * Persists a move-handle drag (see wireMovable()) into the preview
+ * snapshot, the same draft everything else here uses.
+ * @param id the element's data-edit-id
+ * @param x new left offset (css px string), or null to clear back to place
+ * @param y new top offset (css px string), or null to clear back to place
+ */
+function saveEditedPosition(id, x, y) {
+  var raw;
+  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  if (!snapshot.positions || typeof snapshot.positions !== "object") snapshot.positions = {};
+  if (!x || !y) delete snapshot.positions[id];
+  else snapshot.positions[id] = { x: x, y: y };
   try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
 }
 
@@ -585,7 +868,9 @@ document.addEventListener("DOMContentLoaded", function () {
         textMap["footer.contact"] = data.contact_text;
       }
       applyTextOverrides(textMap);
-      if (isPreviewMode() && isEditMode()) wireClickToEdit();
+      applySizeOverrides(data.sizes);
+      applyFontSizeOverrides(data.font_sizes);
+      if (isPreviewMode() && isEditMode()) { wireResizable(); wireClickToEdit(); }
     })
     .catch(function () {
       slot.innerHTML = CD_TBA_HTML;

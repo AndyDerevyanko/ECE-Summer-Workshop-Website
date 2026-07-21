@@ -1262,25 +1262,77 @@ body.edit-mode [data-edit-id] {
   transition: outline-style .15s;
 }
 body.edit-mode [data-edit-id]:hover { outline-style: solid; }
-/* while actively editing, the field becomes a resizable box (drag the
-   corner handle) so a long paragraph gets more room to work in; the width
-   is stamped on click to match the field's normal rendered size so turning
-   this on doesn't itself shift the page, and both the stamped size and any
-   manual resize are cleared again on blur, see wireClickToEdit() in
-   js/main.js, so it never affects normal (non-editing) layout */
 body.edit-mode [data-edit-id].editing {
   cursor: text;
   outline: 2px solid var(--accent);
   outline-offset: 3px;
   background: var(--surface);
-  display: inline-block;
-  vertical-align: top;
-  max-width: 100%;
-  min-width: 3ch;
-  min-height: 1.3em;
-  resize: both;
-  overflow: auto;
 }
+
+/* images/icons get the same always-visible dashed outline as text fields,
+   so it's obvious at a glance they're resizable too (see data-resize-id in
+   templates/index.html, wireResizable() in js/main.js) */
+body.edit-mode [data-resize-id] {
+  outline: 1px dashed var(--accent);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+body.edit-mode [data-resize-id]:hover { outline-style: solid; }
+
+/* custom drag-to-resize handle, replacing the native CSS `resize` property:
+   `resize` doesn't reliably show up (or grab correctly) on a contenteditable
+   text field since the browser's own text-selection dragging competes for
+   the same corner pixels, and a flex/grid parent can silently override an
+   explicit width/height anyway. makeResizable() in js/main.js wraps every
+   resizable field once in edit mode and drives the resize itself with
+   plain mousemove math, which always wins. the grip only shows on hover
+   (or while a text field is actively being edited) so 90-odd fields don't
+   all show a handle at once. */
+.resize-wrap { position: relative; display: inline-block; max-width: 100%; vertical-align: top; }
+.resize-grip {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  width: 13px;
+  height: 13px;
+  border-radius: 3px;
+  background: var(--accent);
+  cursor: nwse-resize;
+  opacity: 0;
+  transition: opacity .15s;
+  z-index: 5;
+}
+.resize-wrap:hover .resize-grip, .resize-wrap.has-editing .resize-grip { opacity: 1; }
+
+/* A-/A+ font-size buttons, shown above a text field only while it's
+   actively being edited (real character size, not the field's box) */
+.font-size-ctl {
+  position: absolute;
+  top: -28px;
+  left: 0;
+  display: none;
+  gap: 3px;
+  background: var(--surface);
+  border-radius: 7px;
+  padding: 3px;
+  z-index: 6;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .3);
+}
+.resize-wrap.has-editing .font-size-ctl { display: flex; }
+.font-size-ctl button {
+  border: none;
+  background: var(--surface-2);
+  color: var(--text);
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: .72rem;
+  font-weight: 700;
+  line-height: 1;
+}
+.font-size-ctl button:hover { background: var(--accent); color: #fff; }
 
 /* ta portal's own mini logistics-tile preview (js/ta.js's wireInlineEdit()):
    click straight through to STATE, no edit-mode gate needed since this

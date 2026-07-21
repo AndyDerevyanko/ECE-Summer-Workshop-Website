@@ -67,6 +67,22 @@ var DEFAULT_LOGISTICS = [
 var DEFAULT_JOIN_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
 var DEFAULT_APPLY_TOOLTIP = "Applications open once the workshop dates are confirmed, check back soon.";
 var DEFAULT_HERO_VIDEO = "assets/cover-video.mp4";
+/* landing page photo slots, same shape/values as home_images in
+   DEFAULT_CONTENT, app/db.py. keys map to the <img> ids below. */
+var DEFAULT_HOME_IMAGES = {
+  about_hero: "assets/gallery/group-main-alt.jpeg",
+  about_1: "assets/gallery/class-closeup.jpeg",
+  about_2: "assets/gallery/robot-closeup.png",
+  about_3: "assets/gallery/class-2.jpeg",
+  certificate: "assets/certificate.png"
+};
+var HOME_IMAGE_ELS = {
+  about_hero: "imgAboutHero",
+  about_1: "imgAboutGrid1",
+  about_2: "imgAboutGrid2",
+  about_3: "imgAboutGrid3",
+  certificate: "imgCertificate"
+};
 
 /**
  * Checks whether this page was opened from the ta portal's preview page
@@ -315,6 +331,10 @@ function wireClickToEdit() {
       e.preventDefault();
       e.stopPropagation();
       beforeEdit = el.innerHTML;
+      /* stamp the field's current rendered width before switching it to a
+         resizable inline-block, so becoming resizable doesn't itself
+         reflow the page */
+      el.style.width = el.getBoundingClientRect().width + "px";
       el.contentEditable = "true";
       el.classList.add("editing");
       el.focus();
@@ -335,6 +355,10 @@ function wireClickToEdit() {
       if (!el.isContentEditable) return;
       el.contentEditable = "false";
       el.classList.remove("editing");
+      /* drop the stamped width and any manual resize, both are only
+         meant to apply while the box is actively being edited */
+      el.style.width = "";
+      el.style.height = "";
       var after = el.innerHTML;
       if (after !== beforeEdit) {
         EDIT_UNDO.push({ id: el.getAttribute("data-edit-id"), before: beforeEdit, after: after });
@@ -521,6 +545,21 @@ document.addEventListener("DOMContentLoaded", function () {
     video.load();
   }
 
+  /**
+   * Points each landing-page photo slot (about section + certificate) at a
+   * staff-uploaded replacement, if set, falling back to the template's own
+   * default otherwise.
+   * @param images content.home_images, {slot key: url}
+   */
+  function setHomeImages(images) {
+    images = images || {};
+    Object.keys(HOME_IMAGE_ELS).forEach(function (key) {
+      var el = document.getElementById(HOME_IMAGE_ELS[key]);
+      if (!el) return;
+      el.src = images[key] || DEFAULT_HOME_IMAGES[key];
+    });
+  }
+
   fetchContent()
     .then(function (data) {
       if (data.timer_mode === "actual" && data.timer_target) {
@@ -534,6 +573,7 @@ document.addEventListener("DOMContentLoaded", function () {
       setJoinUrl(data.join_url || DEFAULT_JOIN_URL);
       setApplyTooltip(data.apply_tooltip || DEFAULT_APPLY_TOOLTIP);
       setHeroVideo(data.hero_video_url || DEFAULT_HERO_VIDEO);
+      setHomeImages(data.home_images);
 
       /* the footer contact line used to be its own content.contact_text
          field; it's click-to-edit now like the rest of the landing page

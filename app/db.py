@@ -47,6 +47,15 @@ DEFAULT_CONTENT = {
     "join_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
     "apply_tooltip": "Applications open once the workshop dates are confirmed, check back soon.",
     "hero_video_url": "assets/cover-video.mp4",
+    # landing page photos (about section + certificate), staff-replaceable
+    # from the content manager's "Site images" section, see js/ta.js.
+    "home_images": {
+        "about_hero": "assets/gallery/group-main-alt.jpeg",
+        "about_1": "assets/gallery/class-closeup.jpeg",
+        "about_2": "assets/gallery/robot-closeup.png",
+        "about_3": "assets/gallery/class-2.jpeg",
+        "certificate": "assets/certificate.png",
+    },
     "logistics": [
         {"big": "2 weeks", "lbl": "Tentative start date", "icon": False},
         {"big": "4 hours", "lbl": "1:30pm–5:30pm", "icon": False},

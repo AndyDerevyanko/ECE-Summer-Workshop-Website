@@ -983,6 +983,10 @@ h1, h2, h3 {
    read as "the same accent-ish blob"), so pin the input back to the plain
    surface color, which now contrasts against the tinted card around it */
 .ta-card-hl .field input { background: var(--surface); }
+/* one row per landing-page photo slot in the "Site images" card, see
+   renderHomeImages() in js/ta.js. no thumbnail, upload/reset buttons only */
+.home-img-row { margin-bottom: 20px; }
+.home-img-row:last-child { margin-bottom: 0; }
 .ta-panel-head {
   display: flex;
   align-items: center;
@@ -1258,11 +1262,24 @@ body.edit-mode [data-edit-id] {
   transition: outline-style .15s;
 }
 body.edit-mode [data-edit-id]:hover { outline-style: solid; }
+/* while actively editing, the field becomes a resizable box (drag the
+   corner handle) so a long paragraph gets more room to work in; the width
+   is stamped on click to match the field's normal rendered size so turning
+   this on doesn't itself shift the page, and both the stamped size and any
+   manual resize are cleared again on blur, see wireClickToEdit() in
+   js/main.js, so it never affects normal (non-editing) layout */
 body.edit-mode [data-edit-id].editing {
   cursor: text;
   outline: 2px solid var(--accent);
   outline-offset: 3px;
   background: var(--surface);
+  display: inline-block;
+  vertical-align: top;
+  max-width: 100%;
+  min-width: 3ch;
+  min-height: 1.3em;
+  resize: both;
+  overflow: auto;
 }
 
 /* ta portal's own mini logistics-tile preview (js/ta.js's wireInlineEdit()):

@@ -1,6 +1,24 @@
 /* ta portal. everything edits the in-memory STATE object below; loaded from
    and saved to /api/content, which is the single source of truth. */
 
+/* landing page photo slots, editable from the content manager's "Site
+   images" section (renderHomeImages() below). same keys/defaults as
+   home_images in DEFAULT_CONTENT, app/db.py. */
+var HOME_IMAGE_SLOTS = [
+  { key: "about_hero", label: "About section, main photo" },
+  { key: "about_1", label: "About section, photo 1" },
+  { key: "about_2", label: "About section, photo 2" },
+  { key: "about_3", label: "About section, photo 3" },
+  { key: "certificate", label: "Certificate photo" }
+];
+var HOME_IMAGE_DEFAULTS = {
+  about_hero: "assets/gallery/group-main-alt.jpeg",
+  about_1: "assets/gallery/class-closeup.jpeg",
+  about_2: "assets/gallery/robot-closeup.png",
+  about_3: "assets/gallery/class-2.jpeg",
+  certificate: "assets/certificate.png"
+};
+
 /**
  * Returns a fresh default content blob, used for a brand-new profile and
  * to fill in missing fields in normalizeState().
@@ -19,6 +37,7 @@ function seed() {
     join_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
     apply_tooltip: "Applications open once the workshop dates are confirmed, check back soon.",
     hero_video_url: "assets/cover-video.mp4",
+    home_images: Object.assign({}, HOME_IMAGE_DEFAULTS),
     logistics: [
       { big: "2 weeks", lbl: "Tentative start date", icon: false },
       { big: "4 hours", lbl: "1:30pm–5:30pm", icon: false },
@@ -153,6 +172,8 @@ function normalizeState() {
   }
   if (!STATE.total_days) STATE.total_days = 10;
   if (STATE.hero_video_url === undefined) STATE.hero_video_url = "assets/cover-video.mp4";
+  if (!STATE.home_images || typeof STATE.home_images !== "object") STATE.home_images = {};
+  STATE.home_images = Object.assign({}, HOME_IMAGE_DEFAULTS, STATE.home_images);
   if (!STATE.gallery || !Array.isArray(STATE.gallery.years)) STATE.gallery = seed().gallery;
 
   if (!STATE.text || typeof STATE.text !== "object") STATE.text = {};
@@ -1030,6 +1051,56 @@ function renderGallery() {
   });
 }
 
+/**
+ * Renders the "Site images" list: one row per landing-page photo slot
+ * (HOME_IMAGE_SLOTS), upload/reset controls only, no <img> preview (use
+ * Preview to see how it actually looks, same reasoning as not thumbnailing
+ * every gallery photo, see renderGallery()).
+ */
+function renderHomeImages() {
+  var list = document.getElementById("homeImagesList");
+  if (!list) return;
+  list.innerHTML = HOME_IMAGE_SLOTS.map(function (slot) {
+    var url = STATE.home_images[slot.key];
+    var isDefault = url === HOME_IMAGE_DEFAULTS[slot.key];
+    return '<div class="home-img-row" data-key="' + slot.key + '">' +
+      '<div class="field" style="margin-bottom:6px"><label>' + slot.label + '</label></div>' +
+      '<p class="muted home-img-name" style="margin:0 0 10px">' +
+        (isDefault ? "Using the default photo." : "Custom: " + url.split("/").pop()) +
+      '</p>' +
+      '<label class="btn btn-ghost ta-upload">' +
+        '<svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+        'stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>' +
+        ' Upload image<input type="file" accept="image/*" class="home-img-file" hidden></label> ' +
+      '<button class="btn btn-ghost home-img-reset" type="button"' + (isDefault ? " disabled" : "") + '>Reset to default</button>' +
+    '</div>';
+  }).join("");
+
+  list.querySelectorAll(".home-img-row").forEach(function (row) {
+    var key = row.getAttribute("data-key");
+    row.querySelector(".home-img-file").addEventListener("change", function () {
+      var file = this.files[0];
+      this.value = "";
+      if (!file) return;
+      showMsg("Uploading...", true);
+      uploadFile(file)
+        .then(function (item) {
+          STATE.home_images[key] = item.url;
+          showMsg("Uploaded. Don't forget to save your changes.", true);
+          renderHomeImages();
+        })
+        .catch(function (err) {
+          if (err.message === "expired") return;
+          showMsg("Couldn't upload the image. Try again.", false);
+        });
+    });
+    row.querySelector(".home-img-reset").addEventListener("click", function () {
+      STATE.home_images[key] = HOME_IMAGE_DEFAULTS[key];
+      renderHomeImages();
+    });
+  });
+}
+
 /** Pushes STATE into the landing page controls' input values. */
 function syncLanding() {
   var radios = document.querySelectorAll('input[name="cdMode"]');
@@ -1053,6 +1124,7 @@ function renderAll() {
   renderExtras();
   renderLogistics();
   renderGallery();
+  renderHomeImages();
   syncLanding();
   renderPreview();
 }

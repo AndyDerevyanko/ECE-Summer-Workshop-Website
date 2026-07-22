@@ -387,25 +387,31 @@ function syncStacking(el) {
 }
 
 /**
- * Sums the own move offsets of every tracked ancestor above el. Used to
- * cancel a container's translate back out of the elements inside it:
- * moving a section or a card slides only that box, never the independent
- * text/icons/images sitting in it (no attachment between elements), so
- * each one paints at its own offset minus whatever its ancestors added.
+ * The move offset of el's NEAREST tracked ancestor only, not every tracked
+ * ancestor above it. Used to cancel a container's translate back out of the
+ * elements inside it: moving a section or a card slides only that box,
+ * never the independent text/icons/images sitting in it (no attachment
+ * between elements). Only the nearest one matters because css transforms
+ * compound down the real dom chain on their own: a card nested in a moved
+ * section already paints its own cancel-transform for the section's move,
+ * and that cancellation carries down to everything inside the card for
+ * free. A title two levels down (section > card > title) summing BOTH
+ * the section's offset and the card's would cancel the section's move
+ * twice, once via the card's own painted transform propagating down and
+ * again via its own, landing it exactly backwards instead of standing
+ * still.
  * @param el the element
  * @return {tx, ty}
  */
 function ancestorPos(el) {
-  var tx = 0, ty = 0;
   var p = el.parentElement;
   while (p && p !== document.body) {
     if (p.matches && p.matches(RESIZABLE_SEL)) {
-      tx += parseFloat(p.dataset.ovTx) || 0;
-      ty += parseFloat(p.dataset.ovTy) || 0;
+      return { tx: parseFloat(p.dataset.ovTx) || 0, ty: parseFloat(p.dataset.ovTy) || 0 };
     }
     p = p.parentElement;
   }
-  return { tx: tx, ty: ty };
+  return { tx: 0, ty: 0 };
 }
 
 /**
@@ -581,8 +587,21 @@ function detachFromFlow(el) {
   var wrap = el.parentNode;
   if (wrap && wrap.classList && wrap.classList.contains("free-wrap")) return wrap;
 
-  var w = el.offsetWidth !== undefined ? el.offsetWidth : el.getBoundingClientRect().width;
-  var h = el.offsetWidth !== undefined ? el.offsetHeight : el.getBoundingClientRect().height;
+  /* getBoundingClientRect keeps sub-pixel precision; offsetWidth/Height
+     round to a whole css px, which is fine for a transformed element (its
+     visual, scaled size shouldn't become its layout size) but for
+     anything else that rounding is enough to nudge a child's text across
+     its own wrap threshold and reflow it, moving stuff that's supposed to
+     be immune (see freezeDescendants()) */
+  var xf = getComputedStyle(el).transform;
+  var w, h;
+  if (xf && xf !== "none") {
+    w = el.offsetWidth !== undefined ? el.offsetWidth : el.getBoundingClientRect().width;
+    h = el.offsetHeight !== undefined ? el.offsetHeight : el.getBoundingClientRect().height;
+  } else {
+    var rect = el.getBoundingClientRect();
+    w = rect.width; h = rect.height;
+  }
   var naturalDisplay = getComputedStyle(el).display;
 
   wrap = document.createElement("span");
@@ -668,6 +687,48 @@ function positionRing() {
 }
 
 /**
+ * Freezes every tracked element inside el (icon, text, image, whatever) at
+ * its exact current on-screen spot, right before el itself gets resized.
+ * Without this, an untouched descendant is still governed by el's own css
+ * layout (eg flex centering), so growing el would visually drag it along,
+ * breaking "no attachment between elements" just as much as if el's own
+ * move leaked into it (moving is already immune to this, see paintPos()/
+ * ancestorPos(), resizing needs the same guarantee). Pins each one to
+ * whichever ancestor is actually its nearest positioned one (offsetParent)
+ * so a doubly-nested tracked element (an icon inside a card inside the
+ * section being resized) lands relative to the closest thing that makes
+ * sense, not always the outer el. Two passes, same reason
+ * applyPositionOverrides() is two passes: read every wrap's current rect
+ * FIRST, then write the pins second, so pinning the first descendant (an
+ * icon leaving the flex row) can't shift a not-yet-pinned sibling (the
+ * label sliding over to fill the gap) before its own turn comes and it
+ * gets measured already-wrong. A no-op past the first resize, since a
+ * pinned element is already immune to every future one, its own or an
+ * ancestor's.
+ * @param el the element about to be resized
+ */
+function freezeDescendants(el) {
+  var wraps = [];
+  el.querySelectorAll(RESIZABLE_SEL).forEach(function (d) {
+    var wrap = detachFromFlow(d);
+    if (wrap.dataset.pinned !== "1") wraps.push(wrap);
+  });
+  var snaps = wraps.map(function (wrap) {
+    var anchor = wrap.offsetParent || el;
+    return { wrap: wrap, anchor: anchor, cr: anchor.getBoundingClientRect(), tr: wrap.getBoundingClientRect() };
+  });
+  snaps.forEach(function (s) {
+    var cs = getComputedStyle(s.anchor);
+    if (cs.position === "static") s.anchor.style.position = "relative";
+    s.wrap.style.position = "absolute";
+    s.wrap.style.left = (s.tr.left - s.cr.left - (parseFloat(cs.borderLeftWidth) || 0)) + "px";
+    s.wrap.style.top = (s.tr.top - s.cr.top - (parseFloat(cs.borderTopWidth) || 0)) + "px";
+    s.wrap.style.margin = "0";
+    s.wrap.dataset.pinned = "1";
+  });
+}
+
+/**
  * One resize drag from whichever of the 8 handles was grabbed. A real
  * width/height change (see setBox()), so text reflows inside its box at
  * its own size instead of stretching. Dragging a left/top handle keeps
@@ -684,6 +745,7 @@ function startResizeDrag(e) {
   var dir = RING_DIRS[e.target.getAttribute("data-dir")];
   var kind = elKind(el);
   detachFromFlow(el);
+  freezeDescendants(el);
   var startX = e.clientX, startY = e.clientY;
   var start = getSize(el);
   var base = getPos(el);

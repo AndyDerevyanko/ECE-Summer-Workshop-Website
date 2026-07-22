@@ -321,9 +321,11 @@ function elId(el) {
 
 /**
  * Classifies an element so a resize drag can pick the right aspect-ratio
- * rule: an icon never distorts no matter what, an image distorts freely
- * unless shift is held, and everything else (text boxes, cards, sections,
- * buttons) always resizes its two axes independently.
+ * rule: an icon never distorts no matter what (its box's own ratio always
+ * locked); an image never distorts its pixels either (object-fit: cover
+ * re-crops instead), but its box's ratio is only locked while shift is
+ * held; everything else (text boxes, cards, sections, buttons) always
+ * resizes its two axes independently.
  * @param el the element
  * @return "icon", "img" or "box"
  */
@@ -466,9 +468,9 @@ function setOwnPos(el, tx, ty) {
  * anything else on the page). A real box size, not a `transform: scale()`,
  * is the whole point: the box only dictates how the content inside flows.
  * Text rewraps at its own unchanged character size (the A-/A+ buttons are
- * the only thing that changes the letters themselves), and an image
- * stretches to fill whatever shape the box is (see detachFromFlow() for
- * the object-fit that allows that).
+ * the only thing that changes the letters themselves), and an image keeps
+ * its authored object-fit (cover) and re-crops to whatever shape the box
+ * is, rather than stretching its pixels.
  * @param el the element
  * @param w new width in css px
  * @param h new height in css px
@@ -533,11 +535,15 @@ function applyFontSizeOverrides(sizes) {
 /**
  * Applies saved move offsets (from a move-handle drag, see
  * startMoveDrag()) on top of the page's own default flow position. Runs on
- * every load, live site included, same as applyTextOverrides(). Pure
- * transforms, so nothing else on the page ever reflows, and no detaching
- * is needed: a translated element still occupies its original flow slot.
- * Two passes so every element's cancel-out of its ancestors' offsets (see
- * ancestorPos()) sees those offsets already in place.
+ * every load, live site included, same as applyTextOverrides(). A block/
+ * inline-block element's flow slot is untouched either way, a translate is
+ * paint-only, but a naturally *inline* element (a plain <span>, eg. the
+ * hero title text) ignores `transform` entirely per spec until blockified,
+ * so any element carrying a saved position still needs detachFromFlow()
+ * first; a size override already forced that in applySizeOverrides()
+ * (called before this), so this is a no-op for those. Two passes so every
+ * element's cancel-out of its ancestors' offsets (see ancestorPos()) sees
+ * those offsets already in place.
  * @param positions content.positions, {id: {tx, ty}}
  */
 function applyPositionOverrides(positions) {
@@ -546,6 +552,7 @@ function applyPositionOverrides(positions) {
   els.forEach(function (el) {
     var p = positions[elId(el)];
     if (p) {
+      detachFromFlow(el);
       el.dataset.ovTx = p.tx;
       el.dataset.ovTy = p.ty;
     }
@@ -625,9 +632,12 @@ function detachFromFlow(el) {
   el.style.width = w + "px";
   el.style.height = h + "px";
   el.style.transition = "none";
-  /* free stretch: the box dictates the image's shape, ratio is only kept
-     while shift is held during the drag itself (see startResizeDrag()) */
-  if (el.tagName === "IMG") el.style.objectFit = "fill";
+  /* object-fit stays whatever the stylesheet authored (eg. cover, to crop a
+     differently-shaped photo into a fixed box): detaching alone must look
+     pixel-identical to flow, since a plain move calls this too and never
+     changes the box size. Switching to "fill" (so the box freely dictates
+     the image's shape) only happens once an actual resize drag starts, see
+     startResizeDrag() and applySizeOverrides() below, never here. */
   return wrap;
 }
 
@@ -733,8 +743,11 @@ function freezeDescendants(el) {
  * width/height change (see setBox()), so text reflows inside its box at
  * its own size instead of stretching. Dragging a left/top handle keeps
  * the opposite edge pinned by sliding the element's own move offset while
- * the box grows/shrinks. Aspect ratio: icons always locked, images locked
- * only while shift is held, everything else free.
+ * the box grows/shrinks. Aspect ratio: icons always locked; images keep
+ * object-fit: cover (whatever the box's new shape, the photo re-crops to
+ * fill it, never stretched/warped pixel-for-pixel) with shift additionally
+ * locking the box's own proportions so the crop framing doesn't swing
+ * wildly; everything else (text boxes, cards, sections, buttons) is free.
  * @param e the handle's mousedown
  */
 function startResizeDrag(e) {
@@ -787,9 +800,15 @@ function startResizeDrag(e) {
 
 /**
  * One move drag from the ring's move handle: a pure translate on the
- * element itself, any direction, no detaching needed (a translated element
- * still holds its flow slot, so nothing else moves). Tracked elements
- * inside a moved container visually stay put, see setOwnPos().
+ * element itself, any direction. A block/inline-block element's own flow
+ * slot is untouched by a translate (it's paint-only), but a naturally
+ * *inline* element (a plain <span>, eg. the hero title text) is exempt from
+ * `transform` by spec, CSS only honours it on block/inline-block/replaced
+ * boxes, so it must still be detached first (see detachFromFlow()): that
+ * forces a blockified, absolutely-positioned box, whose old flow slot is
+ * held open by its frozen wrap, so nothing shifts either way. A no-op past
+ * the first detach. Tracked elements inside a moved container visually stay
+ * put, see setOwnPos().
  * @param e the handle's mousedown
  */
 function startMoveDrag(e) {
@@ -797,6 +816,7 @@ function startMoveDrag(e) {
   e.preventDefault();
   e.stopPropagation();
   var el = RING_EL;
+  detachFromFlow(el);
   var startX = e.clientX, startY = e.clientY;
   var base = getPos(el);
   RING_DRAGGING = true;
@@ -888,6 +908,10 @@ function wireResizable() {
         RING_DRAGGING = true;
         RING_EL = el;
         document.body.style.userSelect = "none";
+        /* naturally-inline elements (a plain <span>, eg. the hero title
+           text) ignore `transform` per spec until blockified, see
+           startMoveDrag()'s doc comment */
+        detachFromFlow(el);
       }
       ev.preventDefault();
       setOwnPos(el, base.tx + (ev.clientX - startX), base.ty + (ev.clientY - startY));

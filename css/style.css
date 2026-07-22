@@ -1297,6 +1297,15 @@ body.edit-mode [data-resize-id] {
 }
 body.edit-mode [data-resize-id]:hover { outline-style: solid; }
 
+/* the Apply buttons' perpetual bob (.apply-bob, @keyframes bob above) animates
+   `transform` forever, which as a CSS animation outranks the inline transform
+   the editor sets for move/resize-pin (an animation always wins over an
+   author-normal inline style, even paused mid-keyframe), so it'd fight every
+   drag and make the selection ring's live bounding rect jitter under the
+   cursor. animation is fully dropped (not just paused) only while in the
+   editor, so it still bobs normally on the real site */
+body.edit-mode .apply-bob { animation: none; }
+
 /* the visual editor's one selection ring (wireResizable() in js/main.js):
    a floating frame that follows whatever tracked element the mouse is
    over, with 8 resize handles (corners + edges, so any direction works)

@@ -43,6 +43,23 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="ECE Workshops", lifespan=lifespan)
 
+
+@app.middleware("http")
+async def no_stale_code(request: Request, call_next):
+    """makes browsers revalidate js/css on every load (etag 304s keep it
+    cheap). without this there's no cache-control header at all, so a
+    browser can heuristically serve a stale main.js next to a fresh
+    style.css after a deploy, and the visual editor half-breaks.
+    @param request the incoming request
+    @param call_next the next handler in the chain
+    @return the response, with no-cache set on /js and /css paths
+    """
+    response = await call_next(request)
+    if request.url.path.startswith(("/js/", "/css/")):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 app.mount("/css", StaticFiles(directory=BASE_DIR / "css"), name="css")
 app.mount("/js", StaticFiles(directory=BASE_DIR / "js"), name="js")
 app.mount("/assets", StaticFiles(directory=BASE_DIR / "assets"), name="assets")

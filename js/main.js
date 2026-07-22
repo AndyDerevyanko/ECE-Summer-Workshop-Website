@@ -311,198 +311,208 @@ function applyTextOverrides(textMap) {
 var RESIZABLE_SEL = "[data-edit-id], [data-resize-id]";
 
 /**
- * Reads an element's current resize/move state (scale + translate) off its
- * own dataset, defaulting to the identity transform the first time. Kept on
- * the element itself (not a separate map) so it survives being wrapped and
- * is easy to inspect in devtools.
+ * Reads the id an element's size/position overrides are keyed by.
  * @param el the element
- * @return {tx, ty, sx, sy}
+ * @return its data-edit-id or data-resize-id
  */
-function getXf(el) {
+function elId(el) {
+  return el.getAttribute("data-edit-id") || el.getAttribute("data-resize-id");
+}
+
+/**
+ * Classifies an element so a resize drag can pick the right aspect-ratio
+ * rule: an icon never distorts no matter what, an image distorts freely
+ * unless shift is held, and everything else (text boxes, cards, sections,
+ * buttons) always resizes its two axes independently.
+ * @param el the element
+ * @return "icon", "img" or "box"
+ */
+function elKind(el) {
+  var tag = (el.tagName || "").toLowerCase();
+  if (tag === "svg") return "icon";
+  var rid = el.getAttribute("data-resize-id") || "";
+  if (rid.indexOf("icon.") === 0 || /\.icon$/.test(rid)) return "icon";
+  if (tag === "img") return "img";
+  return "box";
+}
+
+/**
+ * Reads an element's own move offset off its dataset, 0,0 if never moved.
+ * This is the element's own offset only; what actually paints also cancels
+ * out every tracked ancestor's offset, see paintPos().
+ * @param el the element
+ * @return {tx, ty}
+ */
+function getPos(el) {
   return {
-    tx: parseFloat(el.dataset.xfTx) || 0,
-    ty: parseFloat(el.dataset.xfTy) || 0,
-    sx: parseFloat(el.dataset.xfSx) || 1,
-    sy: parseFloat(el.dataset.xfSy) || 1
+    tx: parseFloat(el.dataset.ovTx) || 0,
+    ty: parseFloat(el.dataset.ovTy) || 0
   };
 }
 
 /**
- * Reads an element's saved explicit box size, if any (see setBoxWH()): a
- * text field resizes its own width only (font stays whatever the A-/A+
- * buttons set, text just reflows inside), an image resizes both width and
- * height directly, off the element's own dataset.
+ * Reads an element's current box size: its explicit override if it's been
+ * resized, else the size it was detached from flow at, else its live
+ * rendered size. Layout px, not visual px, so an element with its own
+ * stylesheet transform (eg. the scaled-up brand logo) doesn't jump when a
+ * resize starts.
  * @param el the element
- * @return {w, h}, either undefined when there's no override (natural/auto)
+ * @return {w, h}
  */
-function getBoxWH(el) {
-  return {
-    w: el.dataset.xfW !== undefined ? parseFloat(el.dataset.xfW) : undefined,
-    h: el.dataset.xfH !== undefined ? parseFloat(el.dataset.xfH) : undefined
-  };
+function getSize(el) {
+  var w = parseFloat(el.dataset.ovW);
+  var h = parseFloat(el.dataset.ovH);
+  if (!isNaN(w) && !isNaN(h)) return { w: w, h: h };
+  if (el.dataset.natW !== undefined) {
+    return { w: parseFloat(el.dataset.natW), h: parseFloat(el.dataset.natH) };
+  }
+  var r = el.getBoundingClientRect();
+  return { w: r.width, h: r.height };
 }
 
 /**
  * Elevates el's paint order above its untouched siblings once any
- * resize/move override is active (a transform, or an explicit box size),
- * matching what a ta dragging it would expect to see ("the thing I just
- * touched is on top"): a transform/size change alone doesn't change
- * stacking order, so a resized/moved element would otherwise get visually
- * clipped by (and lose clicks to) whatever normally comes after it in the
- * DOM the moment it grows or moves into that element's space. Only
- * touches `position` if el doesn't already have one of its own (eg. the
- * sticky nav): z-index has no effect without a position, but forcing one
- * would stomp on it. Reverts once every override is back to the template
- * default.
+ * resize/move override is active, matching what a ta dragging it would
+ * expect to see ("the thing I just touched is on top"): a position/size
+ * change alone doesn't change stacking order, so a resized/moved element
+ * would otherwise get visually clipped by (and lose clicks to) whatever
+ * normally comes after it in the DOM the moment it grows or moves into
+ * that element's space. Reverts once every override is back to default.
  * @param el the element
  */
 function syncStacking(el) {
-  var xf = getXf(el);
-  var wh = getBoxWH(el);
-  var isDefault = xf.tx === 0 && xf.ty === 0 && xf.sx === 1 && xf.sy === 1 &&
-    wh.w === undefined && wh.h === undefined;
-  if (isDefault) {
-    el.style.zIndex = "";
-  } else {
-    if (getComputedStyle(el).position === "static") el.style.position = "relative";
-    el.style.zIndex = "9999";
-  }
+  var p = getPos(el);
+  var isDefault = p.tx === 0 && p.ty === 0 && el.dataset.ovW === undefined;
+  el.style.zIndex = isDefault ? "" : "9999";
 }
 
 /**
- * Writes a resize/move state onto an element as a single `transform`
- * (translate for position, scale for size), with `transform-origin: top
- * left` so scaling grows away from the dragged corner instead of from the
- * center. A transform is purely a paint-time effect: it never changes the
- * element's box for layout purposes, so it can never push, shrink, or
- * otherwise affect any other element on the page, unlike changing width/
- * height/left/top directly would. It also means the browser's own hit
- * testing (clicks, hover) automatically follows el's scaled/moved box
- * rather than its original one - almost for free, see syncStacking() for
- * the one thing that isn't free (paint order).
- * Also repositions el's own resize/move grips (see positionGrips()), if
- * it has any: they're anchored to el's wrap, a plain sibling that doesn't
- * share el's transform, so without this they'd stay behind at el's
- * pre-transform corner instead of tracking where it visually is now.
+ * Sums the own move offsets of every tracked ancestor above el. Used to
+ * cancel a container's translate back out of the elements inside it:
+ * moving a section or a card slides only that box, never the independent
+ * text/icons/images sitting in it (no attachment between elements), so
+ * each one paints at its own offset minus whatever its ancestors added.
+ * @param el the element
+ * @return {tx, ty}
+ */
+function ancestorPos(el) {
+  var tx = 0, ty = 0;
+  var p = el.parentElement;
+  while (p && p !== document.body) {
+    if (p.matches && p.matches(RESIZABLE_SEL)) {
+      tx += parseFloat(p.dataset.ovTx) || 0;
+      ty += parseFloat(p.dataset.ovTy) || 0;
+    }
+    p = p.parentElement;
+  }
+  return { tx: tx, ty: ty };
+}
+
+/**
+ * Writes el's painted transform: its own move offset minus its tracked
+ * ancestors' (see ancestorPos()). A translate is a purely paint-time
+ * effect, so moving an element can never push or reflow anything else on
+ * the page. An element with a stylesheet transform of its own (the scaled
+ * brand logo, the flipped cta arrow) keeps it, composed after the
+ * translate, instead of having it silently stomped by the inline style.
+ * @param el the element
+ */
+function paintPos(el) {
+  if (el.dataset.baseXf === undefined) {
+    var base = getComputedStyle(el).transform;
+    el.dataset.baseXf = base && base !== "none" ? base : "";
+  }
+  var own = getPos(el);
+  var anc = ancestorPos(el);
+  var tx = own.tx - anc.tx, ty = own.ty - anc.ty;
+  var xf = tx || ty ? "translate(" + tx + "px, " + ty + "px)" : "";
+  if (el.dataset.baseXf) xf = (xf ? xf + " " : "") + el.dataset.baseXf;
+  el.style.transform = xf;
+  /* a css transition on transform (eg. .card's) would make el lag behind
+     the cursor for its duration, and the ring reads el's rect synchronously */
+  if (xf) el.style.transition = "none";
+}
+
+/**
+ * Sets el's own move offset and repaints it plus every tracked element
+ * inside it: their painted transforms cancel el's out (see ancestorPos()),
+ * so they visually stay put while el's own box slides underneath them.
  * @param el the element
  * @param tx horizontal offset in css px
  * @param ty vertical offset in css px
- * @param sx horizontal scale factor (1 = original size)
- * @param sy vertical scale factor (1 = original size)
  */
-function setXf(el, tx, ty, sx, sy) {
-  sx = Math.max(.2, Math.min(6, sx));
-  sy = Math.max(.2, Math.min(6, sy));
-  el.dataset.xfTx = tx;
-  el.dataset.xfTy = ty;
-  el.dataset.xfSx = sx;
-  el.dataset.xfSy = sy;
-  el.style.transformOrigin = "top left";
-  el.style.transform = "translate(" + tx + "px, " + ty + "px) scale(" + sx + ", " + sy + ")";
-  syncStacking(el);
-  var wrap = el.parentNode;
-  if (wrap && wrap.classList && wrap.classList.contains("resize-wrap")) positionGrips(el, wrap);
-}
-
-/**
- * Writes an explicit width (text fields) or width+height (images) onto an
- * element as real box dimensions, not a transform. A ta reported that
- * scaling a text field's box via `scale()` visually stretched the letters
- * themselves; this instead resizes the box only; the font stays whatever
- * size it already was (see the A-/A+ controls) and the text just reflows
- * inside the new width. For an image, both dimensions are settable
- * independently and `object-fit: contain` plus a black background take
- * over from the page's own default `cover` sizing, so a box resized to a
- * different aspect ratio than the photo itself shows letterbox bars
- * instead of stretching or cropping it.
- * @param el the element
- * @param w new width in css px, or null to clear back to the template default
- * @param h new height in css px (images only), or null/undefined to leave auto
- */
-function setBoxWH(el, w, h) {
-  if (w == null) {
-    delete el.dataset.xfW;
-    el.style.width = "";
+function setOwnPos(el, tx, ty) {
+  if (!tx && !ty) {
+    delete el.dataset.ovTx;
+    delete el.dataset.ovTy;
   } else {
-    el.dataset.xfW = w;
-    el.style.width = w + "px";
+    el.dataset.ovTx = tx;
+    el.dataset.ovTy = ty;
   }
-  if (el.tagName === "IMG") {
-    if (h == null) {
-      delete el.dataset.xfH;
-      el.style.height = "";
-      el.style.objectFit = "";
-      el.style.background = "";
-    } else {
-      el.dataset.xfH = h;
-      el.style.height = h + "px";
-      el.style.objectFit = "contain";
-      el.style.background = "#000";
-    }
-  }
+  paintPos(el);
+  el.querySelectorAll(RESIZABLE_SEL).forEach(paintPos);
   syncStacking(el);
-  var wrap = el.parentNode;
-  if (wrap && wrap.classList && wrap.classList.contains("resize-wrap")) positionGrips(el, wrap);
 }
 
 /**
- * Moves el's resize-grip/move-grip (children of wrap) to sit exactly at
- * el's current rendered corners. Needed because the grips are positioned
- * relative to wrap, which never moves or scales (it's just there to give
- * them somewhere to anchor without landing inside el's own innerHTML), so
- * once el has a transform on it, its actual visual corners are somewhere
- * else entirely. Both rects are viewport-relative, so their difference is
- * unaffected by page scroll. Grips are inset just inside el's own box
- * (never straddling past its edge): an element pinned flush against the
- * very edge of the viewport (eg. the sticky nav, always at y=0) has no
- * room above/left of it for a handle that pokes outward to render into,
- * which would make it literally unreachable by mouse.
- * @param el the resizable/movable element
- * @param wrap el's resize-wrap
+ * Writes a real width/height onto an element (already detached from flow
+ * by detachFromFlow(), so this can never push, shrink, or otherwise reflow
+ * anything else on the page). A real box size, not a `transform: scale()`,
+ * is the whole point: the box only dictates how the content inside flows.
+ * Text rewraps at its own unchanged character size (the A-/A+ buttons are
+ * the only thing that changes the letters themselves), and an image
+ * stretches to fill whatever shape the box is (see detachFromFlow() for
+ * the object-fit that allows that).
+ * @param el the element
+ * @param w new width in css px
+ * @param h new height in css px
  */
-function positionGrips(el, wrap) {
-  var elRect = el.getBoundingClientRect();
-  var wrapRect = wrap.getBoundingClientRect();
-  var resizeGrip = wrap.querySelector(":scope > .resize-grip");
-  var moveGrip = wrap.querySelector(":scope > .move-grip");
-  if (resizeGrip) {
-    resizeGrip.style.left = (elRect.right - wrapRect.left - 15) + "px";
-    resizeGrip.style.top = (elRect.bottom - wrapRect.top - 15) + "px";
-  }
-  if (moveGrip) {
-    moveGrip.style.left = (elRect.left - wrapRect.left + 2) + "px";
-    moveGrip.style.top = (elRect.top - wrapRect.top + 2) + "px";
-  }
+function setBox(el, w, h) {
+  el.dataset.ovW = w;
+  el.dataset.ovH = h;
+  el.style.width = w + "px";
+  el.style.height = h + "px";
+  syncStacking(el);
+}
+
+/**
+ * Clears a resize back to the template's own sizing: el stays detached
+ * (its wrap still holds its original slot open) but returns to the exact
+ * size it was detached at.
+ * @param el the element
+ */
+function resetBox(el) {
+  delete el.dataset.ovW;
+  delete el.dataset.ovH;
+  el.style.width = parseFloat(el.dataset.natW) + "px";
+  el.style.height = parseFloat(el.dataset.natH) + "px";
+  syncStacking(el);
 }
 
 /**
  * Applies saved size overrides (from a resize-handle drag, see
- * wireResizeGrip()) on top of the page's own default sizing, for every
- * resizable/movable element. Runs on every load (live site included), same
- * as applyTextOverrides(). Icons/boxes/cards were saved as a `{sx, sy}`
- * scale (a transform, so it never reflows anything else on the page, see
- * setXf()); text fields and images were saved as an explicit `{w}`/`{w, h}`
- * box size instead (see setBoxWH()).
- * @param sizes content.sizes, {id: {sx, sy}} or {id: {w}} or {id: {w, h}}
+ * startResizeDrag()) on top of the page's own default sizing, for every
+ * tracked element that has one. Runs on every load, live site included,
+ * same as applyTextOverrides(): a saved size means real width/height, so
+ * the element needs detaching from flow first (see detachFromFlow()) even
+ * outside the ta portal's editor, otherwise a visitor's page would reflow
+ * around the resized element. Elements with no saved size are left
+ * completely untouched, in flow, exactly as the template renders them.
+ * @param sizes content.sizes, {id: {w, h}}
  */
 function applySizeOverrides(sizes) {
   sizes = sizes || {};
   document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
-    var id = el.getAttribute("data-edit-id") || el.getAttribute("data-resize-id");
-    var s = sizes[id];
-    if (!s) return;
-    if (s.sx !== undefined) {
-      var cur = getXf(el);
-      setXf(el, cur.tx, cur.ty, s.sx, s.sy);
-    } else if (s.w !== undefined) {
-      setBoxWH(el, s.w, s.h);
-    }
+    var s = sizes[elId(el)];
+    if (!s || s.w === undefined) return;
+    detachFromFlow(el);
+    setBox(el, s.w, s.h === undefined ? parseFloat(el.dataset.natH) : s.h);
   });
 }
 
 /**
  * Applies saved font-size overrides (from the A-/A+ buttons, see
- * ensureFontSizeCtl()) on top of the page's own default type scale, for
+ * showFontCtl()) on top of the page's own default type scale, for
  * every click-to-edit text field that carries one.
  * @param sizes content.font_sizes, {id: px}
  */
@@ -515,21 +525,28 @@ function applyFontSizeOverrides(sizes) {
 }
 
 /**
- * Applies saved move offsets (from a move-handle drag, see wireMovable())
- * on top of the page's own default flow position, for every resizable/
- * movable element. Runs on every load, live site included, same as
- * applyTextOverrides(). A transform, so it never reflows anything else on
- * the page, see setXf().
+ * Applies saved move offsets (from a move-handle drag, see
+ * startMoveDrag()) on top of the page's own default flow position. Runs on
+ * every load, live site included, same as applyTextOverrides(). Pure
+ * transforms, so nothing else on the page ever reflows, and no detaching
+ * is needed: a translated element still occupies its original flow slot.
+ * Two passes so every element's cancel-out of its ancestors' offsets (see
+ * ancestorPos()) sees those offsets already in place.
  * @param positions content.positions, {id: {tx, ty}}
  */
 function applyPositionOverrides(positions) {
   positions = positions || {};
-  document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
-    var id = el.getAttribute("data-edit-id") || el.getAttribute("data-resize-id");
-    var p = positions[id];
-    if (!p) return;
-    var cur = getXf(el);
-    setXf(el, p.tx, p.ty, cur.sx, cur.sy);
+  var els = document.querySelectorAll(RESIZABLE_SEL);
+  els.forEach(function (el) {
+    var p = positions[elId(el)];
+    if (p) {
+      el.dataset.ovTx = p.tx;
+      el.dataset.ovTy = p.ty;
+    }
+  });
+  els.forEach(function (el) {
+    paintPos(el);
+    syncStacking(el);
   });
 }
 
@@ -539,263 +556,364 @@ var EDIT_UNDO = [];
 var EDIT_REDO = [];
 
 /**
- * Wraps el in a positioned <span class="resize-wrap"> (skipped if already
- * wrapped), purely so the resize/move grips have somewhere to anchor
- * (position:absolute) without landing inside el's own innerHTML (which
- * would corrupt a contenteditable field's saved text, or fail outright on
- * a void element like <img>). Wrapping happens once per element, at
- * wireResizable() time; the wrap and grips stay in the DOM for the rest of
- * the edit session regardless of whether that particular element is the
- * one currently being text-edited (see .resize-wrap:hover in
- * css/style.css for how the grips show themselves). The wrap's own
- * display is matched to el's natural one (block stays block, inline
- * becomes inline-block): forcing every wrap to inline-block regardless
- * used to pull block-level siblings (eg. a heading and the paragraph
- * under it) onto the same line the moment both got wrapped, since two
- * inline-block boxes sit side by side instead of stacking. Resizing
- * itself never touches the wrap's box at all (see setXf()), so unlike an
- * earlier version of this, the wrap needs no flex/grid/max-width
- * overrides to make a size stick. Also kills any of el's own CSS
- * transitions (eg. `.card`'s hover-lift `transition: transform .2s`):
- * left running, a transition means el's rendered box lags behind whatever
- * `setXf()` just set for the next ~200ms, so positionGrips() (which reads
- * el's rect synchronously, right after writing the transform) would place
- * the grips wherever el was mid-animation rather than its true final
- * spot, and nothing re-syncs them once the transition settles.
- * @param el the element to make resizable
- * @return the wrap element
+ * Takes el out of normal document flow so its real width/height can change
+ * without ever touching anything else on the page: an absolutely
+ * positioned box is excluded from its containing block's own fit-content
+ * size calculation by definition, so however big el gets, no sibling or
+ * parent ever shifts because of it (no attachment between elements). Only
+ * done lazily, on the first actual resize (or a saved size on load); an
+ * untouched element stays exactly as the template laid it out.
+ * Wraps el in a plain <span class="free-wrap"> (skipped if already
+ * wrapped) frozen to el's pre-detach layout size, so el's old flow slot
+ * doesn't collapse or get filled by a sibling the instant el leaves it.
+ * The wrap's display is matched to el's natural one (block stays block,
+ * inline becomes inline-block): forcing inline-block on everything would
+ * pull block siblings (a heading and its paragraph) onto one line. Sizes
+ * come from offsetWidth/offsetHeight (layout px) rather than the rect so
+ * an element with a stylesheet transform of its own (the scaled brand
+ * logo) doesn't get its visual size baked in as its layout size; svg has
+ * no offsetWidth, so icons fall back to the rect, which is fine since
+ * none of them are scaled by the stylesheet.
+ * @param el the element to detach from flow
+ * @return el's wrap
  */
-function ensureResizeWrap(el) {
+function detachFromFlow(el) {
   var wrap = el.parentNode;
-  if (wrap && wrap.classList && wrap.classList.contains("resize-wrap")) return wrap;
+  if (wrap && wrap.classList && wrap.classList.contains("free-wrap")) return wrap;
 
+  var w = el.offsetWidth !== undefined ? el.offsetWidth : el.getBoundingClientRect().width;
+  var h = el.offsetWidth !== undefined ? el.offsetHeight : el.getBoundingClientRect().height;
   var naturalDisplay = getComputedStyle(el).display;
-  /* a css transform has no effect at all on a plain (non-replaced) inline
-     box, per spec (an <img>/<svg> is a "replaced" element and isn't
-     affected by this, only a bare <span>/<a>/<b> etc is): without this, a
-     short inline text field like a nav link or the countdown's "Date and
-     time" label would silently ignore every resize/move drag, its dataset
-     and transform style updating fine but nothing moving on screen */
-  if (naturalDisplay === "inline") el.style.display = "inline-block";
+
   wrap = document.createElement("span");
-  wrap.className = "resize-wrap";
+  wrap.className = "free-wrap";
   wrap.style.display = naturalDisplay === "inline" ? "inline-block" : "block";
+  wrap.style.width = w + "px";
+  wrap.style.height = h + "px";
   el.parentNode.insertBefore(wrap, el);
   wrap.appendChild(el);
+
+  el.dataset.natW = w;
+  el.dataset.natH = h;
+  el.style.position = "absolute";
+  el.style.top = "0";
+  el.style.left = "0";
+  el.style.margin = "0";
+  /* the site's global `img { max-width: 100% }` reset (and any other
+     max-width a card/section/etc happens to carry) would otherwise cap el
+     at its old column's width no matter what size is set later */
+  el.style.maxWidth = "none";
+  el.style.width = w + "px";
+  el.style.height = h + "px";
   el.style.transition = "none";
+  /* free stretch: the box dictates the image's shape, ratio is only kept
+     while shift is held during the drag itself (see startResizeDrag()) */
+  if (el.tagName === "IMG") el.style.objectFit = "fill";
   return wrap;
 }
 
-/**
- * Classifies a resizable/movable element so wireResizeGrip() can pick the
- * right resize behavior for it: a plain text field (data-edit-id, no
- * data-resize-id) resizes its own box width only, leaving its font size
- * alone (see the A-/A+ controls) rather than visually stretching the
- * letters; an icon (data-resize-id starting "icon.") is scaled uniformly
- * so it never distorts; an <img> keeps its own aspect ratio and
- * letterboxes instead of stretching (see setBoxWH()); everything else
- * (cards, nav, sections, buttons...) scales freely via transform, same as
- * before.
- * @param el the element
- * @return "text", "icon", "image", or "box"
- */
-function elResizeKind(el) {
-  if (el.tagName === "IMG") return "image";
-  var rid = el.getAttribute("data-resize-id") || "";
-  if (rid.indexOf("icon.") === 0) return "icon";
-  if (el.hasAttribute("data-edit-id") && !el.hasAttribute("data-resize-id")) return "text";
-  return "box";
+/* the visual editor's one selection ring: a floating frame that follows
+   whatever tracked element the mouse is over, carrying 8 resize handles
+   (all four corners + all four edges, so any direction works) and one
+   move handle. one shared ring instead of per-element grips, so a
+   hundred-odd tagged elements never show overlapping handles at once and
+   nested elements (an icon in a card in a section) stay individually
+   grabbable: whichever one the cursor is actually over owns the ring. */
+var RING = null;
+var RING_EL = null;
+var RING_DRAGGING = false;
+
+/* handle name -> [x edge, y edge] it drags: -1 left/top, 1 right/bottom */
+var RING_DIRS = {
+  nw: [-1, -1], n: [0, -1], ne: [1, -1], e: [1, 0],
+  se: [1, 1], s: [0, 1], sw: [-1, 1], w: [-1, 0]
+};
+
+/** Builds the ring and its handles once, appended to body. */
+function buildRing() {
+  RING = document.createElement("div");
+  RING.className = "sel-ring";
+  RING.style.display = "none";
+  Object.keys(RING_DIRS).forEach(function (dir) {
+    var h = document.createElement("span");
+    h.className = "rh rh-" + dir;
+    h.setAttribute("data-dir", dir);
+    h.title = "Drag to resize";
+    h.addEventListener("mousedown", startResizeDrag);
+    h.addEventListener("dblclick", resetSizeDbl);
+    RING.appendChild(h);
+  });
+  var mv = document.createElement("span");
+  mv.className = "mvh";
+  mv.title = "Drag to move";
+  mv.addEventListener("mousedown", startMoveDrag);
+  mv.addEventListener("dblclick", resetPosDbl);
+  RING.appendChild(mv);
+  document.body.appendChild(RING);
 }
 
 /**
- * Gives el a drag handle (bottom-right corner of its wrap) to resize it,
- * behavior depending on elResizeKind(el): a text field's box gets an
- * explicit width (setBoxWH()), an image's box gets an explicit width and
- * height (letterboxed, setBoxWH()), an icon scales up/down uniformly (both
- * axes locked to the same factor so it never distorts), and everything
- * else scales its two axes independently via a CSS transform. Scaling via
- * transform, rather than changing width/height, is a purely visual/
- * paint-time effect: el's box for layout purposes never changes size, so
- * no other element on the page ever gets pushed, shrunk, or otherwise
- * reflowed by it, and the browser's own hit testing (clicks, hover, the
- * grip itself) automatically follows the scaled box for free.
- * @param el the element to make resizable
- * @param onCommit called with the new size ({sx, sy} for icon/box, {w} for
- *   text, {w, h} for image) once a drag ends, or null if double-clicking
- *   the grip reset it back to default
+ * Snaps the ring onto its current element's rendered box. Document
+ * coordinates (rect + scroll), re-run on scroll/resize since the sticky
+ * nav's document position changes as the page scrolls.
  */
-function wireResizeGrip(el, onCommit) {
-  var wrap = ensureResizeWrap(el);
-  if (wrap.querySelector(":scope > .resize-grip")) return;
+function positionRing() {
+  if (!RING || !RING_EL) return;
+  var r = RING_EL.getBoundingClientRect();
+  RING.style.display = "";
+  RING.style.left = (r.left + window.scrollX) + "px";
+  RING.style.top = (r.top + window.scrollY) + "px";
+  RING.style.width = r.width + "px";
+  RING.style.height = r.height + "px";
+}
 
-  var kind = elResizeKind(el);
-  var grip = document.createElement("span");
-  grip.className = "resize-grip";
-  grip.setAttribute("contenteditable", "false");
-  grip.title = "Drag to resize";
-  wrap.appendChild(grip);
-  positionGrips(el, wrap);
+/**
+ * One resize drag from whichever of the 8 handles was grabbed. A real
+ * width/height change (see setBox()), so text reflows inside its box at
+ * its own size instead of stretching. Dragging a left/top handle keeps
+ * the opposite edge pinned by sliding the element's own move offset while
+ * the box grows/shrinks. Aspect ratio: icons always locked, images locked
+ * only while shift is held, everything else free.
+ * @param e the handle's mousedown
+ */
+function startResizeDrag(e) {
+  if (!RING_EL) return;
+  e.preventDefault();
+  e.stopPropagation();
+  var el = RING_EL;
+  var dir = RING_DIRS[e.target.getAttribute("data-dir")];
+  var kind = elKind(el);
+  detachFromFlow(el);
+  var startX = e.clientX, startY = e.clientY;
+  var start = getSize(el);
+  var base = getPos(el);
+  RING_DRAGGING = true;
 
-  grip.addEventListener("mousedown", function (e) {
-    e.preventDefault();
-    e.stopPropagation();
-    var startX = e.clientX, startY = e.clientY;
-    var rect = el.getBoundingClientRect(); // el's current (possibly already resized) rendered size
-    var startW = rect.width, startH = rect.height;
-    var base = getXf(el);
-
-    function onMove(ev) {
-      var dx = ev.clientX - startX, dy = ev.clientY - startY;
-      if (kind === "text") {
-        setBoxWH(el, Math.max(40, startW + dx));
-      } else if (kind === "image") {
-        setBoxWH(el, Math.max(20, startW + dx), Math.max(20, startH + dy));
-      } else if (kind === "icon") {
-        var newW = startW + dx, newH = startH + dy;
-        var ratio = Math.sqrt((newW * newW + newH * newH) / (startW * startW + startH * startH));
-        setXf(el, base.tx, base.ty, base.sx * ratio, base.sy * ratio);
+  function onMove(ev) {
+    var w = dir[0] ? Math.max(16, start.w + dir[0] * (ev.clientX - startX)) : start.w;
+    var h = dir[1] ? Math.max(12, start.h + dir[1] * (ev.clientY - startY)) : start.h;
+    if (kind === "icon" || (kind === "img" && ev.shiftKey)) {
+      var f;
+      if (dir[0] && dir[1]) {
+        /* corner drag: follow whichever axis moved more */
+        f = Math.abs(w / start.w - 1) > Math.abs(h / start.h - 1) ? w / start.w : h / start.h;
       } else {
-        var newW2 = Math.max(20, startW + dx);
-        var newH2 = Math.max(16, startH + dy);
-        setXf(el, base.tx, base.ty, base.sx * (newW2 / startW), base.sy * (newH2 / startH));
+        f = dir[0] ? w / start.w : h / start.h;
       }
+      w = start.w * f;
+      h = start.h * f;
     }
-    function onUp() {
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
-      if (kind === "text") {
-        onCommit({ w: parseFloat(el.dataset.xfW) });
-      } else if (kind === "image") {
-        onCommit({ w: parseFloat(el.dataset.xfW), h: parseFloat(el.dataset.xfH) });
-      } else {
-        var t = getXf(el);
-        onCommit({ sx: t.sx, sy: t.sy });
-      }
-    }
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
-  });
-
-  grip.addEventListener("dblclick", function (e) {
-    e.preventDefault();
-    e.stopPropagation();
-    if (kind === "text") {
-      setBoxWH(el, null);
-    } else if (kind === "image") {
-      setBoxWH(el, null, null);
-    } else {
-      var base = getXf(el);
-      setXf(el, base.tx, base.ty, 1, 1);
-    }
-    onCommit(null);
-  });
+    setBox(el, w, h);
+    /* pin the opposite edge on left/top drags */
+    setOwnPos(el,
+      base.tx + (dir[0] === -1 ? start.w - w : 0),
+      base.ty + (dir[1] === -1 ? start.h - h : 0));
+    positionRing();
+  }
+  function onUp() {
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    RING_DRAGGING = false;
+    var s = getSize(el), p = getPos(el);
+    saveEditedSize(elId(el), { w: Math.round(s.w), h: Math.round(s.h) });
+    if (p.tx || p.ty) saveEditedPosition(elId(el), Math.round(p.tx), Math.round(p.ty));
+    else saveEditedPosition(elId(el), null, null);
+  }
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
 }
 
 /**
- * Gives el a second drag handle (top-left corner of its wrap, opposite the
- * resize grip) that moves it with a CSS transform (translate), letting it
- * be dragged off its normal flow position. Like the resize grip, this is
- * purely visual: el's box for layout purposes doesn't move, so nothing
- * else on the page reflows to fill the gap or make room, el just visibly
- * floats from where it used to sit (and its hit box moves right along
- * with it).
- * @param el the element to make movable
- * @param onCommit called with (x, y) once a drag ends, or (null, null) if
- *   double-clicking the handle reset it back to place
+ * One move drag from the ring's move handle: a pure translate on the
+ * element itself, any direction, no detaching needed (a translated element
+ * still holds its flow slot, so nothing else moves). Tracked elements
+ * inside a moved container visually stay put, see setOwnPos().
+ * @param e the handle's mousedown
  */
-function wireMoveGrip(el, onCommit) {
-  var wrap = ensureResizeWrap(el);
-  if (wrap.querySelector(":scope > .move-grip")) return;
+function startMoveDrag(e) {
+  if (!RING_EL) return;
+  e.preventDefault();
+  e.stopPropagation();
+  var el = RING_EL;
+  var startX = e.clientX, startY = e.clientY;
+  var base = getPos(el);
+  RING_DRAGGING = true;
 
-  var grip = document.createElement("span");
-  grip.className = "move-grip";
-  grip.setAttribute("contenteditable", "false");
-  grip.title = "Drag to move";
-  wrap.appendChild(grip);
-  positionGrips(el, wrap);
-
-  grip.addEventListener("mousedown", function (e) {
-    e.preventDefault();
-    e.stopPropagation();
-    var startX = e.clientX, startY = e.clientY;
-    var base = getXf(el);
-
-    function onMove(ev) {
-      setXf(el, base.tx + (ev.clientX - startX), base.ty + (ev.clientY - startY), base.sx, base.sy);
-    }
-    function onUp() {
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
-      var t = getXf(el);
-      onCommit(t.tx, t.ty);
-    }
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
-  });
-
-  grip.addEventListener("dblclick", function (e) {
-    e.preventDefault();
-    e.stopPropagation();
-    var base = getXf(el);
-    setXf(el, 0, 0, base.sx, base.sy);
-    onCommit(null, null);
-  });
+  function onMove(ev) {
+    setOwnPos(el, base.tx + (ev.clientX - startX), base.ty + (ev.clientY - startY));
+    positionRing();
+  }
+  function onUp() {
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    RING_DRAGGING = false;
+    var p = getPos(el);
+    if (p.tx || p.ty) saveEditedPosition(elId(el), Math.round(p.tx), Math.round(p.ty));
+    else saveEditedPosition(elId(el), null, null);
+  }
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
 }
 
+/** Double-click on a resize handle: back to the template's own size. */
+function resetSizeDbl(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  if (!RING_EL) return;
+  resetBox(RING_EL);
+  saveEditedSize(elId(RING_EL), null);
+  positionRing();
+}
+
+/** Double-click on the move handle: back to the template's own spot. */
+function resetPosDbl(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  if (!RING_EL) return;
+  setOwnPos(RING_EL, 0, 0);
+  saveEditedPosition(elId(RING_EL), null, null);
+  positionRing();
+}
+
+/* set for one tick after a body-drag move ends, so the click that the
+   browser fires right after mouseup doesn't also open a text edit */
+var JUST_DRAGGED = false;
+
 /**
- * Makes every tagged element on the page (text field, image, icon, card,
- * nav, section, footer, button, anything carrying a data-edit-id or
- * data-resize-id, ie. everything except the fixed background grid/vignette
- * and the hero's own background video) both resizable and movable via drag
- * handles, only called in the ta portal's Visual editor tab alongside
+ * Sets up the visual editor's shared selection ring: hovering any tagged
+ * element (text field, image, icon, card, nav, section, footer, button,
+ * day row, tile, anything carrying a data-edit-id or data-resize-id)
+ * attaches the ring to it. Buttons are single tagged elements, so their
+ * text box IS the button itself; every other text field is its own box,
+ * fully independent of whatever container it sits in. Moving doesn't need
+ * the handle: dragging anywhere on the element itself moves it too, with
+ * a small threshold so a plain click still clicks (and still opens a text
+ * edit). Only called in the ta portal's Visual editor tab alongside
  * wireClickToEdit().
  */
 function wireResizable() {
-  document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
-    var id = el.getAttribute("data-edit-id") || el.getAttribute("data-resize-id");
-    wireResizeGrip(el, function (size) { saveEditedSize(id, size); });
-    wireMoveGrip(el, function (x, y) { saveEditedPosition(id, x, y); });
+  buildRing();
+  document.addEventListener("mouseover", function (e) {
+    if (RING_DRAGGING) return;
+    if (RING.contains(e.target)) return;
+    var t = e.target.closest ? e.target.closest(RESIZABLE_SEL) : null;
+    if (t && t !== RING_EL) {
+      RING_EL = t;
+      positionRing();
+    }
+  });
+  window.addEventListener("scroll", positionRing, true);
+  window.addEventListener("resize", positionRing);
+
+  /* drag-anywhere move, delegated so it covers rerendered content too */
+  document.addEventListener("mousedown", function (e) {
+    if (e.button !== 0) return;
+    if (RING.contains(e.target)) return;
+    var el = e.target.closest ? e.target.closest(RESIZABLE_SEL) : null;
+    if (!el) return;
+    /* mid-edit: leave the mouse to text selection/caret placement */
+    if (el.isContentEditable) return;
+
+    var startX = e.clientX, startY = e.clientY;
+    var base = getPos(el);
+    var moving = false;
+
+    function onMove(ev) {
+      if (!moving) {
+        /* not a drag until the cursor actually travels */
+        if (Math.abs(ev.clientX - startX) < 5 && Math.abs(ev.clientY - startY) < 5) return;
+        moving = true;
+        RING_DRAGGING = true;
+        RING_EL = el;
+        document.body.style.userSelect = "none";
+      }
+      ev.preventDefault();
+      setOwnPos(el, base.tx + (ev.clientX - startX), base.ty + (ev.clientY - startY));
+      positionRing();
+    }
+    function onUp() {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      if (!moving) return; /* plain click, let it click/edit as normal */
+      RING_DRAGGING = false;
+      document.body.style.userSelect = "";
+      JUST_DRAGGED = true;
+      setTimeout(function () { JUST_DRAGGED = false; }, 0);
+      var p = getPos(el);
+      if (p.tx || p.ty) saveEditedPosition(elId(el), Math.round(p.tx), Math.round(p.ty));
+      else saveEditedPosition(elId(el), null, null);
+    }
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  });
+
+  /* the click the browser fires after a drag's mouseup must not open a
+     text edit or follow a link */
+  document.addEventListener("click", function (e) {
+    if (JUST_DRAGGED) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }, true);
+
+  /* stop the browser's own image/link drag from hijacking a body-drag */
+  document.addEventListener("dragstart", function (e) {
+    var t = e.target.closest ? e.target.closest(RESIZABLE_SEL) : null;
+    if (t) e.preventDefault();
   });
 }
 
+/* the one floating A-/A+ font-size control, shared by every text field,
+   shown above whichever one is being edited. character size is deliberately
+   separate from the field's box: resizing the box only changes how the
+   text flows, these buttons are the only thing that changes the letters. */
+var FONT_CTL = null;
+var FONT_EL = null;
+
 /**
- * Adds the A-/A+ font-size buttons to a text field's resize wrap, if it
- * doesn't have them yet. Mousedown on the buttons is swallowed before it
- * can steal focus away from el, so bumping the size repeatedly doesn't
- * blur (and thereby end) the current edit.
+ * Shows the A-/A+ buttons above a text field being edited. Mousedown on
+ * the buttons is swallowed before it can steal focus away from the field,
+ * so bumping the size repeatedly doesn't blur (and thereby end) the edit.
  * @param el the text field being edited
- * @param wrap el's resize-wrap
- * @return the control, existing or newly created
  */
-function ensureFontSizeCtl(el, wrap) {
-  var ctl = wrap.querySelector(":scope > .font-size-ctl");
-  if (ctl) return ctl;
-
-  ctl = document.createElement("span");
-  ctl.className = "font-size-ctl";
-  ctl.setAttribute("contenteditable", "false");
-  ctl.innerHTML =
-    '<button type="button" class="fs-dn" title="Smaller text">A-</button>' +
-    '<button type="button" class="fs-up" title="Larger text">A+</button>';
-  wrap.appendChild(ctl);
-
-  var id = el.getAttribute("data-edit-id");
-  function bump(delta) {
-    var cur = parseFloat(getComputedStyle(el).fontSize) || 16;
-    var next = Math.max(8, Math.min(120, Math.round(cur + delta)));
-    el.style.fontSize = next + "px";
-    saveFontSize(id, next + "px");
-  }
-  ["fs-dn", "fs-up"].forEach(function (cls) {
-    var btn = ctl.querySelector("." + cls);
-    btn.addEventListener("mousedown", function (e) { e.preventDefault(); e.stopPropagation(); });
-    btn.addEventListener("click", function (e) {
-      e.preventDefault();
-      e.stopPropagation();
-      bump(cls === "fs-dn" ? -2 : 2);
+function showFontCtl(el) {
+  if (!FONT_CTL) {
+    FONT_CTL = document.createElement("span");
+    FONT_CTL.className = "font-size-ctl";
+    FONT_CTL.innerHTML =
+      '<button type="button" class="fs-dn" title="Smaller text">A-</button>' +
+      '<button type="button" class="fs-up" title="Larger text">A+</button>';
+    document.body.appendChild(FONT_CTL);
+    ["fs-dn", "fs-up"].forEach(function (cls) {
+      var btn = FONT_CTL.querySelector("." + cls);
+      btn.addEventListener("mousedown", function (e) { e.preventDefault(); e.stopPropagation(); });
+      btn.addEventListener("click", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!FONT_EL) return;
+        var cur = parseFloat(getComputedStyle(FONT_EL).fontSize) || 16;
+        var next = Math.max(8, Math.min(120, Math.round(cur + (cls === "fs-dn" ? -2 : 2))));
+        FONT_EL.style.fontSize = next + "px";
+        saveFontSize(FONT_EL.getAttribute("data-edit-id"), next + "px");
+        positionRing();
+      });
     });
-  });
-  return ctl;
+  }
+  FONT_EL = el;
+  var r = el.getBoundingClientRect();
+  var top = r.top + window.scrollY - 30;
+  /* no room above (the field is flush against the top of the page, eg. in
+     the sticky nav): drop below it instead of rendering off-screen */
+  if (r.top < 34) top = r.bottom + window.scrollY + 4;
+  FONT_CTL.style.left = (r.left + window.scrollX) + "px";
+  FONT_CTL.style.top = top + "px";
+  FONT_CTL.classList.add("show");
+}
+
+/** Hides the A-/A+ buttons once the edit ends. */
+function hideFontCtl() {
+  FONT_EL = null;
+  if (FONT_CTL) FONT_CTL.classList.remove("show");
 }
 
 /**
@@ -823,12 +941,7 @@ function wireClickToEdit() {
       beforeEdit = el.innerHTML;
       el.contentEditable = "true";
       el.classList.add("editing");
-      /* el was already wrapped by wireResizable(); light up its resize grip
-         and reveal the A-/A+ font-size buttons while text is being edited */
-      if (el.parentNode.classList.contains("resize-wrap")) {
-        el.parentNode.classList.add("has-editing");
-        ensureFontSizeCtl(el, el.parentNode);
-      }
+      showFontCtl(el);
       el.focus();
       var range = document.createRange();
       range.selectNodeContents(el);
@@ -847,13 +960,10 @@ function wireClickToEdit() {
       if (!el.isContentEditable) return;
       el.contentEditable = "false";
       el.classList.remove("editing");
-      if (el.parentNode.classList.contains("resize-wrap")) {
-        el.parentNode.classList.remove("has-editing");
-        /* the edit may have changed el's own natural size (more/less text),
-           which shifts its rendered corners relative to its wrap even
-           though no transform changed, so the grips need to catch up too */
-        positionGrips(el, el.parentNode);
-      }
+      hideFontCtl();
+      /* the edit may have changed el's own rendered size (more/less text),
+         so the ring needs to catch up if it's sitting on this field */
+      positionRing();
       var after = el.innerHTML;
       if (after !== beforeEdit) {
         EDIT_UNDO.push({ id: el.getAttribute("data-edit-id"), before: beforeEdit, after: after });
@@ -964,13 +1074,13 @@ function saveEditedField(id, html, defaultHtml) {
 }
 
 /**
- * Persists a resize-handle drag (see wireResizeGrip()) into the preview
+ * Persists a resize-handle drag (see startResizeDrag()) into the preview
  * snapshot, the same localStorage draft saveEditedField() uses, so a
  * resized element round-trips through Apply/profiles exactly like an
  * edited caption does.
  * @param id the element's data-edit-id or data-resize-id
- * @param size the new size ({sx, sy}, {w}, or {w, h}, see wireResizeGrip()),
- *   or null to clear back to the template default
+ * @param size the new size ({w, h}), or null to clear back to the
+ *   template default
  */
 function saveEditedSize(id, size) {
   var raw;
@@ -984,9 +1094,8 @@ function saveEditedSize(id, size) {
 }
 
 /**
- * Persists a font-size bump from the A-/A+ buttons (see
- * ensureFontSizeCtl()) into the preview snapshot, the same draft
- * everything else here uses.
+ * Persists a font-size bump from the A-/A+ buttons (see showFontCtl())
+ * into the preview snapshot, the same draft everything else here uses.
  * @param id the element's data-edit-id
  * @param px new font-size (css px string)
  */
@@ -1001,7 +1110,7 @@ function saveFontSize(id, px) {
 }
 
 /**
- * Persists a move-handle drag (see wireMoveGrip()) into the preview
+ * Persists a move-handle drag (see startMoveDrag()) into the preview
  * snapshot, the same draft everything else here uses.
  * @param id the element's data-edit-id or data-resize-id
  * @param tx new horizontal offset in css px, or null to clear back to place

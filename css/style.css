@@ -548,7 +548,7 @@ h1, h2, h3 {
   flex-direction: column;
   gap: 32px;
 }
-.banner-left { max-width: 640px; }
+.banner-left { max-width: 680px; }
 .cert-img {
   width: 100%;
   max-width: 100%;
@@ -1297,66 +1297,68 @@ body.edit-mode [data-resize-id] {
 }
 body.edit-mode [data-resize-id]:hover { outline-style: solid; }
 
-/* custom drag-to-resize/move handles, replacing the native CSS `resize`
-   property: `resize` doesn't reliably show up (or grab correctly) on a
-   contenteditable text field since the browser's own text-selection
-   dragging competes for the same corner pixels, and a flex/grid parent
-   can silently override an explicit width/height anyway. wireResizable()
-   in js/main.js wraps every resizable element once in edit mode and
-   drives both the resize and the move itself with a CSS transform
-   (scale/translate), which never affects layout and always wins. left/top
-   are NOT hardcoded here (unlike a plain corner-anchored handle would be):
-   since the wrapped element itself moves/scales via transform while its
-   wrap (a plain, untransformed anchor) doesn't, positionGrips() in
-   js/main.js recalculates and writes them after every drag so a grip
-   always sits at the element's actual current visual corner, not where
-   it used to be before the transform. the grips only show on hover (or
-   while a text field is actively being edited) so 100-odd elements don't
-   all show handles at once. */
-.resize-wrap { position: relative; display: inline-block; vertical-align: top; }
-.resize-grip {
+/* the visual editor's one selection ring (wireResizable() in js/main.js):
+   a floating frame that follows whatever tracked element the mouse is
+   over, with 8 resize handles (corners + edges, so any direction works)
+   and a move handle. one shared ring instead of per-element grips so a
+   hundred-odd tagged elements never show overlapping handles at once.
+   the frame itself ignores the mouse (pointer-events none) so the text
+   under it stays clickable to edit; only the handles grab. */
+.sel-ring {
   position: absolute;
-  width: 13px;
-  height: 13px;
-  border-radius: 3px;
-  background: var(--accent);
-  cursor: nwse-resize;
-  opacity: 0;
-  transition: opacity .15s;
+  border: 1px solid var(--accent);
+  pointer-events: none;
   z-index: 10000;
 }
-.resize-wrap:hover .resize-grip, .resize-wrap.has-editing .resize-grip { opacity: 1; }
-
-/* drag-to-move handle, opposite corner from the resize grip so the two
-   can't be grabbed at once */
-.move-grip {
+.sel-ring .rh {
   position: absolute;
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  background: var(--accent);
+  pointer-events: auto;
+}
+.sel-ring .rh-nw { left: -6px; top: -6px; cursor: nwse-resize; }
+.sel-ring .rh-n  { left: 50%; top: -6px; margin-left: -6px; cursor: ns-resize; }
+.sel-ring .rh-ne { right: -6px; top: -6px; cursor: nesw-resize; }
+.sel-ring .rh-e  { right: -6px; top: 50%; margin-top: -6px; cursor: ew-resize; }
+.sel-ring .rh-se { right: -6px; bottom: -6px; cursor: nwse-resize; }
+.sel-ring .rh-s  { left: 50%; bottom: -6px; margin-left: -6px; cursor: ns-resize; }
+.sel-ring .rh-sw { left: -6px; bottom: -6px; cursor: nesw-resize; }
+.sel-ring .rh-w  { left: -6px; top: 50%; margin-top: -6px; cursor: ew-resize; }
+
+/* move handle, just inside the top-left corner so it stays reachable even
+   on an element pinned flush against the viewport edge (the sticky nav) */
+.sel-ring .mvh {
+  position: absolute;
+  left: 3px;
+  top: 3px;
   width: 13px;
   height: 13px;
   border-radius: 3px;
   background: var(--accent-2, var(--accent));
   cursor: move;
-  opacity: 0;
-  transition: opacity .15s;
-  z-index: 10000;
+  pointer-events: auto;
 }
-.resize-wrap:hover .move-grip, .resize-wrap.has-editing .move-grip { opacity: 1; }
 
-/* A-/A+ font-size buttons, shown above a text field only while it's
-   actively being edited (real character size, not the field's box) */
+/* frozen slot an element leaves behind when its first resize detaches it
+   from flow (detachFromFlow() in js/main.js) */
+.free-wrap { position: relative; }
+
+/* A-/A+ font-size buttons, floated above a text field only while it's
+   actively being edited (real character size, never tied to the field's
+   box: resizing the box only reflows the text) */
 .font-size-ctl {
   position: absolute;
-  top: -28px;
-  left: 0;
   display: none;
   gap: 3px;
   background: var(--surface);
   border-radius: 7px;
   padding: 3px;
-  z-index: 6;
+  z-index: 10001;
   box-shadow: 0 2px 8px rgba(0, 0, 0, .3);
 }
-.resize-wrap.has-editing .font-size-ctl { display: flex; }
+.font-size-ctl.show { display: flex; }
 .font-size-ctl button {
   border: none;
   background: var(--surface-2);

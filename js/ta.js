@@ -61,8 +61,8 @@ function seed() {
     sizes: {},
     /* A-/A+ font-size bumps in the visual editor, keyed by data-edit-id */
     font_sizes: {},
-    /* move-handle drags in the visual editor, text fields only, keyed by
-       data-edit-id, {id: {x, y}} left/top offsets in css px */
+    /* move-handle drags in the visual editor, keyed the same way as sizes,
+       {id: {tx, ty}} translate offsets in css px */
     positions: {}
   };
 }
@@ -1219,11 +1219,19 @@ function pullStateFromEditor() {
   var raw;
   try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
   if (!raw) return;
-  try { STATE = JSON.parse(raw); } catch (e) { return; }
-  var editingRaw;
-  try { editingRaw = localStorage.getItem("preview_editing"); } catch (e) { editingRaw = null; }
-  EDITING = editingRaw ? JSON.parse(editingRaw) : null;
-  normalizeState();
+  /* a corrupt snapshot (bad json, or a shape normalizeState()/renderAll()
+     chokes on) must never throw here: this runs synchronously from inside
+     button handlers and showMode(), and an uncaught exception would abort
+     whichever handler called it, same failure mode fixed in
+     tryRestoreFromPreview() below */
+  try {
+    var newState = JSON.parse(raw);
+    var editingRaw;
+    try { editingRaw = localStorage.getItem("preview_editing"); } catch (e) { editingRaw = null; }
+    STATE = newState;
+    EDITING = editingRaw ? JSON.parse(editingRaw) : null;
+    normalizeState();
+  } catch (e) {}
 }
 
 /**
@@ -1309,19 +1317,29 @@ function tryRestoreFromPreview() {
   var raw;
   try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
   if (!raw) return false;
+  /* a corrupt snapshot (bad json, or a shape normalizeState()/renderAll()
+     chokes on) must never throw here: this runs synchronously at the top
+     of the DOMContentLoaded handler, before any button gets wired up, so
+     an uncaught exception here used to silently kill every control on the
+     page (visual editor tab, preview, apply, save, reset, all of it) with
+     nothing shown to the ta except a console error. fall back to the live
+     content instead, and drop the bad snapshot so it can't keep happening. */
   try {
-    STATE = JSON.parse(raw);
+    var newState = JSON.parse(raw);
+    var editingRaw;
+    try { editingRaw = localStorage.getItem("preview_editing"); } catch (e) { editingRaw = null; }
+    var newEditing = editingRaw ? JSON.parse(editingRaw) : null;
+    STATE = newState;
+    EDITING = newEditing;
+    normalizeState();
+    renderAll();
+    syncProfileBar();
+    showMsg("Restored your unsaved edits from before you previewed them.", true);
+    return true;
   } catch (e) {
+    clearPreviewSnapshot();
     return false;
   }
-  var editingRaw;
-  try { editingRaw = localStorage.getItem("preview_editing"); } catch (e) { editingRaw = null; }
-  EDITING = editingRaw ? JSON.parse(editingRaw) : null;
-  normalizeState();
-  renderAll();
-  syncProfileBar();
-  showMsg("Restored your unsaved edits from before you previewed them.", true);
-  return true;
 }
 
 /**

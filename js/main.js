@@ -373,22 +373,6 @@ function getSize(el) {
 }
 
 /**
- * Elevates el's paint order above its untouched siblings once any
- * resize/move override is active, matching what a ta dragging it would
- * expect to see ("the thing I just touched is on top"): a position/size
- * change alone doesn't change stacking order, so a resized/moved element
- * would otherwise get visually clipped by (and lose clicks to) whatever
- * normally comes after it in the DOM the moment it grows or moves into
- * that element's space. Reverts once every override is back to default.
- * @param el the element
- */
-function syncStacking(el) {
-  var p = getPos(el);
-  var isDefault = p.tx === 0 && p.ty === 0 && el.dataset.ovW === undefined;
-  el.style.zIndex = isDefault ? "" : "9999";
-}
-
-/**
  * The move offset of el's NEAREST tracked ancestor only, not every tracked
  * ancestor above it. Used to cancel a container's translate back out of the
  * elements inside it: moving a section or a card slides only that box,
@@ -459,7 +443,6 @@ function setOwnPos(el, tx, ty) {
   }
   paintPos(el);
   el.querySelectorAll(RESIZABLE_SEL).forEach(paintPos);
-  syncStacking(el);
 }
 
 /**
@@ -480,7 +463,6 @@ function setBox(el, w, h) {
   el.dataset.ovH = h;
   el.style.width = w + "px";
   el.style.height = h + "px";
-  syncStacking(el);
 }
 
 /**
@@ -494,7 +476,6 @@ function resetBox(el) {
   delete el.dataset.ovH;
   el.style.width = parseFloat(el.dataset.natW) + "px";
   el.style.height = parseFloat(el.dataset.natH) + "px";
-  syncStacking(el);
 }
 
 /**
@@ -576,10 +557,7 @@ function applyPositionOverrides(positions) {
       el.dataset.ovTy = p.ty;
     }
   });
-  els.forEach(function (el) {
-    paintPos(el);
-    syncStacking(el);
-  });
+  els.forEach(paintPos);
 }
 
 /**
@@ -596,6 +574,99 @@ function applyHiddenOverrides(hidden) {
       el.style.display = "none";
     });
   });
+}
+
+/* the visual editor's stacking order, bottom to top: which id's element
+   paints on top of which. an explicit ordered list a ta controls with the
+   ring's layer up/down handles (see moveLayer()), not the old syncStacking()
+   guess ("whatever was touched last must be on top", removed - it stomped
+   its own z-index the moment two touched elements overlapped, since resize/
+   move and stacking order shared the same inline style property). kept as
+   the in-memory canonical order so moveLayer() can shift one id without
+   re-deriving everything from content.layers again. */
+var LAYER_ORDER = [];
+
+/**
+ * Every currently-rendered tracked element's id, in DOM (paint) order,
+ * deduplicated. Seeds a sane default stack for any id a saved content.layers
+ * list doesn't know about yet (a fresh blob, or a template id added since
+ * it was saved), so an untouched page's stacking still matches exactly what
+ * it looked like before any layer system existed.
+ * @return array of ids, document order
+ */
+function domOrderIds() {
+  var seen = {};
+  var ids = [];
+  document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
+    var id = elId(el);
+    if (id && !seen[id]) { seen[id] = true; ids.push(id); }
+  });
+  return ids;
+}
+
+/**
+ * Applies an explicit stacking order to every tracked element: z-index is
+ * just an id's position in the list (bottom = 1), so the layer up/down
+ * handles (see moveLayer()) are the only thing that ever reorders elements,
+ * resizing or moving one no longer silently bumps it above its neighbours.
+ * Reconciles the saved list with what's actually on the page first: any id
+ * missing from it is appended in DOM order (see domOrderIds()), so a page
+ * that's never had anything reordered still stacks exactly as if there were
+ * no layer system at all. Runs on every load, live site included, same as
+ * applyTextOverrides(). Forces position:relative on a still-static element
+ * first, z-index has no effect otherwise.
+ * @param layers content.layers, ordered ids bottom to top
+ */
+function applyLayerOrder(layers) {
+  var order = (layers || []).slice();
+  var have = {};
+  order.forEach(function (id) { have[id] = true; });
+  domOrderIds().forEach(function (id) {
+    if (!have[id]) { order.push(id); have[id] = true; }
+  });
+  LAYER_ORDER = order;
+  order.forEach(function (id, i) {
+    document.querySelectorAll('[data-edit-id="' + id + '"], [data-resize-id="' + id + '"]').forEach(function (el) {
+      if (getComputedStyle(el).position === "static") el.style.position = "relative";
+      el.style.zIndex = String(i + 1);
+    });
+  });
+}
+
+/**
+ * Shifts one element one step up or down the stacking order (a plain
+ * adjacent swap with its neighbour, so repeated clicks walk it further each
+ * time, see the ring's .lyu/.lyd handles), repaints every element's z-index,
+ * and persists the whole order. A no-op at either end of the stack.
+ * @param id the element's data-edit-id or data-resize-id
+ * @param dir +1 to bring forward one step, -1 to send backward one step
+ */
+function moveLayer(id, dir) {
+  var i = LAYER_ORDER.indexOf(id);
+  if (i === -1) { LAYER_ORDER.push(id); i = LAYER_ORDER.length - 1; }
+  var j = i + dir;
+  if (j < 0 || j >= LAYER_ORDER.length) return;
+  var tmp = LAYER_ORDER[i];
+  LAYER_ORDER[i] = LAYER_ORDER[j];
+  LAYER_ORDER[j] = tmp;
+  applyLayerOrder(LAYER_ORDER);
+  saveLayerOrder(LAYER_ORDER);
+}
+
+/**
+ * Persists the whole stacking order into the preview snapshot, the same
+ * localStorage draft every other override here uses. Rewritten wholesale
+ * (not merged), same as saveCustomElements(), since the in-memory
+ * LAYER_ORDER is always the full, current stack.
+ * @param order LAYER_ORDER
+ */
+function saveLayerOrder(order) {
+  var raw;
+  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  snapshot.layers = order;
+  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
 }
 
 /* undo/redo for click-to-edit and delete, a plain stack of commits: a text
@@ -694,7 +765,11 @@ var RING_DIRS = {
   se: [1, 1], s: [0, 1], sw: [-1, 1], w: [-1, 0]
 };
 
-/** Builds the ring and its handles once, appended to body. */
+/**
+ * Builds the ring and its handles once, appended to body: 8 resize handles,
+ * a move handle, a delete handle, and the two layer handles (bring forward/
+ * send backward one step, see moveLayer()).
+ */
 function buildRing() {
   RING = document.createElement("div");
   RING.className = "sel-ring";
@@ -732,6 +807,35 @@ function buildRing() {
     if (RING_EL) deleteElement(RING_EL);
   });
   RING.appendChild(del);
+
+  var lyUp = document.createElement("span");
+  lyUp.className = "lyh lyu";
+  lyUp.title = "Bring forward";
+  lyUp.innerHTML =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" ' +
+    'stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg>';
+  lyUp.addEventListener("mousedown", function (e) { e.preventDefault(); e.stopPropagation(); });
+  lyUp.addEventListener("click", function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (RING_EL) moveLayer(elId(RING_EL), 1);
+  });
+  RING.appendChild(lyUp);
+
+  var lyDn = document.createElement("span");
+  lyDn.className = "lyh lyd";
+  lyDn.title = "Send backward";
+  lyDn.innerHTML =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" ' +
+    'stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
+  lyDn.addEventListener("mousedown", function (e) { e.preventDefault(); e.stopPropagation(); });
+  lyDn.addEventListener("click", function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (RING_EL) moveLayer(elId(RING_EL), -1);
+  });
+  RING.appendChild(lyDn);
+
   document.body.appendChild(RING);
 }
 
@@ -1047,10 +1151,13 @@ function freezeFreeElement(el) {
  * inner textbox), same "the button IS the textbox" rule every other CTA on
  * the site follows; its href stays "#" (dead, like the login page's own
  * "Sign up" link) with the entered link only stashed on the dataset for
- * now, real navigation is a later step. An "image" is the site's own flat
- * `.ph` placeholder box (see the Media bullets in CLAUDE.md), not a real
- * uploaded photo, same reasoning: don't go hunting for a real asset.
- * @param d {id, kind, left, top, w, h, icon, href}
+ * now, real navigation is a later step. An "image" with a `d.url` is a real
+ * uploaded photo (see uploadImageFile()/renderCtxMenuImagePicker()), a plain
+ * `<img>` with the site's usual object-fit: cover so its box dictates the
+ * crop rather than stretching the pixels; one saved before real uploads
+ * existed (no `d.url`) still falls back to the site's flat `.ph` placeholder
+ * box (see the Media bullets in CLAUDE.md).
+ * @param d {id, kind, left, top, w, h, icon, href, url}
  * @return the built, attached element
  */
 function buildCustomElement(d) {
@@ -1073,6 +1180,14 @@ function buildCustomElement(d) {
     el.style.background = "var(--surface-2)";
     el.style.width = "160px";
     el.style.height = "100px";
+  } else if (d.kind === "image" && d.url) {
+    el = document.createElement("img");
+    el.src = d.url;
+    el.alt = "";
+    el.setAttribute("data-resize-id", d.id);
+    el.style.objectFit = "cover";
+    el.style.width = "240px";
+    el.style.height = "180px";
   } else if (d.kind === "image") {
     el = document.createElement("div");
     el.className = "ph";
@@ -1122,16 +1237,44 @@ function saveCustomElements(list) {
 }
 
 /**
+ * Uploads one image file for the "Add element" menu's Image option, the
+ * same ta-only /api/upload endpoint every other upload on the site already
+ * posts to (attachments, gallery, hero video, home images). Reads the
+ * session token straight out of localStorage rather than going through
+ * js/ta.js's authedFetch()/authHeaders(), since this file runs on pages
+ * that never load ta.js; same-origin, so the token's already there whether
+ * this runs in the ta's real portal tab or the preview iframe it shares
+ * localStorage with.
+ * @param file the File object from the picker
+ * @return a promise resolving to the uploaded file's url
+ */
+function uploadImageFile(file) {
+  var fd = new FormData();
+  fd.append("file", file);
+  return fetch("/api/upload", {
+    method: "POST",
+    headers: { "Authorization": "Bearer " + (localStorage.getItem("token") || "") },
+    body: fd
+  }).then(function (res) {
+    if (!res.ok) throw new Error("upload failed");
+    return res.json();
+  }).then(function (data) { return data.url; });
+}
+
+/**
  * Adds one new element via the visual editor's right-click "Add element"
  * menu (see wireAddElementMenu()): built through buildCustomElement(), the
  * exact same construction that recreates it on every future load, then
  * measured/frozen at its just-rendered size and pushed onto
  * content.custom_elements so it round-trips through Apply/profiles like
- * everything else the editor creates.
+ * everything else the editor creates. Always lands on the very top of the
+ * stacking order (see moveLayer()), matching what a ta would expect from
+ * something they just placed.
  * @param kind "text", "button", "box", "image", or "icon"
  * @param x left, document px (where the menu was opened)
  * @param y top, document px
- * @param extra {icon} for kind "icon", {href} for kind "button"
+ * @param extra {icon} for kind "icon", {href} for kind "button", {url} for
+ *   kind "image" (the uploaded file's url, see uploadImageFile())
  * @return the new element
  */
 function addCustomElement(kind, x, y, extra) {
@@ -1140,12 +1283,16 @@ function addCustomElement(kind, x, y, extra) {
   var d = { id: (kind === "icon" ? "icon.custom." : "custom." + kind + ".") + uid, kind: kind, left: Math.round(x), top: Math.round(y) };
   if (kind === "icon") d.icon = extra.icon;
   if (kind === "button") d.href = extra.href || "";
+  if (kind === "image") d.url = extra.url;
   var el = buildCustomElement(d);
   freezeFreeElement(el);
   d.w = parseFloat(el.dataset.natW);
   d.h = parseFloat(el.dataset.natH);
   CUSTOM_ELEMENTS.push(d);
   saveCustomElements(CUSTOM_ELEMENTS);
+  LAYER_ORDER.push(d.id);
+  applyLayerOrder(LAYER_ORDER);
+  saveLayerOrder(LAYER_ORDER);
   if (kind === "text" || kind === "button") wireTextField(el);
   return el;
 }
@@ -1216,14 +1363,47 @@ function renderCtxMenuButtonLink() {
 }
 
 /**
- * Handles a click on one of the root menu's 5 options: textbox/box/image
- * add immediately and close the menu, icon/button swap to a picker/link
- * sub-view first.
+ * Swaps the menu into its "Add image" sub-view: a real file picker (see
+ * uploadImageFile()), same "choose a file, it uploads immediately" pattern
+ * as every other upload input on the site (attachments, gallery, home
+ * images), not the earlier flat placeholder box. The menu stays open with a
+ * status line during the upload so a slow connection doesn't look broken;
+ * closes itself and drops the new image on success.
+ */
+function renderCtxMenuImagePicker() {
+  CTX_MENU.innerHTML =
+    '<div class="ctx-title">Add image</div>' +
+    '<input type="file" class="ctx-file-input" accept="image/*">' +
+    '<div class="ctx-file-msg"></div>';
+  var input = CTX_MENU.querySelector(".ctx-file-input");
+  var msg = CTX_MENU.querySelector(".ctx-file-msg");
+  input.addEventListener("change", function () {
+    var file = input.files[0];
+    if (!file) return;
+    input.disabled = true;
+    msg.textContent = "Uploading...";
+    uploadImageFile(file)
+      .then(function (url) {
+        addCustomElement("image", CTX_POS.x, CTX_POS.y, { url: url });
+        hideCtxMenu();
+      })
+      .catch(function () {
+        msg.textContent = "Upload failed, try again.";
+        input.disabled = false;
+      });
+  });
+}
+
+/**
+ * Handles a click on one of the root menu's 5 options: textbox/box add
+ * immediately and close the menu, icon/button/image swap to a picker/link/
+ * file sub-view first.
  * @param kind "text", "box", "image", "icon", or "button"
  */
 function handleCtxAdd(kind) {
   if (kind === "icon") { renderCtxMenuIconPicker(); return; }
   if (kind === "button") { renderCtxMenuButtonLink(); return; }
+  if (kind === "image") { renderCtxMenuImagePicker(); return; }
   addCustomElement(kind, CTX_POS.x, CTX_POS.y);
   hideCtxMenu();
 }
@@ -1548,14 +1728,25 @@ function showTextToolbar(el) {
   TEXT_TOOLBAR_EL = el;
   TEXT_TOOLBAR.querySelector(".tt-font").value = el.style.fontFamily || "";
   updateTextToolbarState();
-  var r = el.getBoundingClientRect();
-  var top = r.top + window.scrollY - 34;
-  /* no room above (the field is flush against the top of the page, eg. in
-     the sticky nav): drop below it instead of rendering off-screen */
-  if (r.top < 40) top = r.bottom + window.scrollY + 4;
-  TEXT_TOOLBAR.style.left = (r.left + window.scrollX) + "px";
-  TEXT_TOOLBAR.style.top = top + "px";
+  /* shown (and thus laid out) before measuring: the toolbar wraps onto a
+     second row past a certain width (flex-wrap, see .text-toolbar's
+     max-width), so its real height varies with viewport width and can't be
+     hardcoded, it has to be read off the actual rendered element. Adding
+     the class and reading offsetHeight both happen synchronously here, so
+     the browser never paints the still-unpositioned toolbar in between. */
   TEXT_TOOLBAR.classList.add("show");
+  var r = el.getBoundingClientRect();
+  var th = TEXT_TOOLBAR.offsetHeight;
+  var top = r.top + window.scrollY - th - 6;
+  /* no room above (the field is flush against the top of the page, eg. in
+     the sticky nav, or the toolbar itself is taller than the gap above):
+     drop below it instead of overlapping the field or the page above it */
+  if (r.top < th + 10) top = r.bottom + window.scrollY + 6;
+  var left = r.left + window.scrollX;
+  var maxLeft = window.scrollX + document.documentElement.clientWidth - TEXT_TOOLBAR.offsetWidth - 6;
+  left = Math.max(window.scrollX + 6, Math.min(left, maxLeft));
+  TEXT_TOOLBAR.style.left = left + "px";
+  TEXT_TOOLBAR.style.top = top + "px";
 }
 
 /** Hides the text toolbar once the edit ends. */
@@ -1970,6 +2161,7 @@ document.addEventListener("DOMContentLoaded", function () {
       applyTextStyleOverrides(data.text_styles);
       applyPositionOverrides(data.positions);
       applyHiddenOverrides(data.hidden);
+      applyLayerOrder(data.layers);
       if (isPreviewMode() && isEditMode()) { wireResizable(); wireClickToEdit(); wireAddElementMenu(); }
     })
     .catch(function () {

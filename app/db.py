@@ -157,6 +157,9 @@ DEFAULT_CONTENT = {
     # not present in the template at all, {id, kind, left, top, w, h, icon,
     # href}, see renderCustomElements() in js/main.js.
     "custom_elements": [],
+    # visual editor stacking order, ordered ids bottom to top, see
+    # applyLayerOrder()/moveLayer() in js/main.js.
+    "layers": [],
 }
 
 

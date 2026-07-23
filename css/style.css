@@ -1370,6 +1370,27 @@ body.edit-mode .apply-bob { animation: none; }
 }
 .sel-ring .delh svg { width: 10px; height: 10px; }
 
+/* layer up/down handles, inset into the bottom corners (mirroring the move/
+   delete handles at the top corners): bring forward / send backward one
+   step in the stacking order each click, see moveLayer() in js/main.js */
+.sel-ring .lyh {
+  position: absolute;
+  bottom: 3px;
+  width: 15px;
+  height: 15px;
+  border-radius: 3px;
+  background: var(--surface-2, #333);
+  color: var(--text, #fff);
+  cursor: pointer;
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sel-ring .lyh svg { width: 11px; height: 11px; }
+.sel-ring .lyu { left: 3px; }
+.sel-ring .lyd { right: 3px; }
+
 /* frozen slot an element leaves behind when its first resize detaches it
    from flow (detachFromFlow() in js/main.js) */
 .free-wrap { position: relative; }
@@ -1484,6 +1505,19 @@ body.edit-mode .apply-bob { animation: none; }
   color: var(--text);
   font-family: var(--font-body);
   font-size: .82rem;
+}
+.ctx-menu .ctx-file-input {
+  margin: 2px 8px 8px;
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: .78rem;
+  max-width: 220px;
+}
+.ctx-menu .ctx-file-msg {
+  margin: 0 8px 6px;
+  color: var(--muted);
+  font-family: var(--font-body);
+  font-size: .75rem;
 }
 
 /* ta portal's own mini logistics-tile preview (js/ta.js's wireInlineEdit()):

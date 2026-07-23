@@ -73,7 +73,10 @@ function seed() {
     /* elements added via the visual editor's right-click "Add element" menu,
        not present in the template at all, see renderCustomElements() in
        js/main.js */
-    custom_elements: []
+    custom_elements: [],
+    /* visual editor stacking order, ordered ids bottom to top, see
+       applyLayerOrder()/moveLayer() in js/main.js */
+    layers: []
   };
 }
 
@@ -201,6 +204,7 @@ function normalizeState() {
   if (!STATE.positions || typeof STATE.positions !== "object") STATE.positions = {};
   if (!Array.isArray(STATE.hidden)) STATE.hidden = [];
   if (!Array.isArray(STATE.custom_elements)) STATE.custom_elements = [];
+  if (!Array.isArray(STATE.layers)) STATE.layers = [];
   /* footer contact line used to be its own field, edited from a dedicated
      input in this section; now it's click-to-edit like the rest of the
      landing page copy, so fold any already-saved value in once and stop

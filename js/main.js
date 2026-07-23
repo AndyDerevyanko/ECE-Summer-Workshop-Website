@@ -611,6 +611,75 @@ function domOrderIds() {
   return ids;
 }
 
+/* ids "promoted to navbar" (see the right-click "Promote to navbar" menu
+   option, toggleFixed()): these always stack above every non-fixed element
+   regardless of layer order, since a sticky/fixed-position element (the nav
+   bar itself, by default, see NAV_FIXED_IDS in app/db.py) needs to actually
+   stay on top of scrolling page content, not just whatever its DOM position
+   happened to sort it to. an object keyed by id for O(1) lookup. */
+var FIXED_SET = {};
+
+/**
+ * Whether an id is currently promoted to the always-on-top group.
+ * @param id a data-edit-id or data-resize-id value
+ * @return true if fixed
+ */
+function isFixed(id) {
+  return !!FIXED_SET[id];
+}
+
+/**
+ * Rebuilds FIXED_SET from a saved content.fixed_elements list. Doesn't touch
+ * z-index itself, applyLayerOrder() does that; call this first so the
+ * banding below sees the right group for each id.
+ * @param ids content.fixed_elements
+ */
+function setFixedElements(ids) {
+  FIXED_SET = {};
+  (ids || []).forEach(function (id) { FIXED_SET[id] = true; });
+}
+
+/**
+ * Toggles one id in or out of the always-on-top group (the right-click
+ * "Promote to navbar" / "Remove from navbar" option), then repaints the
+ * stacking order and the red edit-mode highlight, and persists the change.
+ * @param id the element's data-edit-id or data-resize-id
+ */
+function toggleFixed(id) {
+  if (FIXED_SET[id]) delete FIXED_SET[id];
+  else FIXED_SET[id] = true;
+  saveFixedElements(Object.keys(FIXED_SET));
+  applyLayerOrder(LAYER_ORDER);
+  applyFixedHighlight();
+}
+
+/**
+ * Persists the whole fixed-elements set into the preview snapshot, the same
+ * localStorage draft every other override here uses. Rewritten wholesale,
+ * same as saveLayerOrder()/saveCustomElements().
+ * @param ids Object.keys(FIXED_SET)
+ */
+function saveFixedElements(ids) {
+  var raw;
+  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  snapshot.fixed_elements = ids;
+  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
+ * Paints the always-visible red "this is fixed" outline (see .edit-fixed in
+ * css/style.css) onto every currently-rendered element in FIXED_SET, and
+ * clears it off everything else. Only actually visible under body.edit-mode
+ * (the css rule is scoped there), but harmless to run unconditionally.
+ */
+function applyFixedHighlight() {
+  document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
+    el.classList.toggle("edit-fixed", isFixed(elId(el)));
+  });
+}
+
 /**
  * Applies an explicit stacking order to every tracked element: z-index is
  * just an id's position in the list (bottom = 1), so the layer up/down
@@ -619,7 +688,12 @@ function domOrderIds() {
  * Reconciles the saved list with what's actually on the page first: any id
  * missing from it is appended in DOM order (see domOrderIds()), so a page
  * that's never had anything reordered still stacks exactly as if there were
- * no layer system at all. Runs on every load, live site included, same as
+ * no layer system at all. Fixed elements (FIXED_SET, see setFixedElements())
+ * are always stacked above every non-fixed one: the order is split into two
+ * bands, non-fixed first then fixed, each keeping its own relative order
+ * from the list, so within either group elements are still individually
+ * reorderable (see moveLayer()) but no fixed element's z-index can ever fall
+ * below a non-fixed one's. Runs on every load, live site included, same as
  * applyTextOverrides(). Forces position:relative on a still-static element
  * first, z-index has no effect otherwise.
  * @param layers content.layers, ordered ids bottom to top
@@ -632,11 +706,15 @@ function applyLayerOrder(layers) {
     if (!have[id]) { order.push(id); have[id] = true; }
   });
   LAYER_ORDER = order;
-  order.forEach(function (id, i) {
+  var nonFixed = [], fixed = [];
+  order.forEach(function (id) { (isFixed(id) ? fixed : nonFixed).push(id); });
+  var z = 1;
+  nonFixed.concat(fixed).forEach(function (id) {
     document.querySelectorAll('[data-edit-id="' + id + '"], [data-resize-id="' + id + '"]').forEach(function (el) {
       if (getComputedStyle(el).position === "static") el.style.position = "relative";
-      el.style.zIndex = String(i + 1);
+      el.style.zIndex = String(z);
     });
+    z++;
   });
 }
 
@@ -644,14 +722,20 @@ function applyLayerOrder(layers) {
  * Shifts one element one step up or down the stacking order (a plain
  * adjacent swap with its neighbour, so repeated clicks walk it further each
  * time, see the ring's .lyu/.lyd handles), repaints every element's z-index,
- * and persists the whole order. A no-op at either end of the stack.
+ * and persists the whole order. A no-op at either end of the stack. Only
+ * ever swaps with the nearest neighbour in the SAME fixed/non-fixed group
+ * (skipping over any in between), so a fixed element can never be walked
+ * below a non-fixed one this way either, it can only reorder among its own
+ * group, matching what applyLayerOrder()'s banding already enforces.
  * @param id the element's data-edit-id or data-resize-id
  * @param dir +1 to bring forward one step, -1 to send backward one step
  */
 function moveLayer(id, dir) {
   var i = LAYER_ORDER.indexOf(id);
   if (i === -1) { LAYER_ORDER.push(id); i = LAYER_ORDER.length - 1; }
+  var group = isFixed(id);
   var j = i + dir;
+  while (j >= 0 && j < LAYER_ORDER.length && isFixed(LAYER_ORDER[j]) !== group) j += dir;
   if (j < 0 || j >= LAYER_ORDER.length) return;
   var tmp = LAYER_ORDER[i];
   LAYER_ORDER[i] = LAYER_ORDER[j];
@@ -1374,16 +1458,28 @@ function buildCustomElement(d) {
     el.style.objectFit = "cover";
     el.style.width = "320px";
     el.style.height = "200px";
+  } else if (d.icon) {
+    /* built-in or ta-uploaded icon: always real inline <svg> markup, never
+       an <img>, so a future color-restyle tool can just set fill/stroke via
+       css (an <img> can't be recolored that way). a ta-uploaded icon's raw
+       svg markup is fetched once at add-time (see renderCtxMenuIconPicker())
+       and stored here, same "the file's actual content travels with the
+       saved element" reasoning content.text_styles[id].fontUrl uses for
+       custom fonts. */
+    el = svgFromMarkup(d.icon);
+    el.setAttribute("data-resize-id", d.id);
   } else if (d.url) {
-    /* an uploaded (raster) icon, see renderCtxMenuIconPicker(): elKind()
+    /* an icon added before icons were inlined as svg markup: still just an
+       <img>, can't be recolored later, but keeps rendering fine. elKind()
        already treats an "icon."-prefixed id as icon kind (locked aspect
-       ratio) regardless of tag, so an <img> here needs no special-casing */
+       ratio) regardless of tag, so this needs no special-casing beyond
+       that. */
     el = document.createElement("img");
     el.src = d.url;
     el.alt = "";
     el.setAttribute("data-resize-id", d.id);
   } else {
-    el = svgFromMarkup(d.icon || ICON_LIBRARY[0].svg);
+    el = svgFromMarkup(ICON_LIBRARY[0].svg);
     el.setAttribute("data-resize-id", d.id);
   }
   placeFreeElement(el, d.left, d.top);
@@ -1490,6 +1586,12 @@ function addCustomElement(kind, x, y, extra) {
 var CTX_MENU = null;
 var CTX_POS = { x: 0, y: 0 };
 
+/* the tagged element (if any) that was right-clicked ON to open the menu,
+   so renderCtxMenuRoot() can offer a "Promote to navbar"/"Remove from
+   navbar" toggle for it, see wireAddElementMenu(). null when the menu was
+   opened on empty space. */
+var CTX_TARGET_ID = null;
+
 /** Builds the context menu once, lazily. */
 function buildCtxMenu() {
   CTX_MENU = document.createElement("div");
@@ -1497,9 +1599,23 @@ function buildCtxMenu() {
   document.body.appendChild(CTX_MENU);
 }
 
-/** Renders the menu's root list: the 5 things that can be added. */
+/**
+ * Renders the menu's root list: an optional "Promote to navbar"/"Remove
+ * from navbar" toggle first (only when the menu was opened by right-
+ * clicking an existing tagged element, see CTX_TARGET_ID), then the 6
+ * things that can be added.
+ */
 function renderCtxMenuRoot() {
+  var toggleHtml = "";
+  if (CTX_TARGET_ID) {
+    toggleHtml =
+      '<div class="ctx-title">This element</div>' +
+      '<button type="button" data-fixed-toggle="1">' +
+      (isFixed(CTX_TARGET_ID) ? "Remove from navbar" : "Promote to navbar") +
+      '</button>';
+  }
   CTX_MENU.innerHTML =
+    toggleHtml +
     '<div class="ctx-title">Add element</div>' +
     '<button type="button" data-add="text">Textbox</button>' +
     '<button type="button" data-add="box">Box</button>' +
@@ -1510,6 +1626,13 @@ function renderCtxMenuRoot() {
   CTX_MENU.querySelectorAll("button[data-add]").forEach(function (btn) {
     btn.addEventListener("click", function () { handleCtxAdd(btn.getAttribute("data-add")); });
   });
+  var toggleBtn = CTX_MENU.querySelector("[data-fixed-toggle]");
+  if (toggleBtn) {
+    toggleBtn.addEventListener("click", function () {
+      toggleFixed(CTX_TARGET_ID);
+      hideCtxMenu();
+    });
+  }
 }
 
 /**
@@ -1532,7 +1655,8 @@ function renderCtxMenuIconPicker() {
     '</div>' +
     '<div class="ctx-title">Icons your team added</div>' +
     '<div class="ctx-icons ctx-custom-icons"></div>' +
-    '<input type="file" class="ctx-file-input" accept="image/*">' +
+    '<input type="file" class="ctx-file-input" accept=".svg,image/svg+xml">' +
+    '<div class="ctx-file-msg">SVG only, so it can be recolored later</div>' +
     '<div class="ctx-file-msg ctx-upload-msg"></div>';
   CTX_MENU.querySelectorAll(".ctx-icon-btn").forEach(function (btn) {
     btn.addEventListener("click", function () {
@@ -1561,8 +1685,15 @@ function renderCtxMenuIconPicker() {
       btn.title = ic.name + " (added by " + ic.owner + ")";
       btn.innerHTML = '<img src="' + ic.url + '" alt="">';
       btn.addEventListener("click", function () {
-        addCustomElement("icon", CTX_POS.x, CTX_POS.y, { url: ic.url });
-        hideCtxMenu();
+        /* fetch the uploaded file's real svg markup and inline it (same as
+           a built-in icon) rather than dropping the url into an <img>, so
+           it can be recolored by a future styling tool; falls back to a
+           plain <img> if the fetch fails for any reason (eg a legacy
+           non-svg upload from before this was enforced) */
+        fetchSvgMarkup(ic.url).then(function (svg) {
+          addCustomElement("icon", CTX_POS.x, CTX_POS.y, svg ? { icon: svg } : { url: ic.url });
+          hideCtxMenu();
+        });
       });
       if (ic.owner === me) {
         var del = document.createElement("span");
@@ -1586,6 +1717,11 @@ function renderCtxMenuIconPicker() {
   input.addEventListener("change", function () {
     var file = input.files[0];
     if (!file) return;
+    if (file.type !== "image/svg+xml" && !/\.svg$/i.test(file.name)) {
+      msg.textContent = "Only .svg files can be added as icons.";
+      input.value = "";
+      return;
+    }
     input.disabled = true;
     msg.textContent = "Uploading...";
     uploadEditorFile(file)
@@ -1596,6 +1732,22 @@ function renderCtxMenuIconPicker() {
         input.disabled = false;
       });
   });
+}
+
+/**
+ * Fetches a url's contents as raw <svg>...</svg> markup, for inlining a
+ * ta-uploaded icon the same way a built-in one already is (see
+ * buildCustomElement()'s icon branch). Resolves null instead of rejecting
+ * on any failure (network error, non-svg content) so a caller can fall back
+ * to a plain <img> rather than breaking the "Add element" flow.
+ * @param url the uploaded icon's url
+ * @return a promise resolving to the svg markup string, or null
+ */
+function fetchSvgMarkup(url) {
+  return fetch(url)
+    .then(function (res) { return res.ok ? res.text() : null; })
+    .then(function (text) { return text && /<svg[\s>]/i.test(text) ? text : null; })
+    .catch(function () { return null; });
 }
 
 /**
@@ -1702,10 +1854,13 @@ function handleCtxAdd(kind) {
  * the menu partly off-screen.
  * @param x left, document px
  * @param y top, document px
+ * @param targetId the right-clicked element's id (see CTX_TARGET_ID), or
+ *   null if the click landed on empty space
  */
-function showCtxMenu(x, y) {
+function showCtxMenu(x, y, targetId) {
   if (!CTX_MENU) buildCtxMenu();
   CTX_POS = { x: x, y: y };
+  CTX_TARGET_ID = targetId || null;
   renderCtxMenuRoot();
   CTX_MENU.classList.add("show");
   var w = CTX_MENU.offsetWidth, h = CTX_MENU.offsetHeight;
@@ -1731,7 +1886,8 @@ function wireAddElementMenu() {
        spellcheck still works while actually typing */
     if (e.target.closest && e.target.closest("[contenteditable='true']")) return;
     e.preventDefault();
-    showCtxMenu(e.pageX, e.pageY);
+    var t = e.target.closest ? e.target.closest(RESIZABLE_SEL) : null;
+    showCtxMenu(e.pageX, e.pageY, t ? elId(t) : null);
   });
   /* mousedown (not click) so this runs and reads e.target BEFORE a menu
      button's own click handler gets a chance to rewrite CTX_MENU's
@@ -2623,7 +2779,9 @@ document.addEventListener("DOMContentLoaded", function () {
       applyTextStyleOverrides(data.text_styles);
       applyPositionOverrides(data.positions);
       applyHiddenOverrides(data.hidden);
+      setFixedElements(data.fixed_elements);
       applyLayerOrder(data.layers);
+      applyFixedHighlight();
       if (isPreviewMode() && isEditMode()) { wireResizable(); wireClickToEdit(); wireAddElementMenu(); }
     })
     .catch(function () {

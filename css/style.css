@@ -1297,6 +1297,17 @@ body.edit-mode [data-resize-id] {
 }
 body.edit-mode [data-resize-id]:hover { outline-style: solid; }
 
+/* an element "promoted to navbar" (right-click > Promote to navbar, see
+   toggleFixed()/applyFixedHighlight() in js/main.js): its hitbox goes red
+   instead of the usual accent color, so it's obvious at a glance which
+   elements are fixed (always stacked above every non-fixed one, see
+   applyLayerOrder()) and which aren't. same dashed/solid hover behavior,
+   just a different outline color. */
+body.edit-mode [data-edit-id].edit-fixed,
+body.edit-mode [data-resize-id].edit-fixed {
+  outline-color: red;
+}
+
 /* the Apply buttons' perpetual bob (.apply-bob, @keyframes bob above) animates
    `transform` forever, which as a CSS animation outranks the inline transform
    the editor sets for move/resize-pin (an animation always wins over an

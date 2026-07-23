@@ -19,6 +19,18 @@ var HOME_IMAGE_DEFAULTS = {
   certificate: "assets/certificate.png"
 };
 
+/* same default set js/main.js/app/db.py fall back to (NAV_FIXED_IDS): the
+   nav bar and everything inside it, promoted to "fixed" by default so it
+   always stacks above every non-fixed element, see toggleFixed() in
+   js/main.js. also what normalizeState() below backfills for a content
+   blob saved before this feature existed. */
+var NAV_FIXED_IDS = [
+  "box.nav", "box.brand", "img.brand.nav", "nav.brand",
+  "nav.link.about", "nav.link.gallery", "nav.link.learn",
+  "nav.link.schedule", "nav.link.prizes", "nav.link.apply",
+  "nav.portal", "box.themeBtn", "box.logoutBtn"
+];
+
 /**
  * Returns a fresh default content blob, used for a brand-new profile and
  * to fill in missing fields in normalizeState().
@@ -76,7 +88,11 @@ function seed() {
     custom_elements: [],
     /* visual editor stacking order, ordered ids bottom to top, see
        applyLayerOrder()/moveLayer() in js/main.js */
-    layers: []
+    layers: [],
+    /* ids "promoted to navbar" via the visual editor's right-click menu,
+       always stacked above every non-fixed element, see toggleFixed() in
+       js/main.js. defaults to the nav bar and everything inside it. */
+    fixed_elements: NAV_FIXED_IDS.slice()
   };
 }
 
@@ -205,6 +221,7 @@ function normalizeState() {
   if (!Array.isArray(STATE.hidden)) STATE.hidden = [];
   if (!Array.isArray(STATE.custom_elements)) STATE.custom_elements = [];
   if (!Array.isArray(STATE.layers)) STATE.layers = [];
+  if (!Array.isArray(STATE.fixed_elements)) STATE.fixed_elements = NAV_FIXED_IDS.slice();
   /* footer contact line used to be its own field, edited from a dedicated
      input in this section; now it's click-to-edit like the rest of the
      landing page copy, so fold any already-saved value in once and stop

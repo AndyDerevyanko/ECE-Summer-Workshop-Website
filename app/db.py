@@ -33,6 +33,19 @@ def _idle_seconds(role):
     """
     return TA_IDLE_SECONDS if role == "ta" else STUDENT_IDLE_SECONDS
 
+# ids that default to "fixed" in the visual editor (always stacked above
+# every non-fixed element, see applyLayerOrder()/toggleFixed() in
+# js/main.js): everything inside the sticky <nav> itself, since it needs to
+# stay visually on top of scrolling page content, not wherever the layer
+# system's dom-order fallback happens to sort it. matches the
+# data-edit-id/data-resize-id values on templates/index.html's <nav>.
+NAV_FIXED_IDS = [
+    "box.nav", "box.brand", "img.brand.nav", "nav.brand",
+    "nav.link.about", "nav.link.gallery", "nav.link.learn",
+    "nav.link.schedule", "nav.link.prizes", "nav.link.apply",
+    "nav.portal", "box.themeBtn", "box.logoutBtn",
+]
+
 # starting content, same shape as the old hardcoded DAYS/EXTRAS/timer vars.
 # only used the first time the content table is empty.
 DEFAULT_CONTENT = {
@@ -160,6 +173,10 @@ DEFAULT_CONTENT = {
     # visual editor stacking order, ordered ids bottom to top, see
     # applyLayerOrder()/moveLayer() in js/main.js.
     "layers": [],
+    # ids "promoted to navbar", always stacked above every non-fixed
+    # element regardless of layer order, see toggleFixed() in js/main.js.
+    # defaults to the nav bar and everything inside it.
+    "fixed_elements": list(NAV_FIXED_IDS),
 }
 
 

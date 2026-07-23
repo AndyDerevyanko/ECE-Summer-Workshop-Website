@@ -520,7 +520,7 @@ function applySizeOverrides(sizes) {
 
 /**
  * Applies saved font-size overrides (from the A-/A+ buttons, see
- * showFontCtl()) on top of the page's own default type scale, for
+ * showTextToolbar()) on top of the page's own default type scale, for
  * every click-to-edit text field that carries one.
  * @param sizes content.font_sizes, {id: px}
  */
@@ -529,6 +529,25 @@ function applyFontSizeOverrides(sizes) {
   document.querySelectorAll("[data-edit-id]").forEach(function (el) {
     var id = el.getAttribute("data-edit-id");
     if (sizes[id]) el.style.fontSize = sizes[id];
+  });
+}
+
+/**
+ * Applies saved whole-field text style overrides (font family, alignment,
+ * letter spacing, see showTextToolbar()/saveTextStyle()) on top of the
+ * page's own default styling, for every click-to-edit text field that
+ * carries one. Runs on every load, live site included, same as
+ * applyTextOverrides().
+ * @param styles content.text_styles, {id: {fontFamily, align, letterSpacing}}
+ */
+function applyTextStyleOverrides(styles) {
+  styles = styles || {};
+  document.querySelectorAll("[data-edit-id]").forEach(function (el) {
+    var s = styles[el.getAttribute("data-edit-id")];
+    if (!s) return;
+    if (s.fontFamily) el.style.fontFamily = s.fontFamily;
+    if (s.align) el.style.textAlign = s.align;
+    if (s.letterSpacing) el.style.letterSpacing = s.letterSpacing;
   });
 }
 
@@ -921,7 +940,7 @@ function deleteElement(el) {
   setElementHidden(id, true);
   EDIT_UNDO.push({ type: "delete", id: id });
   EDIT_REDO.length = 0;
-  hideFontCtl();
+  hideTextToolbar();
   RING_EL = null;
   if (RING) RING.style.display = "none";
 }
@@ -1029,57 +1048,180 @@ function wireResizable() {
   });
 }
 
-/* the one floating A-/A+ font-size control, shared by every text field,
-   shown above whichever one is being edited. character size is deliberately
-   separate from the field's box: resizing the box only changes how the
-   text flows, these buttons are the only thing that changes the letters. */
-var FONT_CTL = null;
-var FONT_EL = null;
+/* the one floating text toolbar, shared by every text field, shown above
+   whichever one is being edited. font/align/letter-spacing/size act on the
+   whole field (real character size and spacing, never tied to the field's
+   box: resizing the box only changes how the text flows); bold/italic/
+   underline act on whatever's selected inside it, same as any contenteditable
+   rich-text box (document.execCommand, still the pragmatic way to do this
+   without a full editor library). */
+var TEXT_TOOLBAR = null;
+var TEXT_TOOLBAR_EL = null;
+
+/* a small curated set rather than every Google Font under the sun: this
+   site loads exactly two web fonts (Archivo, Inter, see every page's
+   <head>), so the rest are common system fonts that need no extra network
+   request and render everywhere, keeping the "one student, one week, no
+   build step" feel instead of turning into a font-picker megabundle. */
+var TEXT_FONTS = [
+  { label: "Default", value: "" },
+  { label: "Archivo", value: "'Archivo', sans-serif" },
+  { label: "Inter", value: "'Inter', sans-serif" },
+  { label: "Georgia", value: "Georgia, serif" },
+  { label: "Times New Roman", value: "'Times New Roman', serif" },
+  { label: "Courier New", value: "'Courier New', monospace" },
+  { label: "Arial", value: "Arial, Helvetica, sans-serif" }
+];
+
+/* single-color inline svgs for the 4 align buttons, same convention as
+   every other icon on the site (no emoji/unicode glyphs) */
+var ALIGN_ICONS = {
+  left: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">' +
+    '<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="15" y2="12"/><line x1="3" y1="18" x2="18" y2="18"/></svg>',
+  center: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">' +
+    '<line x1="3" y1="6" x2="21" y2="6"/><line x1="6" y1="12" x2="18" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg>',
+  right: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">' +
+    '<line x1="3" y1="6" x2="21" y2="6"/><line x1="9" y1="12" x2="21" y2="12"/><line x1="6" y1="18" x2="21" y2="18"/></svg>',
+  justify: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">' +
+    '<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>'
+};
 
 /**
- * Shows the A-/A+ buttons above a text field being edited. Mousedown on
- * the buttons is swallowed before it can steal focus away from the field,
- * so bumping the size repeatedly doesn't blur (and thereby end) the edit.
- * @param el the text field being edited
+ * Builds the floating text toolbar once, lazily, same singleton pattern as
+ * the selection ring. Every button's mousedown is swallowed (preventDefault
+ * + stopPropagation) before it can steal focus (and the field's selection
+ * along with it) away from the field being edited, same trick the old A-/A+
+ * pair already used; the font <select> can't have its mousedown prevented
+ * without breaking the native dropdown, so its blur is special-cased instead
+ * (see wireClickToEdit()'s blur handler).
  */
-function showFontCtl(el) {
-  if (!FONT_CTL) {
-    FONT_CTL = document.createElement("span");
-    FONT_CTL.className = "font-size-ctl";
-    FONT_CTL.innerHTML =
-      '<button type="button" class="fs-dn" title="Smaller text">A-</button>' +
-      '<button type="button" class="fs-up" title="Larger text">A+</button>';
-    document.body.appendChild(FONT_CTL);
-    ["fs-dn", "fs-up"].forEach(function (cls) {
-      var btn = FONT_CTL.querySelector("." + cls);
-      btn.addEventListener("mousedown", function (e) { e.preventDefault(); e.stopPropagation(); });
-      btn.addEventListener("click", function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        if (!FONT_EL) return;
-        var cur = parseFloat(getComputedStyle(FONT_EL).fontSize) || 16;
-        var next = Math.max(8, Math.min(120, Math.round(cur + (cls === "fs-dn" ? -2 : 2))));
-        FONT_EL.style.fontSize = next + "px";
-        saveFontSize(FONT_EL.getAttribute("data-edit-id"), next + "px");
-        positionRing();
-      });
+function buildTextToolbar() {
+  TEXT_TOOLBAR = document.createElement("span");
+  TEXT_TOOLBAR.className = "text-toolbar";
+  TEXT_TOOLBAR.innerHTML =
+    '<select class="tt-font" title="Font">' +
+      TEXT_FONTS.map(function (f) { return '<option value="' + f.value + '">' + f.label + '</option>'; }).join("") +
+    '</select>' +
+    '<span class="tt-sep"></span>' +
+    '<button type="button" class="fs-dn" title="Smaller text">A-</button>' +
+    '<button type="button" class="fs-up" title="Larger text">A+</button>' +
+    '<span class="tt-sep"></span>' +
+    '<button type="button" class="tt-bold" title="Bold"><b>B</b></button>' +
+    '<button type="button" class="tt-italic" title="Italic"><i>I</i></button>' +
+    '<button type="button" class="tt-underline" title="Underline"><u>U</u></button>' +
+    '<span class="tt-sep"></span>' +
+    '<button type="button" class="tt-align" data-align="left" title="Align left">' + ALIGN_ICONS.left + '</button>' +
+    '<button type="button" class="tt-align" data-align="center" title="Align center">' + ALIGN_ICONS.center + '</button>' +
+    '<button type="button" class="tt-align" data-align="right" title="Align right">' + ALIGN_ICONS.right + '</button>' +
+    '<button type="button" class="tt-align" data-align="justify" title="Justify">' + ALIGN_ICONS.justify + '</button>' +
+    '<span class="tt-sep"></span>' +
+    '<button type="button" class="ls-dn" title="Tighter letter spacing">Sp-</button>' +
+    '<button type="button" class="ls-up" title="Wider letter spacing">Sp+</button>';
+  document.body.appendChild(TEXT_TOOLBAR);
+
+  TEXT_TOOLBAR.querySelectorAll("button").forEach(function (btn) {
+    btn.addEventListener("mousedown", function (e) { e.preventDefault(); e.stopPropagation(); });
+  });
+  /* the select needs its own mousedown to open (preventDefault would block
+     that), just stop it reaching the drag-anywhere handler underneath */
+  TEXT_TOOLBAR.querySelector(".tt-font").addEventListener("mousedown", function (e) { e.stopPropagation(); });
+
+  ["fs-dn", "fs-up"].forEach(function (cls) {
+    TEXT_TOOLBAR.querySelector("." + cls).addEventListener("click", function () {
+      if (!TEXT_TOOLBAR_EL) return;
+      var cur = parseFloat(getComputedStyle(TEXT_TOOLBAR_EL).fontSize) || 16;
+      var next = Math.max(8, Math.min(120, Math.round(cur + (cls === "fs-dn" ? -2 : 2))));
+      TEXT_TOOLBAR_EL.style.fontSize = next + "px";
+      saveFontSize(TEXT_TOOLBAR_EL.getAttribute("data-edit-id"), next + "px");
+      positionRing();
     });
-  }
-  FONT_EL = el;
-  var r = el.getBoundingClientRect();
-  var top = r.top + window.scrollY - 30;
-  /* no room above (the field is flush against the top of the page, eg. in
-     the sticky nav): drop below it instead of rendering off-screen */
-  if (r.top < 34) top = r.bottom + window.scrollY + 4;
-  FONT_CTL.style.left = (r.left + window.scrollX) + "px";
-  FONT_CTL.style.top = top + "px";
-  FONT_CTL.classList.add("show");
+  });
+
+  [["tt-bold", "bold"], ["tt-italic", "italic"], ["tt-underline", "underline"]].forEach(function (pair) {
+    TEXT_TOOLBAR.querySelector("." + pair[0]).addEventListener("click", function () {
+      document.execCommand(pair[1]);
+      updateTextToolbarState();
+    });
+  });
+
+  TEXT_TOOLBAR.querySelectorAll(".tt-align").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      if (!TEXT_TOOLBAR_EL) return;
+      var align = btn.getAttribute("data-align");
+      /* clicking the already-active alignment turns it back off (back to
+         the template's own default), same toggle feel as everything else
+         in this editor rather than a one-way ratchet */
+      var next = TEXT_TOOLBAR_EL.style.textAlign === align ? "" : align;
+      TEXT_TOOLBAR_EL.style.textAlign = next;
+      saveTextStyle(TEXT_TOOLBAR_EL.getAttribute("data-edit-id"), "align", next);
+      updateTextToolbarState();
+    });
+  });
+
+  ["ls-dn", "ls-up"].forEach(function (cls) {
+    TEXT_TOOLBAR.querySelector("." + cls).addEventListener("click", function () {
+      if (!TEXT_TOOLBAR_EL) return;
+      var cur = parseFloat(getComputedStyle(TEXT_TOOLBAR_EL).letterSpacing) || 0;
+      var next = Math.max(-2, Math.min(8, Math.round((cur + (cls === "ls-dn" ? -0.5 : 0.5)) * 10) / 10));
+      var val = next === 0 ? "" : next + "px";
+      TEXT_TOOLBAR_EL.style.letterSpacing = val;
+      saveTextStyle(TEXT_TOOLBAR_EL.getAttribute("data-edit-id"), "letterSpacing", val);
+    });
+  });
+
+  TEXT_TOOLBAR.querySelector(".tt-font").addEventListener("change", function () {
+    if (!TEXT_TOOLBAR_EL) return;
+    var val = this.value;
+    TEXT_TOOLBAR_EL.style.fontFamily = val;
+    saveTextStyle(TEXT_TOOLBAR_EL.getAttribute("data-edit-id"), "fontFamily", val);
+    TEXT_TOOLBAR_EL.focus();
+  });
 }
 
-/** Hides the A-/A+ buttons once the edit ends. */
-function hideFontCtl() {
-  FONT_EL = null;
-  if (FONT_CTL) FONT_CTL.classList.remove("show");
+/**
+ * Refreshes the toolbar's pressed/active look to match the current
+ * selection and field: bold/italic/underline read from
+ * document.queryCommandState() (only meaningful with the field focused),
+ * align reads the field's own inline override (not its computed style, so a
+ * field that merely inherits center alignment from a parent doesn't show as
+ * "active" until a ta actually sets it here).
+ */
+function updateTextToolbarState() {
+  if (!TEXT_TOOLBAR || !TEXT_TOOLBAR_EL) return;
+  ["bold", "italic", "underline"].forEach(function (cmd) {
+    var on = false;
+    try { on = document.queryCommandState(cmd); } catch (e) {}
+    TEXT_TOOLBAR.querySelector(".tt-" + cmd).classList.toggle("active", on);
+  });
+  TEXT_TOOLBAR.querySelectorAll(".tt-align").forEach(function (btn) {
+    btn.classList.toggle("active", TEXT_TOOLBAR_EL.style.textAlign === btn.getAttribute("data-align"));
+  });
+}
+
+/**
+ * Shows the floating text toolbar above a text field being edited, and
+ * points its font dropdown at whatever this field's already set to.
+ * @param el the text field being edited
+ */
+function showTextToolbar(el) {
+  if (!TEXT_TOOLBAR) buildTextToolbar();
+  TEXT_TOOLBAR_EL = el;
+  TEXT_TOOLBAR.querySelector(".tt-font").value = el.style.fontFamily || "";
+  updateTextToolbarState();
+  var r = el.getBoundingClientRect();
+  var top = r.top + window.scrollY - 34;
+  /* no room above (the field is flush against the top of the page, eg. in
+     the sticky nav): drop below it instead of rendering off-screen */
+  if (r.top < 40) top = r.bottom + window.scrollY + 4;
+  TEXT_TOOLBAR.style.left = (r.left + window.scrollX) + "px";
+  TEXT_TOOLBAR.style.top = top + "px";
+  TEXT_TOOLBAR.classList.add("show");
+}
+
+/** Hides the text toolbar once the edit ends. */
+function hideTextToolbar() {
+  TEXT_TOOLBAR_EL = null;
+  if (TEXT_TOOLBAR) TEXT_TOOLBAR.classList.remove("show");
 }
 
 /**
@@ -1107,7 +1249,7 @@ function wireClickToEdit() {
       beforeEdit = el.innerHTML;
       el.contentEditable = "true";
       el.classList.add("editing");
-      showFontCtl(el);
+      showTextToolbar(el);
       el.focus();
       var range = document.createRange();
       range.selectNodeContents(el);
@@ -1122,11 +1264,15 @@ function wireClickToEdit() {
       if (e.key === "Escape") { e.preventDefault(); el.innerHTML = beforeEdit; el.blur(); }
     });
 
-    el.addEventListener("blur", function () {
+    el.addEventListener("blur", function (e) {
       if (!el.isContentEditable) return;
+      /* focus moved to the toolbar itself (eg opening the font dropdown),
+         not away from the field: don't end the edit, that control's own
+         handler runs and hands focus straight back */
+      if (e.relatedTarget && TEXT_TOOLBAR && TEXT_TOOLBAR.contains(e.relatedTarget)) return;
       el.contentEditable = "false";
       el.classList.remove("editing");
-      hideFontCtl();
+      hideTextToolbar();
       /* the edit may have changed el's own rendered size (more/less text),
          so the ring needs to catch up if it's sitting on this field */
       positionRing();
@@ -1138,6 +1284,9 @@ function wireClickToEdit() {
       saveEditedField(el.getAttribute("data-edit-id"), after, el.getAttribute("data-default-html"));
       mirrorEditedField(el.getAttribute("data-edit-id"), after, el);
     });
+
+    el.addEventListener("keyup", updateTextToolbarState);
+    el.addEventListener("mouseup", updateTextToolbarState);
   });
 
   document.addEventListener("keydown", function (e) {
@@ -1267,7 +1416,7 @@ function saveEditedSize(id, size) {
 }
 
 /**
- * Persists a font-size bump from the A-/A+ buttons (see showFontCtl())
+ * Persists a font-size bump from the A-/A+ buttons (see showTextToolbar())
  * into the preview snapshot, the same draft everything else here uses.
  * @param id the element's data-edit-id
  * @param px new font-size (css px string)
@@ -1279,6 +1428,30 @@ function saveFontSize(id, px) {
   try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
   if (!snapshot.font_sizes || typeof snapshot.font_sizes !== "object") snapshot.font_sizes = {};
   snapshot.font_sizes[id] = px;
+  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
+ * Persists one whole-field text style property (font family, alignment, or
+ * letter spacing, see showTextToolbar()) into the preview snapshot, the same
+ * localStorage draft every other override here uses. Grouped per id under
+ * one object rather than three separate top-level maps since they're all
+ * "how this text field is styled", not a resize/move/font-size, which
+ * already have their own dedicated maps.
+ * @param id the element's data-edit-id
+ * @param prop "fontFamily", "align", or "letterSpacing"
+ * @param value the new css value, or "" to clear back to the template default
+ */
+function saveTextStyle(id, prop, value) {
+  var raw;
+  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  if (!snapshot.text_styles || typeof snapshot.text_styles !== "object") snapshot.text_styles = {};
+  if (!snapshot.text_styles[id]) snapshot.text_styles[id] = {};
+  if (value) snapshot.text_styles[id][prop] = value;
+  else delete snapshot.text_styles[id][prop];
+  if (!Object.keys(snapshot.text_styles[id]).length) delete snapshot.text_styles[id];
   try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
 }
 
@@ -1439,6 +1612,7 @@ document.addEventListener("DOMContentLoaded", function () {
       applyTextOverrides(textMap);
       applySizeOverrides(data.sizes);
       applyFontSizeOverrides(data.font_sizes);
+      applyTextStyleOverrides(data.text_styles);
       applyPositionOverrides(data.positions);
       applyHiddenOverrides(data.hidden);
       if (isPreviewMode() && isEditMode()) { wireResizable(); wireClickToEdit(); }

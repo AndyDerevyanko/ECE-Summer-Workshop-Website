@@ -1374,21 +1374,44 @@ body.edit-mode .apply-bob { animation: none; }
    from flow (detachFromFlow() in js/main.js) */
 .free-wrap { position: relative; }
 
-/* A-/A+ font-size buttons, floated above a text field only while it's
-   actively being edited (real character size, never tied to the field's
-   box: resizing the box only reflows the text) */
-.font-size-ctl {
+/* floating text toolbar (font, A-/A+ size, bold/italic/underline, align,
+   letter spacing), shown above a text field only while it's actively being
+   edited (see showTextToolbar()/wireClickToEdit() in js/main.js). font/
+   align/letter-spacing act on the whole field (real character size and
+   spacing, never tied to the field's box: resizing the box only reflows the
+   text); bold/italic/underline act on whatever's selected inside it. */
+.text-toolbar {
   position: absolute;
   display: none;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 3px;
+  max-width: 320px;
   background: var(--surface);
   border-radius: 7px;
-  padding: 3px;
+  padding: 4px;
   z-index: 10001;
   box-shadow: 0 2px 8px rgba(0, 0, 0, .3);
 }
-.font-size-ctl.show { display: flex; }
-.font-size-ctl button {
+.text-toolbar.show { display: flex; }
+.text-toolbar .tt-sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--border);
+  margin: 2px 1px;
+}
+.text-toolbar .tt-font {
+  border: none;
+  background: var(--surface-2);
+  color: var(--text);
+  border-radius: 5px;
+  font-family: var(--font-body);
+  font-size: .7rem;
+  padding: 4px 2px;
+  max-width: 90px;
+  height: 22px;
+}
+.text-toolbar button {
   border: none;
   background: var(--surface-2);
   color: var(--text);
@@ -1400,8 +1423,13 @@ body.edit-mode .apply-bob { animation: none; }
   font-size: .72rem;
   font-weight: 700;
   line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
 }
-.font-size-ctl button:hover { background: var(--accent); color: #fff; }
+.text-toolbar button:hover, .text-toolbar button.active { background: var(--accent); color: #fff; }
+.text-toolbar .tt-align svg { width: 14px; height: 14px; }
 
 /* ta portal's own mini logistics-tile preview (js/ta.js's wireInlineEdit()):
    click straight through to STATE, no edit-mode gate needed since this

@@ -144,6 +144,9 @@ DEFAULT_CONTENT = {
     # A-/A+ font-size bumps in the visual editor, keyed by data-edit-id, css
     # px string.
     "font_sizes": {},
+    # text toolbar's font/align/letter-spacing, keyed by data-edit-id,
+    # {id: {fontFamily, align, letterSpacing}}.
+    "text_styles": {},
     # move-handle drags in the visual editor, text fields only, keyed by
     # data-edit-id, {id: {x, y}} left/top offsets in css px.
     "positions": {},

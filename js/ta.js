@@ -61,6 +61,9 @@ function seed() {
     sizes: {},
     /* A-/A+ font-size bumps in the visual editor, keyed by data-edit-id */
     font_sizes: {},
+    /* text toolbar's font/align/letter-spacing, keyed by data-edit-id,
+       {id: {fontFamily, align, letterSpacing}} */
+    text_styles: {},
     /* move-handle drags in the visual editor, keyed the same way as sizes,
        {id: {tx, ty}} translate offsets in css px */
     positions: {},
@@ -190,6 +193,7 @@ function normalizeState() {
   if (!STATE.text || typeof STATE.text !== "object") STATE.text = {};
   if (!STATE.sizes || typeof STATE.sizes !== "object") STATE.sizes = {};
   if (!STATE.font_sizes || typeof STATE.font_sizes !== "object") STATE.font_sizes = {};
+  if (!STATE.text_styles || typeof STATE.text_styles !== "object") STATE.text_styles = {};
   if (!STATE.positions || typeof STATE.positions !== "object") STATE.positions = {};
   if (!Array.isArray(STATE.hidden)) STATE.hidden = [];
   /* footer contact line used to be its own field, edited from a dedicated
@@ -1321,6 +1325,20 @@ function syncUndoButtons() {
   redoBtn.disabled = !history || !history.canRedo();
 }
 
+/** Undoes the Visual editor iframe's last commit (edUndo button, or Ctrl+Z from the parent chrome). */
+function clickEditUndo() {
+  var frame = document.getElementById("edFrame");
+  if (frame.contentWindow.ClickEditHistory) frame.contentWindow.ClickEditHistory.undo();
+  syncUndoButtons();
+}
+
+/** Redoes the Visual editor iframe's last undone commit (edRedo button, or Ctrl+Y from the parent chrome). */
+function clickEditRedo() {
+  var frame = document.getElementById("edFrame");
+  if (frame.contentWindow.ClickEditHistory) frame.contentWindow.ClickEditHistory.redo();
+  syncUndoButtons();
+}
+
 /**
  * Snapshots STATE (and the open profile, if any) into localStorage, the
  * hand-off preview.html and the Visual editor's iframe both read from and
@@ -1822,22 +1840,24 @@ document.addEventListener("DOMContentLoaded", function () {
     btn.addEventListener("click", function () { showEditorSubTab(this.getAttribute("data-tab")); });
   });
 
-  document.getElementById("edUndo").addEventListener("click", function () {
-    var frame = document.getElementById("edFrame");
-    if (frame.contentWindow.ClickEditHistory) frame.contentWindow.ClickEditHistory.undo();
-    syncUndoButtons();
-  });
-  document.getElementById("edRedo").addEventListener("click", function () {
-    var frame = document.getElementById("edFrame");
-    if (frame.contentWindow.ClickEditHistory) frame.contentWindow.ClickEditHistory.redo();
-    syncUndoButtons();
-  });
+  document.getElementById("edUndo").addEventListener("click", clickEditUndo);
+  document.getElementById("edRedo").addEventListener("click", clickEditRedo);
   setInterval(syncUndoButtons, 400);
 
   document.getElementById("edFullscreen").addEventListener("click", toggleEditorFullscreen);
   document.addEventListener("keydown", function (e) {
     if (e.key === "Escape" && document.getElementById("edSection").classList.contains("ed-fullscreen")) {
       toggleEditorFullscreen();
+    }
+    /* Ctrl+Z/Ctrl+Y (or Ctrl+Shift+Z) also work from the parent chrome (the
+       sub-tabs, toolbar, anywhere outside the iframe itself): js/main.js
+       already binds its own copy inside the iframe's own document for
+       whichever click-to-edit field has focus there, this just covers focus
+       sitting on the portal page around it */
+    if (TA_MODE === "editor" && (e.ctrlKey || e.metaKey)) {
+      var key = e.key.toLowerCase();
+      if (key === "z" && !e.shiftKey) { e.preventDefault(); clickEditUndo(); }
+      else if (key === "y" || (key === "z" && e.shiftKey)) { e.preventDefault(); clickEditRedo(); }
     }
   });
 

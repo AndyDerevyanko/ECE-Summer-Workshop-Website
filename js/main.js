@@ -1058,15 +1058,18 @@ function wireResizable() {
 var TEXT_TOOLBAR = null;
 var TEXT_TOOLBAR_EL = null;
 
-/* a small curated set rather than every Google Font under the sun: this
-   site loads exactly two web fonts (Archivo, Inter, see every page's
-   <head>), so the rest are common system fonts that need no extra network
-   request and render everywhere, keeping the "one student, one week, no
-   build step" feel instead of turning into a font-picker megabundle. */
+/* a small curated set rather than every Google Font under the sun: the
+   first three are the site's own fonts, referenced by css variable (see
+   :root in css/style.css) rather than hardcoded names so this list can
+   never drift from whatever those actually are, the rest are common system
+   fonts that need no extra network request and render everywhere, keeping
+   the "one student, one week, no build step" feel instead of turning into
+   a font-picker megabundle. */
 var TEXT_FONTS = [
   { label: "Default", value: "" },
-  { label: "Archivo", value: "'Archivo', sans-serif" },
-  { label: "Inter", value: "'Inter', sans-serif" },
+  { label: "Heading font (Archivo)", value: "var(--font-head)" },
+  { label: "Body font (Inter)", value: "var(--font-body)" },
+  { label: "Monospace (site)", value: "var(--font-mono)" },
   { label: "Georgia", value: "Georgia, serif" },
   { label: "Times New Roman", value: "'Times New Roman', serif" },
   { label: "Courier New", value: "'Courier New', monospace" },

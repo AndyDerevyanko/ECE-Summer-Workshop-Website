@@ -21,9 +21,9 @@ var HOME_IMAGE_DEFAULTS = {
 
 /* same default set js/main.js/app/db.py fall back to (NAV_FIXED_IDS): the
    nav bar and everything inside it, promoted to "fixed" by default so it
-   always stacks above every non-fixed element, see toggleFixed() in
-   js/main.js. also what normalizeState() below backfills for a content
-   blob saved before this feature existed. */
+   always stacks above every non-fixed element and shows the red "fixed"
+   hitbox, see toggleFixed() in js/main.js. also what normalizeState() below
+   backfills for a content blob saved before this feature existed. */
 var NAV_FIXED_IDS = [
   "box.nav", "box.brand", "img.brand.nav", "nav.brand",
   "nav.link.about", "nav.link.gallery", "nav.link.learn",

@@ -1308,6 +1308,33 @@ body.edit-mode [data-resize-id].edit-fixed {
   outline-color: red;
 }
 
+/* a tagged element that's an actual link (<a>), as opposed to a plain box/
+   image/text: yellow instead of the default accent, orange if it's also
+   promoted to navbar/fixed (see .edit-fixed above), so a clickable wrapper
+   (eg the brand link wrapping the logo image and brand text) reads as
+   visually distinct from the plain content nested inside it, rather than
+   just another same-colored overlapping box. see applyLinkHighlight() in
+   js/main.js. */
+body.edit-mode [data-edit-id].edit-link,
+body.edit-mode [data-resize-id].edit-link {
+  outline-color: gold;
+}
+body.edit-mode [data-edit-id].edit-link.edit-fixed,
+body.edit-mode [data-resize-id].edit-link.edit-fixed {
+  outline-color: orange;
+}
+
+/* a link deleted while it still had other tracked elements nested inside it
+   (see setHiddenVisual() in js/main.js): can't use display:none like a
+   normal delete, so it stays in the dom, inert, instead. hide its own
+   edit-mode outline/cursor too so it doesn't look present/selectable at a
+   glance, matching how a truly-hidden element shows no outline either. */
+body.edit-mode [data-edit-id].el-deleted,
+body.edit-mode [data-resize-id].el-deleted {
+  outline: none;
+  cursor: default;
+}
+
 /* the Apply buttons' perpetual bob (.apply-bob, @keyframes bob above) animates
    `transform` forever, which as a CSS animation outranks the inline transform
    the editor sets for move/resize-pin (an animation always wins over an

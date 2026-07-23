@@ -34,10 +34,10 @@ def _idle_seconds(role):
     return TA_IDLE_SECONDS if role == "ta" else STUDENT_IDLE_SECONDS
 
 # ids that default to "fixed" in the visual editor (always stacked above
-# every non-fixed element, see applyLayerOrder()/toggleFixed() in
-# js/main.js): everything inside the sticky <nav> itself, since it needs to
-# stay visually on top of scrolling page content, not wherever the layer
-# system's dom-order fallback happens to sort it. matches the
+# every non-fixed element, and shown with the red "this is fixed" hitbox in
+# edit mode, see applyLayerOrder()/toggleFixed()/applyFixedHighlight() in
+# js/main.js): the sticky <nav> itself plus everything inside it, so the
+# whole nav bar reads as promoted, not just its outer box. matches the
 # data-edit-id/data-resize-id values on templates/index.html's <nav>.
 NAV_FIXED_IDS = [
     "box.nav", "box.brand", "img.brand.nav", "nav.brand",

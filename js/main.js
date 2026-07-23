@@ -479,6 +479,86 @@ function resetBox(el) {
 }
 
 /**
+ * Persists el's current move offset (or clears it if back at 0,0): the
+ * shared tail end of a move drag, a resize drag (which can also shift
+ * position, see startResizeDrag()), and undo/redo replaying either one.
+ * @param el the element
+ */
+function commitPosition(el) {
+  var p = getPos(el);
+  if (p.tx || p.ty) saveEditedPosition(elId(el), Math.round(p.tx), Math.round(p.ty));
+  else saveEditedPosition(elId(el), null, null);
+}
+
+/**
+ * Persists el's current size: the shared tail end of a resize drag and of
+ * undo/redo replaying one.
+ * @param el the element
+ */
+function commitSize(el) {
+  var s = getSize(el);
+  saveEditedSize(elId(el), { w: Math.round(s.w), h: Math.round(s.h) });
+}
+
+/**
+ * Moves el to an exact {tx, ty} and persists it: used by a move drag's
+ * mouseup and by undo/redo replaying a "move" history entry, so both go
+ * through the exact same code.
+ * @param el the element
+ * @param pos {tx, ty}
+ */
+function applyMoveSide(el, pos) {
+  detachFromFlow(el);
+  setOwnPos(el, pos.tx, pos.ty);
+  commitPosition(el);
+  positionRing();
+}
+
+/**
+ * Resizes (and, since a left/top-handle drag can shift position too,
+ * repositions) el to an exact {w, h, tx, ty} and persists both: used by a
+ * resize drag's mouseup, a double-click reset, and undo/redo replaying a
+ * "resize" history entry, so all three go through the exact same code.
+ * @param el the element
+ * @param box {w, h, tx, ty}
+ */
+function applyResizeSide(el, box) {
+  detachFromFlow(el);
+  setBox(el, box.w, box.h);
+  setOwnPos(el, box.tx, box.ty);
+  commitSize(el);
+  commitPosition(el);
+  positionRing();
+}
+
+/**
+ * Pushes a "move" undo entry (see applyHistoryAction()) unless the drag
+ * didn't actually change anything (eg a double-click reset with nothing to
+ * reset). Clears the redo stack, same as any other fresh edit.
+ * @param id the element's data-edit-id or data-resize-id
+ * @param before {tx, ty} before the drag
+ * @param after {tx, ty} after the drag
+ */
+function pushMoveUndo(id, before, after) {
+  if (before.tx === after.tx && before.ty === after.ty) return;
+  EDIT_UNDO.push({ type: "move", id: id, before: { tx: before.tx, ty: before.ty }, after: { tx: after.tx, ty: after.ty } });
+  EDIT_REDO.length = 0;
+}
+
+/**
+ * Pushes a "resize" undo entry (see applyHistoryAction()), same no-op guard
+ * and redo-clearing as pushMoveUndo().
+ * @param id the element's data-edit-id or data-resize-id
+ * @param before {w, h, tx, ty} before the drag
+ * @param after {w, h, tx, ty} after the drag
+ */
+function pushResizeUndo(id, before, after) {
+  if (before.w === after.w && before.h === after.h && before.tx === after.tx && before.ty === after.ty) return;
+  EDIT_UNDO.push({ type: "resize", id: id, before: before, after: after });
+  EDIT_REDO.length = 0;
+}
+
+/**
  * Applies saved size overrides (from a resize-handle drag, see
  * startResizeDrag()) on top of the page's own default sizing, for every
  * tracked element that has one. Runs on every load, live site included,
@@ -578,9 +658,61 @@ function applyPositionOverrides(positions) {
 function applyHiddenOverrides(hidden) {
   (hidden || []).forEach(function (id) {
     document.querySelectorAll('[data-edit-id="' + id + '"], [data-resize-id="' + id + '"]').forEach(function (el) {
-      el.style.display = "none";
+      setHiddenVisual(el, true);
     });
   });
+}
+
+/**
+ * Whether el has any independently-tagged element nested inside it (eg the
+ * brand link wraps the logo image and brand text, each separately
+ * resizable/editable). Used to tell a plain leaf link (a hero CTA button,
+ * nothing tracked nested inside it) from a wrapper link other tagged
+ * elements depend on staying visible when it's deleted.
+ * @param el the element
+ * @return true if el has a tracked descendant
+ */
+function hasTrackedDescendants(el) {
+  return el.querySelectorAll(RESIZABLE_SEL).length > 0;
+}
+
+/**
+ * Applies (or removes) the "deleted" look/behavior for one element, without
+ * persisting anything (setElementHidden() below does that on top of this;
+ * applyHiddenOverrides() calls this directly on every load, since a real
+ * visitor's page must never write to localStorage). A plain element gets
+ * display:none, detached from flow first (see detachFromFlow()) so its own
+ * slot stays reserved and removing it can never reflow a sibling into the
+ * gap, same "no attachment between elements" guarantee a move/resize
+ * already gets. A link wrapping other independently-tagged elements (eg the
+ * brand link around the logo image and brand text) can't use display:none
+ * at all, css unconditionally hides every descendant of a hidden element
+ * too, which would take the logo and text down with it even though neither
+ * was the thing actually selected for deletion, and physically moving them
+ * out to become the link's own siblings (an earlier attempt at this) broke
+ * just as badly: it dropped them out of whatever flex/inline layout the
+ * link used to arrange them, straight into the surrounding nav's own flow,
+ * visibly reshuffling everything else in it. Instead the link is made
+ * inert: pointer-events:none on the link itself (so it can no longer be
+ * hovered, clicked, or targeted by the ring/right-click menu, and a real
+ * visitor's click no longer navigates), with pointer-events:auto on its
+ * tracked children so they stay independently hoverable/editable exactly as
+ * before. Nothing moves, nothing's hidden, so the link's own layout role is
+ * completely undisturbed.
+ * @param el the element
+ * @param hide true to hide/delete it, false to restore it
+ */
+function setHiddenVisual(el, hide) {
+  if (el.tagName === "A" && hasTrackedDescendants(el)) {
+    el.style.pointerEvents = hide ? "none" : "";
+    el.classList.toggle("el-deleted", hide);
+    el.querySelectorAll(RESIZABLE_SEL).forEach(function (child) {
+      child.style.pointerEvents = hide ? "auto" : "";
+    });
+  } else {
+    if (hide) detachFromFlow(el);
+    el.style.display = hide ? "none" : "";
+  }
 }
 
 /* the visual editor's stacking order, bottom to top: which id's element
@@ -681,6 +813,21 @@ function applyFixedHighlight() {
 }
 
 /**
+ * Marks every tagged element that's an actual link (`<a>`) with .edit-link
+ * (yellow hitbox, orange if it's also fixed, see css/style.css), so a
+ * clickable wrapper (eg the brand link around the logo image and brand
+ * text) reads as visually distinct from the plain content nested inside
+ * it, instead of just another same-colored overlapping box. A tag never
+ * changes at runtime, so this only needs to run once per load, unlike
+ * applyFixedHighlight() which also reruns on every toggleFixed().
+ */
+function applyLinkHighlight() {
+  document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
+    el.classList.toggle("edit-link", el.tagName === "A");
+  });
+}
+
+/**
  * Applies an explicit stacking order to every tracked element: z-index is
  * just an id's position in the list (bottom = 1), so the layer up/down
  * handles (see moveLayer()) are the only thing that ever reorders elements,
@@ -760,8 +907,9 @@ function saveLayerOrder(order) {
   try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
 }
 
-/* undo/redo for click-to-edit and delete, a plain stack of commits: a text
-   edit is {type:"text", id, before, after}, a delete is {type:"delete", id}.
+/* undo/redo for every visual editor action, a plain stack of commits: see
+   applyHistoryAction()'s doc comment for the full list of entry shapes
+   (text, delete, move, resize, fontsize, align, letterspacing, fontfamily).
    a fresh edit clears the redo stack, same convention as any text editor. */
 var EDIT_UNDO = [];
 var EDIT_REDO = [];
@@ -1039,9 +1187,11 @@ function startResizeDrag(e) {
     document.removeEventListener("mouseup", onUp);
     RING_DRAGGING = false;
     var s = getSize(el), p = getPos(el);
-    saveEditedSize(elId(el), { w: Math.round(s.w), h: Math.round(s.h) });
-    if (p.tx || p.ty) saveEditedPosition(elId(el), Math.round(p.tx), Math.round(p.ty));
-    else saveEditedPosition(elId(el), null, null);
+    commitSize(el);
+    commitPosition(el);
+    pushResizeUndo(elId(el),
+      { w: start.w, h: start.h, tx: base.tx, ty: base.ty },
+      { w: s.w, h: s.h, tx: p.tx, ty: p.ty });
   }
   document.addEventListener("mousemove", onMove);
   document.addEventListener("mouseup", onUp);
@@ -1079,8 +1229,8 @@ function startMoveDrag(e) {
     document.removeEventListener("mouseup", onUp);
     RING_DRAGGING = false;
     var p = getPos(el);
-    if (p.tx || p.ty) saveEditedPosition(elId(el), Math.round(p.tx), Math.round(p.ty));
-    else saveEditedPosition(elId(el), null, null);
+    commitPosition(el);
+    pushMoveUndo(elId(el), base, p);
   }
   document.addEventListener("mousemove", onMove);
   document.addEventListener("mouseup", onUp);
@@ -1091,8 +1241,13 @@ function resetSizeDbl(e) {
   e.preventDefault();
   e.stopPropagation();
   if (!RING_EL) return;
-  resetBox(RING_EL);
-  saveEditedSize(elId(RING_EL), null);
+  var el = RING_EL;
+  var before = getSize(el);
+  var pos = getPos(el);
+  resetBox(el);
+  saveEditedSize(elId(el), null);
+  var after = getSize(el);
+  pushResizeUndo(elId(el), { w: before.w, h: before.h, tx: pos.tx, ty: pos.ty }, { w: after.w, h: after.h, tx: pos.tx, ty: pos.ty });
   positionRing();
 }
 
@@ -1101,8 +1256,11 @@ function resetPosDbl(e) {
   e.preventDefault();
   e.stopPropagation();
   if (!RING_EL) return;
-  setOwnPos(RING_EL, 0, 0);
-  saveEditedPosition(elId(RING_EL), null, null);
+  var el = RING_EL;
+  var before = getPos(el);
+  setOwnPos(el, 0, 0);
+  saveEditedPosition(elId(el), null, null);
+  pushMoveUndo(elId(el), before, { tx: 0, ty: 0 });
   positionRing();
 }
 
@@ -1111,22 +1269,28 @@ function resetPosDbl(e) {
  * and persists it, same "an id is one logical thing, not one specific DOM
  * node" rule mirrorEditedField() already applies to text (deleting the brand
  * wordmark takes it out of the nav and the footer together, not just
- * whichever copy was clicked). display:none rather than removing the node so
- * undo has something to restore.
+ * whichever copy was clicked). The actual hide/show is setHiddenVisual()
+ * (display:none for a plain element, inert-but-present for a link wrapping
+ * other tracked elements, see its doc comment); this just applies that to
+ * every matching element and persists the change.
  * @param id the element's data-edit-id or data-resize-id
  * @param hidden true to hide/delete it, false to restore it
  */
 function setElementHidden(id, hidden) {
   document.querySelectorAll('[data-edit-id="' + id + '"], [data-resize-id="' + id + '"]').forEach(function (el) {
-    el.style.display = hidden ? "none" : "";
+    setHiddenVisual(el, hidden);
   });
   saveEditedVisibility(id, hidden);
 }
 
 /**
  * Deletes the currently-selected element (ring's trash handle, or the
- * Delete/Backspace key, see wireResizable()). Pushed onto the same undo
- * stack as a text edit so Ctrl+Z brings it right back.
+ * Delete/Backspace key, see wireResizable()), and it really is deleted, same
+ * as anything else in the editor (see setHiddenVisual() for how a link
+ * wrapping other tracked elements, eg the brand link around the logo image
+ * and brand text, is handled differently so it can't take them down with
+ * it). Pushed onto the same undo stack as a text edit so Ctrl+Z brings it
+ * right back.
  * @param el the element to delete (always the current RING_EL)
  */
 function deleteElement(el) {
@@ -2132,10 +2296,16 @@ function buildTextToolbar() {
   ["fs-dn", "fs-up"].forEach(function (cls) {
     TEXT_TOOLBAR.querySelector("." + cls).addEventListener("click", function () {
       if (!TEXT_TOOLBAR_EL) return;
-      var cur = parseFloat(getComputedStyle(TEXT_TOOLBAR_EL).fontSize) || 16;
+      var el = TEXT_TOOLBAR_EL;
+      var id = el.getAttribute("data-edit-id");
+      var before = el.style.fontSize || "";
+      var cur = parseFloat(getComputedStyle(el).fontSize) || 16;
       var next = Math.max(8, Math.min(120, Math.round(cur + (cls === "fs-dn" ? -2 : 2))));
-      TEXT_TOOLBAR_EL.style.fontSize = next + "px";
-      saveFontSize(TEXT_TOOLBAR_EL.getAttribute("data-edit-id"), next + "px");
+      var after = next + "px";
+      el.style.fontSize = after;
+      saveFontSize(id, after);
+      EDIT_UNDO.push({ type: "fontsize", id: id, before: before, after: after });
+      EDIT_REDO.length = 0;
       positionRing();
     });
   });
@@ -2150,13 +2320,18 @@ function buildTextToolbar() {
   TEXT_TOOLBAR.querySelectorAll(".tt-align").forEach(function (btn) {
     btn.addEventListener("click", function () {
       if (!TEXT_TOOLBAR_EL) return;
+      var el = TEXT_TOOLBAR_EL;
+      var id = el.getAttribute("data-edit-id");
       var align = btn.getAttribute("data-align");
+      var before = el.style.textAlign || "";
       /* clicking the already-active alignment turns it back off (back to
          the template's own default), same toggle feel as everything else
          in this editor rather than a one-way ratchet */
-      var next = TEXT_TOOLBAR_EL.style.textAlign === align ? "" : align;
-      TEXT_TOOLBAR_EL.style.textAlign = next;
-      saveTextStyle(TEXT_TOOLBAR_EL.getAttribute("data-edit-id"), "align", next);
+      var next = before === align ? "" : align;
+      el.style.textAlign = next;
+      saveTextStyle(id, "align", next);
+      EDIT_UNDO.push({ type: "align", id: id, before: before, after: next });
+      EDIT_REDO.length = 0;
       updateTextToolbarState();
     });
   });
@@ -2164,23 +2339,35 @@ function buildTextToolbar() {
   ["ls-dn", "ls-up"].forEach(function (cls) {
     TEXT_TOOLBAR.querySelector("." + cls).addEventListener("click", function () {
       if (!TEXT_TOOLBAR_EL) return;
-      var cur = parseFloat(getComputedStyle(TEXT_TOOLBAR_EL).letterSpacing) || 0;
+      var el = TEXT_TOOLBAR_EL;
+      var id = el.getAttribute("data-edit-id");
+      var before = el.style.letterSpacing || "";
+      var cur = parseFloat(getComputedStyle(el).letterSpacing) || 0;
       var next = Math.max(-2, Math.min(8, Math.round((cur + (cls === "ls-dn" ? -0.5 : 0.5)) * 10) / 10));
       var val = next === 0 ? "" : next + "px";
-      TEXT_TOOLBAR_EL.style.letterSpacing = val;
-      saveTextStyle(TEXT_TOOLBAR_EL.getAttribute("data-edit-id"), "letterSpacing", val);
+      el.style.letterSpacing = val;
+      saveTextStyle(id, "letterSpacing", val);
+      EDIT_UNDO.push({ type: "letterspacing", id: id, before: before, after: val });
+      EDIT_REDO.length = 0;
     });
   });
 
   TEXT_TOOLBAR.querySelector(".tt-font").addEventListener("change", function () {
     if (!TEXT_TOOLBAR_EL) return;
+    var el = TEXT_TOOLBAR_EL;
+    var id = el.getAttribute("data-edit-id");
+    var beforeFamily = el.style.fontFamily || "";
+    var beforeCustom = CUSTOM_FONTS.filter(function (f) { return customFontFamily(f.id) === beforeFamily; })[0];
+    var before = { family: beforeFamily, url: beforeCustom ? beforeCustom.url : "" };
     var val = this.value;
     var custom = CUSTOM_FONTS.filter(function (f) { return customFontFamily(f.id) === val; })[0];
     if (custom) ensureFontFace(val, custom.url);
-    TEXT_TOOLBAR_EL.style.fontFamily = val;
-    saveFontFamily(TEXT_TOOLBAR_EL.getAttribute("data-edit-id"), val, custom ? custom.url : "");
+    el.style.fontFamily = val;
+    saveFontFamily(id, val, custom ? custom.url : "");
+    EDIT_UNDO.push({ type: "fontfamily", id: id, before: before, after: { family: val, url: custom ? custom.url : "" } });
+    EDIT_REDO.length = 0;
     updateFontDeleteButton();
-    TEXT_TOOLBAR_EL.focus();
+    el.focus();
   });
 
   TEXT_TOOLBAR.querySelector(".tt-font-add").addEventListener("click", function () {
@@ -2194,6 +2381,9 @@ function buildTextToolbar() {
     if (!file || !el) return;
     input.disabled = true;
     var name = file.name.replace(/\.[^.]+$/, "");
+    var beforeFamily = el.style.fontFamily || "";
+    var beforeCustom = CUSTOM_FONTS.filter(function (f) { return customFontFamily(f.id) === beforeFamily; })[0];
+    var before = { family: beforeFamily, url: beforeCustom ? beforeCustom.url : "" };
     uploadEditorFile(file)
       .then(function (url) {
         return createCustomAsset("font", name, url).then(function (id) {
@@ -2207,7 +2397,10 @@ function buildTextToolbar() {
         refreshFontSelect();
         TEXT_TOOLBAR.querySelector(".tt-font").value = family;
         el.style.fontFamily = family;
-        saveFontFamily(el.getAttribute("data-edit-id"), family, asset.url);
+        var id = el.getAttribute("data-edit-id");
+        saveFontFamily(id, family, asset.url);
+        EDIT_UNDO.push({ type: "fontfamily", id: id, before: before, after: { family: family, url: asset.url } });
+        EDIT_REDO.length = 0;
         updateFontDeleteButton();
         el.focus();
       })
@@ -2218,12 +2411,18 @@ function buildTextToolbar() {
   TEXT_TOOLBAR.querySelector(".tt-font-del").addEventListener("click", function () {
     var id = this.dataset.assetId;
     if (!id) return;
+    var deleted = CUSTOM_FONTS.filter(function (f) { return String(f.id) === String(id); })[0];
     deleteCustomAsset("font", id).then(function () {
       CUSTOM_FONTS = CUSTOM_FONTS.filter(function (f) { return String(f.id) !== String(id); });
       refreshFontSelect();
       if (TEXT_TOOLBAR_EL) {
-        TEXT_TOOLBAR_EL.style.fontFamily = "";
-        saveFontFamily(TEXT_TOOLBAR_EL.getAttribute("data-edit-id"), "", "");
+        var el = TEXT_TOOLBAR_EL;
+        var fieldId = el.getAttribute("data-edit-id");
+        var before = { family: el.style.fontFamily || "", url: deleted ? deleted.url : "" };
+        el.style.fontFamily = "";
+        saveFontFamily(fieldId, "", "");
+        EDIT_UNDO.push({ type: "fontfamily", id: fieldId, before: before, after: { family: "", url: "" } });
+        EDIT_REDO.length = 0;
       }
       updateFontDeleteButton();
     });
@@ -2469,22 +2668,74 @@ function redoEdit() {
 }
 
 /**
- * Replays one undo/redo stack entry, either a text commit ({type:"text",
- * id, before, after}) or a delete ({type:"delete", id}: "before" means it
- * existed, "after" means it was deleted, so undo shows it and redo hides it
- * again).
+ * Replays one undo/redo stack entry. "before"/"after" mean whatever state
+ * of the element that side of the action represents (side is "before" for
+ * an undo, "after" for a redo), same idea for every type:
+ *  - "text": innerHTML
+ *  - "delete": existed (before) vs hidden (after)
+ *  - "move": {tx, ty}
+ *  - "resize": {w, h, tx, ty} (a resize can also shift position, see
+ *    startResizeDrag())
+ *  - "fontsize": css font-size, or "" for the template default
+ *  - "align"/"letterspacing": the css value, or "" for the template default
+ *  - "fontfamily": {family, url} (url only set for a ta-uploaded font)
  * @param action the stack entry
  * @param side "before" or "after", which side of the action to restore
  */
 function applyHistoryAction(action, side) {
+  var val = action[side];
   if (action.type === "delete") {
     setElementHidden(action.id, side === "after");
     return;
   }
-  var els = document.querySelectorAll('[data-edit-id="' + action.id + '"]');
-  if (!els.length) return;
-  els.forEach(function (el) { el.innerHTML = action[side]; });
-  saveEditedField(action.id, action[side], els[0].getAttribute("data-default-html"));
+  if (action.type === "text") {
+    var textEls = document.querySelectorAll('[data-edit-id="' + action.id + '"]');
+    if (!textEls.length) return;
+    textEls.forEach(function (el) { el.innerHTML = val; });
+    saveEditedField(action.id, val, textEls[0].getAttribute("data-default-html"));
+    return;
+  }
+  if (action.type === "move" || action.type === "resize") {
+    var posEls = document.querySelectorAll('[data-edit-id="' + action.id + '"], [data-resize-id="' + action.id + '"]');
+    if (!posEls.length) return;
+    posEls.forEach(function (el) {
+      if (action.type === "move") applyMoveSide(el, val);
+      else applyResizeSide(el, val);
+    });
+    return;
+  }
+  if (action.type === "fontsize") {
+    var fsEl = document.querySelector('[data-edit-id="' + action.id + '"]');
+    if (!fsEl) return;
+    fsEl.style.fontSize = val || "";
+    saveFontSize(action.id, val || "");
+    return;
+  }
+  if (action.type === "align" || action.type === "letterspacing") {
+    var styleEl = document.querySelector('[data-edit-id="' + action.id + '"]');
+    if (!styleEl) return;
+    if (action.type === "align") {
+      styleEl.style.textAlign = val;
+      saveTextStyle(action.id, "align", val);
+      if (TEXT_TOOLBAR_EL === styleEl) updateTextToolbarState();
+    } else {
+      styleEl.style.letterSpacing = val;
+      saveTextStyle(action.id, "letterSpacing", val);
+    }
+    return;
+  }
+  if (action.type === "fontfamily") {
+    var fontEl = document.querySelector('[data-edit-id="' + action.id + '"]');
+    if (!fontEl) return;
+    if (val.url) ensureFontFace(val.family, val.url);
+    fontEl.style.fontFamily = val.family;
+    saveFontFamily(action.id, val.family, val.url);
+    if (TEXT_TOOLBAR_EL === fontEl) {
+      TEXT_TOOLBAR.querySelector(".tt-font").value = val.family;
+      updateFontDeleteButton();
+    }
+    return;
+  }
 }
 
 /**
@@ -2782,6 +3033,7 @@ document.addEventListener("DOMContentLoaded", function () {
       setFixedElements(data.fixed_elements);
       applyLayerOrder(data.layers);
       applyFixedHighlight();
+      applyLinkHighlight();
       if (isPreviewMode() && isEditMode()) { wireResizable(); wireClickToEdit(); wireAddElementMenu(); }
     })
     .catch(function () {

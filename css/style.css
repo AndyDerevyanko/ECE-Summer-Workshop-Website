@@ -1431,6 +1431,61 @@ body.edit-mode .apply-bob { animation: none; }
 .text-toolbar button:hover, .text-toolbar button.active { background: var(--accent); color: #fff; }
 .text-toolbar .tt-align svg { width: 14px; height: 14px; }
 
+/* right-click "Add element" menu (js/main.js's wireAddElementMenu()), a
+   plain small popover, one singleton like the ring/text toolbar above */
+.ctx-menu {
+  position: absolute;
+  display: none;
+  flex-direction: column;
+  min-width: 150px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .35);
+  padding: 6px;
+  z-index: 10002;
+}
+.ctx-menu.show { display: flex; }
+.ctx-menu .ctx-title {
+  color: var(--muted);
+  font-family: var(--font-body);
+  font-size: .68rem;
+  text-transform: uppercase;
+  letter-spacing: .6px;
+  padding: 4px 8px 6px;
+}
+.ctx-menu button {
+  display: flex;
+  align-items: center;
+  border: none;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  padding: 7px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: .85rem;
+}
+.ctx-menu button:hover { background: var(--surface-2); }
+.ctx-menu .ctx-icons {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+.ctx-menu .ctx-icon-btn { justify-content: center; padding: 10px; }
+.ctx-menu .ctx-icon-btn svg { width: 20px; height: 20px; }
+.ctx-menu .ctx-link-input {
+  margin: 2px 8px 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: .82rem;
+}
+
 /* ta portal's own mini logistics-tile preview (js/ta.js's wireInlineEdit()):
    click straight through to STATE, no edit-mode gate needed since this
    panel is always click-to-edit */

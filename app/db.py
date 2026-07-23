@@ -153,6 +153,10 @@ DEFAULT_CONTENT = {
     # elements deleted in the visual editor, a flat list of data-edit-id/
     # data-resize-id values to hide.
     "hidden": [],
+    # elements added in the visual editor's right-click "Add element" menu,
+    # not present in the template at all, {id, kind, left, top, w, h, icon,
+    # href}, see renderCustomElements() in js/main.js.
+    "custom_elements": [],
 }
 
 

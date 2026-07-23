@@ -945,6 +945,340 @@ function deleteElement(el) {
   if (RING) RING.style.display = "none";
 }
 
+/* every custom element a ta has added via the right-click "Add element"
+   menu this load, {id, kind, left, top, w, h, icon, href}, mirrors
+   content.custom_elements exactly (see renderCustomElements()) */
+var CUSTOM_ELEMENTS = [];
+
+/* a handful of the site's own icons, reused verbatim (same paths as
+   templates/index.html's learn cards, the countdown calendar, and the
+   logistics checkmark, see CHECK_ICON_SVG above) rather than pulling in an
+   icon library: "icons that exist already", not new ones. class="cic" for
+   the same fixed 30x30 accent-colored sizing every other content icon on
+   the site already uses. */
+var ICON_LIBRARY = [
+  { label: "Checkmark", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12.5l5 5L20 6.5" /></svg>' },
+  { label: "Calendar", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2" />' +
+    '<path d="M3 9h18M8 3v4M16 3v4" /></svg>' },
+  { label: "Circuit", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12h3" /><path d="M19 12h3" />' +
+    '<path d="M5 12c2-7 4-7 6 0s4 7 6 0" /></svg>' },
+  { label: "Component", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h6" /><path d="M21 12h-6" />' +
+    '<path d="M9 7l6 5-6 5z" /><path d="M15 7v10" /></svg>' },
+  { label: "Chip", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5" />' +
+    '<path d="M9 3v3M12 3v3M15 3v3M9 18v3M12 18v3M15 18v3M3 9h3M3 12h3M3 15h3M18 9h3M18 12h3M18 15h3" /></svg>' },
+  { label: "Cube", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2l9 5v10l-9 5-9-5V7z" />' +
+    '<path d="M12 12l9-5M12 12v10M12 12L3 7" /></svg>' }
+];
+
+/**
+ * Parses a raw `<svg>...</svg>` string (see ICON_LIBRARY) into a real,
+ * detached svg element: document.createElement() can't build one directly,
+ * it needs the svg namespace, so this goes through innerHTML on a plain
+ * div instead and pulls the parsed node back out.
+ * @param markup the svg markup
+ * @return the parsed, detached svg element
+ */
+function svgFromMarkup(markup) {
+  var tmp = document.createElement("div");
+  tmp.innerHTML = markup;
+  return tmp.firstElementChild;
+}
+
+/**
+ * Wraps a not-yet-inserted element in its own `.free-wrap` (see
+ * detachFromFlow()) positioned at (x, y) in document coordinates and
+ * attaches it to the page, so every existing resize/move/delete/text-edit
+ * mechanism already treats it exactly like a template element that's been
+ * dragged out of flow, no special-casing needed anywhere else. Appended
+ * directly to body, never nested inside page content, so deleting or
+ * moving an existing section can never take a newly-added element down
+ * with it (see ancestorPos()'s "no attachment between elements" rule).
+ * @param el the element to place (not yet in the document)
+ * @param x left, document (page) px
+ * @param y top, document (page) px
+ * @return el, now attached
+ */
+function placeFreeElement(el, x, y) {
+  var wrap = document.createElement("span");
+  wrap.className = "free-wrap";
+  wrap.style.position = "absolute";
+  wrap.style.left = x + "px";
+  wrap.style.top = y + "px";
+  document.body.appendChild(wrap);
+  el.style.position = "absolute";
+  el.style.top = "0";
+  el.style.left = "0";
+  el.style.margin = "0";
+  el.style.maxWidth = "none";
+  wrap.appendChild(el);
+  return el;
+}
+
+/**
+ * Freezes a freshly-placed free element (see placeFreeElement()) at its
+ * just-rendered size, the same finishing step detachFromFlow() already
+ * does for an existing element on its first resize, so double-clicking a
+ * resize handle later has a sane "as first created" size to reset back to.
+ * @param el the element, already filled with its real content
+ */
+function freezeFreeElement(el) {
+  var r = el.getBoundingClientRect();
+  el.dataset.natW = r.width;
+  el.dataset.natH = r.height;
+  el.style.width = r.width + "px";
+  el.style.height = r.height + "px";
+  el.parentNode.style.width = r.width + "px";
+  el.parentNode.style.height = r.height + "px";
+}
+
+/**
+ * Builds and places the DOM node for one custom-element descriptor (see
+ * addCustomElement()/renderCustomElements()), tagging it with the same
+ * data-edit-id/data-resize-id convention every template element already
+ * uses, so the rest of this file (resize, move, delete, text edit, text
+ * style, undo) needs zero special-casing for anything created here. A
+ * "button" is a single tagged `<a>` (data-edit-id right on it, no separate
+ * inner textbox), same "the button IS the textbox" rule every other CTA on
+ * the site follows; its href stays "#" (dead, like the login page's own
+ * "Sign up" link) with the entered link only stashed on the dataset for
+ * now, real navigation is a later step. An "image" is the site's own flat
+ * `.ph` placeholder box (see the Media bullets in CLAUDE.md), not a real
+ * uploaded photo, same reasoning: don't go hunting for a real asset.
+ * @param d {id, kind, left, top, w, h, icon, href}
+ * @return the built, attached element
+ */
+function buildCustomElement(d) {
+  var el;
+  if (d.kind === "text") {
+    el = document.createElement("div");
+    el.setAttribute("data-edit-id", d.id);
+    el.textContent = "Text";
+  } else if (d.kind === "button") {
+    el = document.createElement("a");
+    el.className = "btn";
+    el.href = "#";
+    el.addEventListener("click", function (e) { if (!el.isContentEditable) e.preventDefault(); });
+    el.setAttribute("data-edit-id", d.id);
+    el.textContent = "Button";
+    if (d.href) el.dataset.pendingHref = d.href;
+  } else if (d.kind === "box") {
+    el = document.createElement("div");
+    el.setAttribute("data-resize-id", d.id);
+    el.style.background = "var(--surface-2)";
+    el.style.width = "160px";
+    el.style.height = "100px";
+  } else if (d.kind === "image") {
+    el = document.createElement("div");
+    el.className = "ph";
+    el.setAttribute("data-resize-id", d.id);
+    el.textContent = "Image";
+    el.style.width = "240px";
+    el.style.height = "180px";
+  } else {
+    el = svgFromMarkup(d.icon || ICON_LIBRARY[0].svg);
+    el.setAttribute("data-resize-id", d.id);
+  }
+  placeFreeElement(el, d.left, d.top);
+  if (d.w) { el.style.width = d.w + "px"; el.dataset.natW = d.w; }
+  if (d.h) { el.style.height = d.h + "px"; el.dataset.natH = d.h; }
+  return el;
+}
+
+/**
+ * Recreates every custom element a ta has added via the visual editor's
+ * right-click "Add element" menu, on every load, live site included, same
+ * as applyTextOverrides(). These don't exist in the template at all, so
+ * unlike a text/size/position override there's no page markup to lay an
+ * override on top of, the element itself has to be built from scratch
+ * first. Called before every apply*Overrides() pass so they can find these
+ * elements by id exactly like any template one.
+ * @param list content.custom_elements
+ */
+function renderCustomElements(list) {
+  CUSTOM_ELEMENTS = (list || []).slice();
+  CUSTOM_ELEMENTS.forEach(buildCustomElement);
+}
+
+/**
+ * Persists the whole custom_elements list into the preview snapshot, the
+ * same localStorage draft every other override here uses. Rewritten
+ * wholesale (not merged) since the in-memory CUSTOM_ELEMENTS array is
+ * always the full, current list.
+ * @param list CUSTOM_ELEMENTS
+ */
+function saveCustomElements(list) {
+  var raw;
+  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  snapshot.custom_elements = list;
+  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
+ * Adds one new element via the visual editor's right-click "Add element"
+ * menu (see wireAddElementMenu()): built through buildCustomElement(), the
+ * exact same construction that recreates it on every future load, then
+ * measured/frozen at its just-rendered size and pushed onto
+ * content.custom_elements so it round-trips through Apply/profiles like
+ * everything else the editor creates.
+ * @param kind "text", "button", "box", "image", or "icon"
+ * @param x left, document px (where the menu was opened)
+ * @param y top, document px
+ * @param extra {icon} for kind "icon", {href} for kind "button"
+ * @return the new element
+ */
+function addCustomElement(kind, x, y, extra) {
+  extra = extra || {};
+  var uid = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  var d = { id: (kind === "icon" ? "icon.custom." : "custom." + kind + ".") + uid, kind: kind, left: Math.round(x), top: Math.round(y) };
+  if (kind === "icon") d.icon = extra.icon;
+  if (kind === "button") d.href = extra.href || "";
+  var el = buildCustomElement(d);
+  freezeFreeElement(el);
+  d.w = parseFloat(el.dataset.natW);
+  d.h = parseFloat(el.dataset.natH);
+  CUSTOM_ELEMENTS.push(d);
+  saveCustomElements(CUSTOM_ELEMENTS);
+  if (kind === "text" || kind === "button") wireTextField(el);
+  return el;
+}
+
+/* the one floating right-click "Add element" menu, same singleton pattern
+   as the ring/text toolbar */
+var CTX_MENU = null;
+var CTX_POS = { x: 0, y: 0 };
+
+/** Builds the context menu once, lazily. */
+function buildCtxMenu() {
+  CTX_MENU = document.createElement("div");
+  CTX_MENU.className = "ctx-menu";
+  document.body.appendChild(CTX_MENU);
+}
+
+/** Renders the menu's root list: the 5 things that can be added. */
+function renderCtxMenuRoot() {
+  CTX_MENU.innerHTML =
+    '<div class="ctx-title">Add element</div>' +
+    '<button type="button" data-add="text">Textbox</button>' +
+    '<button type="button" data-add="box">Box</button>' +
+    '<button type="button" data-add="image">Image</button>' +
+    '<button type="button" data-add="icon">Icon</button>' +
+    '<button type="button" data-add="button">Button</button>';
+  CTX_MENU.querySelectorAll("button[data-add]").forEach(function (btn) {
+    btn.addEventListener("click", function () { handleCtxAdd(btn.getAttribute("data-add")); });
+  });
+}
+
+/** Swaps the menu into its icon-picker sub-view (one of ICON_LIBRARY). */
+function renderCtxMenuIconPicker() {
+  CTX_MENU.innerHTML =
+    '<div class="ctx-title">Choose an icon</div>' +
+    '<div class="ctx-icons">' +
+      ICON_LIBRARY.map(function (ic, i) {
+        return '<button type="button" class="ctx-icon-btn" data-icon="' + i + '" title="' + ic.label + '">' + ic.svg + '</button>';
+      }).join("") +
+    '</div>';
+  CTX_MENU.querySelectorAll(".ctx-icon-btn").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var ic = ICON_LIBRARY[parseInt(btn.getAttribute("data-icon"), 10)];
+      addCustomElement("icon", CTX_POS.x, CTX_POS.y, { icon: ic.svg });
+      hideCtxMenu();
+    });
+  });
+}
+
+/**
+ * Swaps the menu into its "Add button" sub-view: a link field for later
+ * (see buildCustomElement()'s doc comment), not a live one yet.
+ */
+function renderCtxMenuButtonLink() {
+  CTX_MENU.innerHTML =
+    '<div class="ctx-title">Add button</div>' +
+    '<input type="url" class="ctx-link-input" placeholder="Link (not active yet)">' +
+    '<button type="button" class="ctx-link-add">Add</button>';
+  var input = CTX_MENU.querySelector(".ctx-link-input");
+  input.focus();
+  function submit() {
+    addCustomElement("button", CTX_POS.x, CTX_POS.y, { href: input.value.trim() });
+    hideCtxMenu();
+  }
+  CTX_MENU.querySelector(".ctx-link-add").addEventListener("click", submit);
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); submit(); }
+  });
+}
+
+/**
+ * Handles a click on one of the root menu's 5 options: textbox/box/image
+ * add immediately and close the menu, icon/button swap to a picker/link
+ * sub-view first.
+ * @param kind "text", "box", "image", "icon", or "button"
+ */
+function handleCtxAdd(kind) {
+  if (kind === "icon") { renderCtxMenuIconPicker(); return; }
+  if (kind === "button") { renderCtxMenuButtonLink(); return; }
+  addCustomElement(kind, CTX_POS.x, CTX_POS.y);
+  hideCtxMenu();
+}
+
+/**
+ * Shows the "Add element" menu at (x, y), resetting it back to the root
+ * list even if it was left mid sub-view from a previous open. Clamped to
+ * stay inside the viewport so a right-click near an edge doesn't render
+ * the menu partly off-screen.
+ * @param x left, document px
+ * @param y top, document px
+ */
+function showCtxMenu(x, y) {
+  if (!CTX_MENU) buildCtxMenu();
+  CTX_POS = { x: x, y: y };
+  renderCtxMenuRoot();
+  CTX_MENU.classList.add("show");
+  var w = CTX_MENU.offsetWidth, h = CTX_MENU.offsetHeight;
+  var maxX = window.scrollX + document.documentElement.clientWidth - w - 6;
+  var maxY = window.scrollY + document.documentElement.clientHeight - h - 6;
+  CTX_MENU.style.left = Math.max(0, Math.min(x, maxX)) + "px";
+  CTX_MENU.style.top = Math.max(0, Math.min(y, maxY)) + "px";
+}
+
+/** Hides the "Add element" menu. */
+function hideCtxMenu() {
+  if (CTX_MENU) CTX_MENU.classList.remove("show");
+}
+
+/**
+ * Wires up the right-click "Add element" menu, only called in the ta
+ * portal's Visual editor tab alongside wireResizable()/wireClickToEdit().
+ * Replaces the browser's own context menu everywhere in the editor.
+ */
+function wireAddElementMenu() {
+  document.addEventListener("contextmenu", function (e) {
+    /* mid-edit, leave the browser's own menu alone so right-click paste/
+       spellcheck still works while actually typing */
+    if (e.target.closest && e.target.closest("[contenteditable='true']")) return;
+    e.preventDefault();
+    showCtxMenu(e.pageX, e.pageY);
+  });
+  /* mousedown (not click) so this runs and reads e.target BEFORE a menu
+     button's own click handler gets a chance to rewrite CTX_MENU's
+     children (eg swapping to the icon-picker sub-view), which would
+     otherwise make a stale e.target read as "outside" the menu on the
+     click that follows and close it out from under itself */
+  document.addEventListener("mousedown", function (e) {
+    if (CTX_MENU && CTX_MENU.classList.contains("show") && !CTX_MENU.contains(e.target)) hideCtxMenu();
+  }, true);
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && CTX_MENU && CTX_MENU.classList.contains("show")) hideCtxMenu();
+  });
+}
+
 /* set for one tick after a body-drag move ends, so the click that the
    browser fires right after mouseup doesn't also open a text edit */
 var JUST_DRAGGED = false;
@@ -1037,12 +1371,14 @@ function wireResizable() {
   });
 
   /* Delete/Backspace deletes whatever the ring is currently on, unless a
-     text field is mid-edit (contentEditable), where the key should just
-     edit the text as normal */
+     text field is mid-edit (contentEditable) or focus is sitting in a real
+     form control (eg the "Add element" menu's link input), where the key
+     should just type/edit as normal */
   document.addEventListener("keydown", function (e) {
     if (e.key !== "Delete" && e.key !== "Backspace") return;
     if (!RING_EL) return;
-    if (document.activeElement && document.activeElement.isContentEditable) return;
+    var active = document.activeElement;
+    if (active && (active.isContentEditable || active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT")) return;
     e.preventDefault();
     deleteElement(RING_EL);
   });
@@ -1060,16 +1396,17 @@ var TEXT_TOOLBAR_EL = null;
 
 /* a small curated set rather than every Google Font under the sun: the
    first three are the site's own fonts, referenced by css variable (see
-   :root in css/style.css) rather than hardcoded names so this list can
-   never drift from whatever those actually are, the rest are common system
-   fonts that need no extra network request and render everywhere, keeping
-   the "one student, one week, no build step" feel instead of turning into
-   a font-picker megabundle. */
+   :root in css/style.css) rather than hardcoded names so this list never
+   names a specific typeface that could go stale, whichever fonts those
+   variables actually point to is whatever shows up and gets used here. the
+   rest are common system fonts that need no extra network request and
+   render everywhere, keeping the "one student, one week, no build step"
+   feel instead of turning into a font-picker megabundle. */
 var TEXT_FONTS = [
   { label: "Default", value: "" },
-  { label: "Heading font (Archivo)", value: "var(--font-head)" },
-  { label: "Body font (Inter)", value: "var(--font-body)" },
-  { label: "Monospace (site)", value: "var(--font-mono)" },
+  { label: "Heading", value: "var(--font-head)" },
+  { label: "Body", value: "var(--font-body)" },
+  { label: "Monospace", value: "var(--font-mono)" },
   { label: "Georgia", value: "Georgia, serif" },
   { label: "Times New Roman", value: "'Times New Roman', serif" },
   { label: "Courier New", value: "'Courier New', monospace" },
@@ -1228,6 +1565,68 @@ function hideTextToolbar() {
 }
 
 /**
+ * Wires up one data-edit-id element as a click-to-edit field: shared by
+ * wireClickToEdit()'s initial pass over every template field and
+ * addCustomElement() for a text/button field created on the fly through
+ * the right-click "Add element" menu, so a brand new field behaves exactly
+ * like one that's been there since the template loaded.
+ * @param el the element to wire up
+ */
+function wireTextField(el) {
+  /* undo neuterLink()'s dimming, if any: an editable element should look
+     normal (own hover affordance) rather than disabled */
+  el.style.opacity = "";
+  el.style.cursor = "";
+
+  var beforeEdit = "";
+  el.addEventListener("click", function (e) {
+    if (el.isContentEditable) return; /* already editing, let the caret land normally */
+    e.preventDefault();
+    e.stopPropagation();
+    beforeEdit = el.innerHTML;
+    el.contentEditable = "true";
+    el.classList.add("editing");
+    showTextToolbar(el);
+    el.focus();
+    var range = document.createRange();
+    range.selectNodeContents(el);
+    var sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  });
+
+  el.addEventListener("keydown", function (e) {
+    if (!el.isContentEditable) return;
+    if (e.key === "Enter") { e.preventDefault(); el.blur(); }
+    if (e.key === "Escape") { e.preventDefault(); el.innerHTML = beforeEdit; el.blur(); }
+  });
+
+  el.addEventListener("blur", function (e) {
+    if (!el.isContentEditable) return;
+    /* focus moved to the toolbar itself (eg opening the font dropdown),
+       not away from the field: don't end the edit, that control's own
+       handler runs and hands focus straight back */
+    if (e.relatedTarget && TEXT_TOOLBAR && TEXT_TOOLBAR.contains(e.relatedTarget)) return;
+    el.contentEditable = "false";
+    el.classList.remove("editing");
+    hideTextToolbar();
+    /* the edit may have changed el's own rendered size (more/less text),
+       so the ring needs to catch up if it's sitting on this field */
+    positionRing();
+    var after = el.innerHTML;
+    if (after !== beforeEdit) {
+      EDIT_UNDO.push({ type: "text", id: el.getAttribute("data-edit-id"), before: beforeEdit, after: after });
+      EDIT_REDO.length = 0;
+    }
+    saveEditedField(el.getAttribute("data-edit-id"), after, el.getAttribute("data-default-html"));
+    mirrorEditedField(el.getAttribute("data-edit-id"), after, el);
+  });
+
+  el.addEventListener("keyup", updateTextToolbarState);
+  el.addEventListener("mouseup", updateTextToolbarState);
+}
+
+/**
  * Turns every data-edit-id element into a click-to-edit field, only called
  * in the ta portal's Visual editor tab (instructor.html/js/ta.js) with
  * &edit=1 set (see isEditMode()). Edits save straight into localStorage's
@@ -1238,62 +1637,14 @@ function hideTextToolbar() {
  */
 function wireClickToEdit() {
   document.body.classList.add("edit-mode");
-  document.querySelectorAll("[data-edit-id]").forEach(function (el) {
-    /* undo neuterLink()'s dimming, if any: an editable element should look
-       normal (own hover affordance) rather than disabled */
-    el.style.opacity = "";
-    el.style.cursor = "";
-
-    var beforeEdit = "";
-    el.addEventListener("click", function (e) {
-      if (el.isContentEditable) return; /* already editing, let the caret land normally */
-      e.preventDefault();
-      e.stopPropagation();
-      beforeEdit = el.innerHTML;
-      el.contentEditable = "true";
-      el.classList.add("editing");
-      showTextToolbar(el);
-      el.focus();
-      var range = document.createRange();
-      range.selectNodeContents(el);
-      var sel = window.getSelection();
-      sel.removeAllRanges();
-      sel.addRange(range);
-    });
-
-    el.addEventListener("keydown", function (e) {
-      if (!el.isContentEditable) return;
-      if (e.key === "Enter") { e.preventDefault(); el.blur(); }
-      if (e.key === "Escape") { e.preventDefault(); el.innerHTML = beforeEdit; el.blur(); }
-    });
-
-    el.addEventListener("blur", function (e) {
-      if (!el.isContentEditable) return;
-      /* focus moved to the toolbar itself (eg opening the font dropdown),
-         not away from the field: don't end the edit, that control's own
-         handler runs and hands focus straight back */
-      if (e.relatedTarget && TEXT_TOOLBAR && TEXT_TOOLBAR.contains(e.relatedTarget)) return;
-      el.contentEditable = "false";
-      el.classList.remove("editing");
-      hideTextToolbar();
-      /* the edit may have changed el's own rendered size (more/less text),
-         so the ring needs to catch up if it's sitting on this field */
-      positionRing();
-      var after = el.innerHTML;
-      if (after !== beforeEdit) {
-        EDIT_UNDO.push({ type: "text", id: el.getAttribute("data-edit-id"), before: beforeEdit, after: after });
-        EDIT_REDO.length = 0;
-      }
-      saveEditedField(el.getAttribute("data-edit-id"), after, el.getAttribute("data-default-html"));
-      mirrorEditedField(el.getAttribute("data-edit-id"), after, el);
-    });
-
-    el.addEventListener("keyup", updateTextToolbarState);
-    el.addEventListener("mouseup", updateTextToolbarState);
-  });
+  document.querySelectorAll("[data-edit-id]").forEach(wireTextField);
 
   document.addEventListener("keydown", function (e) {
     if (!(e.ctrlKey || e.metaKey)) return;
+    /* a real form control (eg the "Add element" menu's link input) should
+       get its own native undo, not hijack the click-to-edit stack */
+    var active = document.activeElement;
+    if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT")) return;
     var key = e.key.toLowerCase();
     if (key === "z" && !e.shiftKey) { e.preventDefault(); undoEdit(); }
     else if (key === "y" || (key === "z" && e.shiftKey)) { e.preventDefault(); redoEdit(); }
@@ -1612,13 +1963,14 @@ document.addEventListener("DOMContentLoaded", function () {
       if (textMap["footer.contact"] === undefined && data.contact_text) {
         textMap["footer.contact"] = data.contact_text;
       }
+      renderCustomElements(data.custom_elements);
       applyTextOverrides(textMap);
       applySizeOverrides(data.sizes);
       applyFontSizeOverrides(data.font_sizes);
       applyTextStyleOverrides(data.text_styles);
       applyPositionOverrides(data.positions);
       applyHiddenOverrides(data.hidden);
-      if (isPreviewMode() && isEditMode()) { wireResizable(); wireClickToEdit(); }
+      if (isPreviewMode() && isEditMode()) { wireResizable(); wireClickToEdit(); wireAddElementMenu(); }
     })
     .catch(function () {
       slot.innerHTML = CD_TBA_HTML;

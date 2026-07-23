@@ -1350,6 +1350,26 @@ body.edit-mode .apply-bob { animation: none; }
   pointer-events: auto;
 }
 
+/* delete handle, inset into the top-right corner (move handle mirrors it
+   top-left) so it stays reachable even on an element flush against the
+   viewport edge */
+.sel-ring .delh {
+  position: absolute;
+  right: 3px;
+  top: 3px;
+  width: 15px;
+  height: 15px;
+  border-radius: 3px;
+  background: var(--rose, #c0576b);
+  color: #fff;
+  cursor: pointer;
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sel-ring .delh svg { width: 10px; height: 10px; }
+
 /* frozen slot an element leaves behind when its first resize detaches it
    from flow (detachFromFlow() in js/main.js) */
 .free-wrap { position: relative; }

@@ -147,6 +147,9 @@ DEFAULT_CONTENT = {
     # move-handle drags in the visual editor, text fields only, keyed by
     # data-edit-id, {id: {x, y}} left/top offsets in css px.
     "positions": {},
+    # elements deleted in the visual editor, a flat list of data-edit-id/
+    # data-resize-id values to hide.
+    "hidden": [],
 }
 
 

@@ -63,7 +63,10 @@ function seed() {
     font_sizes: {},
     /* move-handle drags in the visual editor, keyed the same way as sizes,
        {id: {tx, ty}} translate offsets in css px */
-    positions: {}
+    positions: {},
+    /* elements deleted in the visual editor (js/main.js's deleteElement()),
+       a flat list of data-edit-id/data-resize-id values to hide */
+    hidden: []
   };
 }
 
@@ -188,6 +191,7 @@ function normalizeState() {
   if (!STATE.sizes || typeof STATE.sizes !== "object") STATE.sizes = {};
   if (!STATE.font_sizes || typeof STATE.font_sizes !== "object") STATE.font_sizes = {};
   if (!STATE.positions || typeof STATE.positions !== "object") STATE.positions = {};
+  if (!Array.isArray(STATE.hidden)) STATE.hidden = [];
   /* footer contact line used to be its own field, edited from a dedicated
      input in this section; now it's click-to-edit like the rest of the
      landing page copy, so fold any already-saved value in once and stop
@@ -1112,6 +1116,38 @@ function renderHomeImages() {
   });
 }
 
+/**
+ * Renders the "Deleted elements" list: one row per id in STATE.hidden
+ * (js/main.js's deleteElement(), synced in from the Visual editor's
+ * localStorage snapshot the same way sizes/positions are), each with a
+ * Restore button. A deleted element is display:none in the iframe, so once
+ * it's applied and reloaded there's no way to hover it back into the
+ * selection ring, this list is the only way back short of undoing within
+ * the same editor session.
+ */
+function renderDeletedList() {
+  var list = document.getElementById("deletedList");
+  if (!list) return;
+  if (!STATE.hidden.length) {
+    list.innerHTML = '<p class="muted" style="margin:0">Nothing deleted.</p>';
+    return;
+  }
+  list.className = "res-list";
+  list.innerHTML = STATE.hidden.map(function (id, i) {
+    return '<div class="res-row" data-idx="' + i + '">' +
+      '<span class="rname">' + id + '</span>' +
+      '<button class="btn btn-ghost deleted-restore" type="button">Restore</button>' +
+    '</div>';
+  }).join("");
+  list.querySelectorAll(".deleted-restore").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var idx = parseInt(btn.closest(".res-row").getAttribute("data-idx"), 10);
+      STATE.hidden.splice(idx, 1);
+      renderDeletedList();
+    });
+  });
+}
+
 /** Pushes STATE into the landing page controls' input values. */
 function syncLanding() {
   var radios = document.querySelectorAll('input[name="cdMode"]');
@@ -1136,6 +1172,7 @@ function renderAll() {
   renderLogistics();
   renderGallery();
   renderHomeImages();
+  renderDeletedList();
   syncLanding();
   renderPreview();
 }

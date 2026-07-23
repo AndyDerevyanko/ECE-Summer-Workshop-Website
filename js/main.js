@@ -563,7 +563,24 @@ function applyPositionOverrides(positions) {
   });
 }
 
-/* undo/redo for click-to-edit, a plain stack of {id, before, after} commits.
+/**
+ * Hides every element a ta deleted in the visual editor (see
+ * deleteElement()), on every load, live site included, same as
+ * applyTextOverrides(). A deleted id can match more than one element
+ * (mirrored text like the brand wordmark, nav + footer); all of them hide
+ * together, same "an id is one logical thing" rule as the rest of this file.
+ * @param hidden array of data-edit-id/data-resize-id values to hide
+ */
+function applyHiddenOverrides(hidden) {
+  (hidden || []).forEach(function (id) {
+    document.querySelectorAll('[data-edit-id="' + id + '"], [data-resize-id="' + id + '"]').forEach(function (el) {
+      el.style.display = "none";
+    });
+  });
+}
+
+/* undo/redo for click-to-edit and delete, a plain stack of commits: a text
+   edit is {type:"text", id, before, after}, a delete is {type:"delete", id}.
    a fresh edit clears the redo stack, same convention as any text editor. */
 var EDIT_UNDO = [];
 var EDIT_REDO = [];
@@ -678,6 +695,24 @@ function buildRing() {
   mv.addEventListener("mousedown", startMoveDrag);
   mv.addEventListener("dblclick", resetPosDbl);
   RING.appendChild(mv);
+
+  var del = document.createElement("span");
+  del.className = "delh";
+  del.title = "Delete element";
+  del.innerHTML =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/>' +
+    '<path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/></svg>';
+  /* swallow mousedown so it can't be picked up as a drag by the delegated
+     body-drag handler in wireResizable() (RING.contains(e.target) already
+     excludes it there, this just stops the caret/selection side effects) */
+  del.addEventListener("mousedown", function (e) { e.preventDefault(); e.stopPropagation(); });
+  del.addEventListener("click", function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (RING_EL) deleteElement(RING_EL);
+  });
+  RING.appendChild(del);
   document.body.appendChild(RING);
 }
 
@@ -857,6 +892,40 @@ function resetPosDbl(e) {
   positionRing();
 }
 
+/**
+ * Hides (or restores) every element sharing one data-edit-id/data-resize-id
+ * and persists it, same "an id is one logical thing, not one specific DOM
+ * node" rule mirrorEditedField() already applies to text (deleting the brand
+ * wordmark takes it out of the nav and the footer together, not just
+ * whichever copy was clicked). display:none rather than removing the node so
+ * undo has something to restore.
+ * @param id the element's data-edit-id or data-resize-id
+ * @param hidden true to hide/delete it, false to restore it
+ */
+function setElementHidden(id, hidden) {
+  document.querySelectorAll('[data-edit-id="' + id + '"], [data-resize-id="' + id + '"]').forEach(function (el) {
+    el.style.display = hidden ? "none" : "";
+  });
+  saveEditedVisibility(id, hidden);
+}
+
+/**
+ * Deletes the currently-selected element (ring's trash handle, or the
+ * Delete/Backspace key, see wireResizable()). Pushed onto the same undo
+ * stack as a text edit so Ctrl+Z brings it right back.
+ * @param el the element to delete (always the current RING_EL)
+ */
+function deleteElement(el) {
+  var id = elId(el);
+  if (!id) return;
+  setElementHidden(id, true);
+  EDIT_UNDO.push({ type: "delete", id: id });
+  EDIT_REDO.length = 0;
+  hideFontCtl();
+  RING_EL = null;
+  if (RING) RING.style.display = "none";
+}
+
 /* set for one tick after a body-drag move ends, so the click that the
    browser fires right after mouseup doesn't also open a text edit */
 var JUST_DRAGGED = false;
@@ -946,6 +1015,17 @@ function wireResizable() {
   document.addEventListener("dragstart", function (e) {
     var t = e.target.closest ? e.target.closest(RESIZABLE_SEL) : null;
     if (t) e.preventDefault();
+  });
+
+  /* Delete/Backspace deletes whatever the ring is currently on, unless a
+     text field is mid-edit (contentEditable), where the key should just
+     edit the text as normal */
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "Delete" && e.key !== "Backspace") return;
+    if (!RING_EL) return;
+    if (document.activeElement && document.activeElement.isContentEditable) return;
+    e.preventDefault();
+    deleteElement(RING_EL);
   });
 }
 
@@ -1052,7 +1132,7 @@ function wireClickToEdit() {
       positionRing();
       var after = el.innerHTML;
       if (after !== beforeEdit) {
-        EDIT_UNDO.push({ id: el.getAttribute("data-edit-id"), before: beforeEdit, after: after });
+        EDIT_UNDO.push({ type: "text", id: el.getAttribute("data-edit-id"), before: beforeEdit, after: after });
         EDIT_REDO.length = 0;
       }
       saveEditedField(el.getAttribute("data-edit-id"), after, el.getAttribute("data-default-html"));
@@ -1109,11 +1189,18 @@ function redoEdit() {
 }
 
 /**
- * Writes one undo/redo stack entry's text back onto its element and saves it.
- * @param action {id, before, after}
+ * Replays one undo/redo stack entry, either a text commit ({type:"text",
+ * id, before, after}) or a delete ({type:"delete", id}: "before" means it
+ * existed, "after" means it was deleted, so undo shows it and redo hides it
+ * again).
+ * @param action the stack entry
  * @param side "before" or "after", which side of the action to restore
  */
 function applyHistoryAction(action, side) {
+  if (action.type === "delete") {
+    setElementHidden(action.id, side === "after");
+    return;
+  }
   var els = document.querySelectorAll('[data-edit-id="' + action.id + '"]');
   if (!els.length) return;
   els.forEach(function (el) { el.innerHTML = action[side]; });
@@ -1210,6 +1297,26 @@ function saveEditedPosition(id, tx, ty) {
   if (!snapshot.positions || typeof snapshot.positions !== "object") snapshot.positions = {};
   if (tx == null || ty == null) delete snapshot.positions[id];
   else snapshot.positions[id] = { tx: tx, ty: ty };
+  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
+ * Persists a delete/restore (see deleteElement()) into the preview snapshot,
+ * the same localStorage draft every other override here uses. Stored as a
+ * flat list of hidden ids rather than a per-id boolean map so an untouched
+ * blob's "hidden" key doesn't need to exist at all.
+ * @param id the element's data-edit-id or data-resize-id
+ * @param hidden true to hide/delete it, false to restore it
+ */
+function saveEditedVisibility(id, hidden) {
+  var raw;
+  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  if (!Array.isArray(snapshot.hidden)) snapshot.hidden = [];
+  var idx = snapshot.hidden.indexOf(id);
+  if (hidden) { if (idx === -1) snapshot.hidden.push(id); }
+  else if (idx !== -1) snapshot.hidden.splice(idx, 1);
   try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
 }
 
@@ -1333,6 +1440,7 @@ document.addEventListener("DOMContentLoaded", function () {
       applySizeOverrides(data.sizes);
       applyFontSizeOverrides(data.font_sizes);
       applyPositionOverrides(data.positions);
+      applyHiddenOverrides(data.hidden);
       if (isPreviewMode() && isEditMode()) { wireResizable(); wireClickToEdit(); }
     })
     .catch(function () {

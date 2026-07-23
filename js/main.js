@@ -322,8 +322,8 @@ function elId(el) {
 /**
  * Classifies an element so a resize drag can pick the right aspect-ratio
  * rule: an icon never distorts no matter what (its box's own ratio always
- * locked); an image never distorts its pixels either (object-fit: cover
- * re-crops instead), but its box's ratio is only locked while shift is
+ * locked); an image or video never distorts its pixels either (object-fit:
+ * cover re-crops instead), but its box's ratio is only locked while shift is
  * held; everything else (text boxes, cards, sections, buttons) always
  * resizes its two axes independently.
  * @param el the element
@@ -334,7 +334,7 @@ function elKind(el) {
   if (tag === "svg") return "icon";
   var rid = el.getAttribute("data-resize-id") || "";
   if (rid.indexOf("icon.") === 0 || /\.icon$/.test(rid)) return "icon";
-  if (tag === "img") return "img";
+  if (tag === "img" || tag === "video") return "img";
   return "box";
 }
 
@@ -526,7 +526,14 @@ function applyTextStyleOverrides(styles) {
   document.querySelectorAll("[data-edit-id]").forEach(function (el) {
     var s = styles[el.getAttribute("data-edit-id")];
     if (!s) return;
-    if (s.fontFamily) el.style.fontFamily = s.fontFamily;
+    if (s.fontFamily) {
+      /* a ta-uploaded font (s.fontUrl set) needs its @font-face declared
+         before the name means anything: a real visitor's browser needs
+         this exactly as much as the ta's own portal tab does, so this runs
+         unconditionally here rather than only inside the editor */
+      if (s.fontUrl) ensureFontFace(s.fontFamily, s.fontUrl);
+      el.style.fontFamily = s.fontFamily;
+    }
     if (s.align) el.style.textAlign = s.align;
     if (s.letterSpacing) el.style.letterSpacing = s.letterSpacing;
   });
@@ -1054,12 +1061,15 @@ function deleteElement(el) {
    content.custom_elements exactly (see renderCustomElements()) */
 var CUSTOM_ELEMENTS = [];
 
-/* a handful of the site's own icons, reused verbatim (same paths as
-   templates/index.html's learn cards, the countdown calendar, and the
-   logistics checkmark, see CHECK_ICON_SVG above) rather than pulling in an
-   icon library: "icons that exist already", not new ones. class="cic" for
-   the same fixed 30x30 accent-colored sizing every other content icon on
-   the site already uses. */
+/* every distinct icon actually used anywhere on the site (index.html's
+   learn cards, schedule day rows, prizes, countdown, theme toggle, about
+   section burst, plus dashboard.html/js/dashboard.js's attachment-type and
+   lock/unlock glyphs), reused verbatim rather than pulling in an icon
+   library: "icons that exist already", not new ones, and not just the
+   handful off one page. class="cic" for the same fixed 30x30 accent-colored
+   sizing every other content icon on the site already uses. Built-in, so
+   unlike CUSTOM_ICONS (see fetchCustomAssets()) none of these are ever
+   deletable from the picker. */
 var ICON_LIBRARY = [
   { label: "Checkmark", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" ' +
     'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12.5l5 5L20 6.5" /></svg>' },
@@ -1077,8 +1087,160 @@ var ICON_LIBRARY = [
     '<path d="M9 3v3M12 3v3M15 3v3M9 18v3M12 18v3M15 18v3M3 9h3M3 12h3M3 15h3M18 9h3M18 12h3M18 15h3" /></svg>' },
   { label: "Cube", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
     'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2l9 5v10l-9 5-9-5V7z" />' +
-    '<path d="M12 12l9-5M12 12v10M12 12L3 7" /></svg>' }
+    '<path d="M12 12l9-5M12 12v10M12 12L3 7" /></svg>' },
+  { label: "Soldering iron", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 7l4 4L7 21H3v-4z" />' +
+    '<path d="M15 5l2-2 4 4-2 2" /></svg>' },
+  { label: "Flag", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3v18" /><path d="M6 4h13v8H6z" />' +
+    '<path d="M6 4h4.3v4H6zM14.7 4H19v4h-4.3zM10.3 8h4.4v4h-4.4z" fill="currentColor" stroke="none" /></svg>' },
+  { label: "Mystery", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" />' +
+    '<path d="M8.5 14a4.5 4.5 0 0 0 7 0" /><path d="M9 9.5h.01M15 9.5h.01" /></svg>' },
+  { label: "Lightbulb", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M12 3a6 6 0 0 0-4 10.5c.6.6 1 1.5 1 2.5h6c0-1 .4-1.9 1-2.5A6 6 0 0 0 12 3z" />' +
+    '<path d="M9 19h6M10 22h4" /></svg>' },
+  { label: "Signal", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 17h3V7h5v10h5V7h5" />' +
+    '<path d="M20 7h2" /></svg>' },
+  { label: "Play", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 5v14l12-7z" />' +
+    '<path d="M2 9h5M2 15h5M19 12h3" /></svg>' },
+  { label: "Magnet", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3v8a5 5 0 0 0 10 0V3" />' +
+    '<path d="M5 8h4M15 8h4" /></svg>' },
+  { label: "Lightning", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2L3 14h9l-1 8 10-12h-9z" /></svg>' },
+  { label: "Figure", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="2" />' +
+    '<path d="M11 7l-5.5 13M13 7l5.5 13" /><path d="M8.2 15a7 7 0 0 0 7.6 0" /></svg>' },
+  { label: "Wrench", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" /></svg>' },
+  { label: "Module", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 2v6M15 2v6" />' +
+    '<path d="M7 8h10v3a5 5 0 0 1-10 0z" /><path d="M12 16v6" /></svg>' },
+  { label: "Code", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>' },
+  { label: "Target", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" />' +
+    '<circle cx="12" cy="12" r="5" /><circle cx="12" cy="12" r="1" /></svg>' },
+  { label: "Smiley", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" />' +
+    '<circle cx="9" cy="10" r="1" fill="currentColor" stroke="none" /><circle cx="15" cy="10" r="1" fill="currentColor" stroke="none" />' +
+    '<circle cx="12" cy="15.5" r="2" /></svg>' },
+  { label: "Sun", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4" />' +
+    '<path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></svg>' },
+  { label: "Moon", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /></svg>' },
+  { label: "Burst", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+    'stroke-linecap="round" aria-hidden="true"><path d="M10 12H2" /><path d="M11 7L4 3" /><path d="M11 17l-7 4" /></svg>' },
+  { label: "Folder", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>' },
+  { label: "Link", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M9 17H7a5 5 0 0 1 0-10h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8"/></svg>' },
+  { label: "Photo", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/>' +
+    '<path d="M21 15l-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></svg>' },
+  { label: "Document", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>' +
+    '<path d="M14 2v6h6"/><path d="M8 13h8M8 17h8"/></svg>' },
+  { label: "Slides", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M2 3h20"/><path d="M21 3v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V3"/><path d="M7 21l5-5 5 5"/></svg>' },
+  { label: "File", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v5h5"/></svg>' },
+  { label: "Lock", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/>' +
+    '<path d="M8 11V8a4 4 0 0 1 8 0v3"/><path d="M12 14.5v2"/></svg>' },
+  { label: "Unlock", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/>' +
+    '<path d="M8 11V8a4 4 0 0 1 7.5-2"/><path d="M12 14.5v2"/></svg>' }
 ];
+
+/* ta-uploaded icons/videos/fonts, shared with every ta the moment they're
+   added (unlike a profile there's no separate share step), fetched fresh
+   whenever the relevant picker opens (see fetchCustomAssets()). Each entry
+   is {id, owner, name, url}; only its owner can remove it (enforced
+   server-side too, see app/main.py's api_delete_asset()) - never a built-in
+   (ICON_LIBRARY/TEXT_FONTS aren't rows in this table at all) and never
+   another ta's upload. */
+var CUSTOM_ICONS = [];
+var CUSTOM_FONTS = [];
+
+/**
+ * The logged-in ta's username, straight out of localStorage: same-origin,
+ * so it's already there whether this runs in the ta's real portal tab or
+ * the preview iframe that shares localStorage with it.
+ * @return the current ta's username, or "" if somehow not logged in
+ */
+function currentTaUsername() {
+  return localStorage.getItem("session") || "";
+}
+
+/**
+ * Bearer-authed fetch for the shared icon/video/font asset endpoints, same
+ * token convention as uploadEditorFile() (js/ta.js's authedFetch() isn't
+ * loaded on this file's pages).
+ * @param url request url
+ * @param opts fetch options
+ * @return the fetch promise
+ */
+function assetFetch(url, opts) {
+  opts = opts || {};
+  opts.headers = Object.assign({}, opts.headers, { "Authorization": "Bearer " + (localStorage.getItem("token") || "") });
+  return fetch(url, opts);
+}
+
+/**
+ * Lists every ta-uploaded asset of one kind, shared with every ta.
+ * @param kind "icon", "video", or "font"
+ * @return a promise resolving to a list of {id, owner, name, url} rows
+ *   (resolves to [] on any failure, so a picker just shows no custom ones
+ *   rather than breaking)
+ */
+function fetchCustomAssets(kind) {
+  return assetFetch("/api/assets/" + kind)
+    .then(function (res) { return res.ok ? res.json() : []; })
+    .catch(function () { return []; });
+}
+
+/**
+ * Registers an already-uploaded file (see uploadEditorFile()) as a shared
+ * icon/video/font, owned by whoever's calling this.
+ * @param kind "icon", "video", or "font"
+ * @param name display name
+ * @param url the uploaded file's url
+ * @return a promise resolving to the new asset's id
+ */
+function createCustomAsset(kind, name, url) {
+  return assetFetch("/api/assets/" + kind, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: name, url: url })
+  }).then(function (res) {
+    if (!res.ok) throw new Error("save failed");
+    return res.json();
+  }).then(function (data) { return data.id; });
+}
+
+/**
+ * Deletes a ta-uploaded icon/video/font. Only actually deletes server-side
+ * if the current ta is the one who added it (see app/main.py).
+ * @param kind "icon", "video", or "font"
+ * @param id the asset's id
+ * @return the fetch promise
+ */
+function deleteCustomAsset(kind, id) {
+  return assetFetch("/api/assets/" + kind + "/" + id, { method: "DELETE" });
+}
 
 /**
  * Parses a raw `<svg>...</svg>` string (see ICON_LIBRARY) into a real,
@@ -1152,11 +1314,17 @@ function freezeFreeElement(el) {
  * the site follows; its href stays "#" (dead, like the login page's own
  * "Sign up" link) with the entered link only stashed on the dataset for
  * now, real navigation is a later step. An "image" with a `d.url` is a real
- * uploaded photo (see uploadImageFile()/renderCtxMenuImagePicker()), a plain
+ * uploaded photo (see uploadEditorFile()/renderCtxMenuImagePicker()), a plain
  * `<img>` with the site's usual object-fit: cover so its box dictates the
  * crop rather than stretching the pixels; one saved before real uploads
  * existed (no `d.url`) still falls back to the site's flat `.ph` placeholder
- * box (see the Media bullets in CLAUDE.md).
+ * box (see the Media bullets in CLAUDE.md). A "video" is a real uploaded
+ * clip (same upload flow as an image), a plain looping muted autoplay
+ * `<video>`, same object-fit: cover. An icon (the catch-all last branch)
+ * with a `d.url` is a ta-uploaded icon (see fetchCustomAssets()) rendered as
+ * a plain `<img>` rather than parsed svg markup; `elKind()` already treats
+ * any "icon."-prefixed id as icon kind (locked aspect ratio) regardless of
+ * tag, so this needs no special-casing anywhere else.
  * @param d {id, kind, left, top, w, h, icon, href, url}
  * @return the built, attached element
  */
@@ -1195,6 +1363,25 @@ function buildCustomElement(d) {
     el.textContent = "Image";
     el.style.width = "240px";
     el.style.height = "180px";
+  } else if (d.kind === "video") {
+    el = document.createElement("video");
+    el.src = d.url;
+    el.autoplay = true;
+    el.muted = true;
+    el.loop = true;
+    el.setAttribute("playsinline", "");
+    el.setAttribute("data-resize-id", d.id);
+    el.style.objectFit = "cover";
+    el.style.width = "320px";
+    el.style.height = "200px";
+  } else if (d.url) {
+    /* an uploaded (raster) icon, see renderCtxMenuIconPicker(): elKind()
+       already treats an "icon."-prefixed id as icon kind (locked aspect
+       ratio) regardless of tag, so an <img> here needs no special-casing */
+    el = document.createElement("img");
+    el.src = d.url;
+    el.alt = "";
+    el.setAttribute("data-resize-id", d.id);
   } else {
     el = svgFromMarkup(d.icon || ICON_LIBRARY[0].svg);
     el.setAttribute("data-resize-id", d.id);
@@ -1237,18 +1424,18 @@ function saveCustomElements(list) {
 }
 
 /**
- * Uploads one image file for the "Add element" menu's Image option, the
- * same ta-only /api/upload endpoint every other upload on the site already
- * posts to (attachments, gallery, hero video, home images). Reads the
- * session token straight out of localStorage rather than going through
- * js/ta.js's authedFetch()/authHeaders(), since this file runs on pages
- * that never load ta.js; same-origin, so the token's already there whether
- * this runs in the ta's real portal tab or the preview iframe it shares
- * localStorage with.
+ * Uploads one file for the "Add element" menu (Image, Video, or an
+ * uploaded Icon), the same ta-only /api/upload endpoint every other upload
+ * on the site already posts to (attachments, gallery, hero video, home
+ * images). Reads the session token straight out of localStorage rather
+ * than going through js/ta.js's authedFetch()/authHeaders(), since this
+ * file runs on pages that never load ta.js; same-origin, so the token's
+ * already there whether this runs in the ta's real portal tab or the
+ * preview iframe it shares localStorage with.
  * @param file the File object from the picker
  * @return a promise resolving to the uploaded file's url
  */
-function uploadImageFile(file) {
+function uploadEditorFile(file) {
   var fd = new FormData();
   fd.append("file", file);
   return fetch("/api/upload", {
@@ -1270,20 +1457,21 @@ function uploadImageFile(file) {
  * everything else the editor creates. Always lands on the very top of the
  * stacking order (see moveLayer()), matching what a ta would expect from
  * something they just placed.
- * @param kind "text", "button", "box", "image", or "icon"
+ * @param kind "text", "button", "box", "image", "video", or "icon"
  * @param x left, document px (where the menu was opened)
  * @param y top, document px
- * @param extra {icon} for kind "icon", {href} for kind "button", {url} for
- *   kind "image" (the uploaded file's url, see uploadImageFile())
+ * @param extra {icon, url} for kind "icon" (a built-in's svg markup, or an
+ *   uploaded one's url), {href} for kind "button", {url} for kind "image"/
+ *   "video" (the uploaded file's url, see uploadEditorFile())
  * @return the new element
  */
 function addCustomElement(kind, x, y, extra) {
   extra = extra || {};
   var uid = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   var d = { id: (kind === "icon" ? "icon.custom." : "custom." + kind + ".") + uid, kind: kind, left: Math.round(x), top: Math.round(y) };
-  if (kind === "icon") d.icon = extra.icon;
+  if (kind === "icon") { d.icon = extra.icon; d.url = extra.url; }
   if (kind === "button") d.href = extra.href || "";
-  if (kind === "image") d.url = extra.url;
+  if (kind === "image" || kind === "video") d.url = extra.url;
   var el = buildCustomElement(d);
   freezeFreeElement(el);
   d.w = parseFloat(el.dataset.natW);
@@ -1316,6 +1504,7 @@ function renderCtxMenuRoot() {
     '<button type="button" data-add="text">Textbox</button>' +
     '<button type="button" data-add="box">Box</button>' +
     '<button type="button" data-add="image">Image</button>' +
+    '<button type="button" data-add="video">Video</button>' +
     '<button type="button" data-add="icon">Icon</button>' +
     '<button type="button" data-add="button">Button</button>';
   CTX_MENU.querySelectorAll("button[data-add]").forEach(function (btn) {
@@ -1323,7 +1512,16 @@ function renderCtxMenuRoot() {
   });
 }
 
-/** Swaps the menu into its icon-picker sub-view (one of ICON_LIBRARY). */
+/**
+ * Swaps the menu into its icon-picker sub-view: the built-in library (see
+ * ICON_LIBRARY) plus whatever custom icons any ta has uploaded (see
+ * fetchCustomAssets()), fetched fresh every time this opens so a teammate's
+ * just-added icon shows up without a reload. A custom icon shows a small
+ * delete "x" only when the current ta is the one who added it (enforced
+ * server-side too, never a built-in and never another ta's upload). The
+ * file input at the bottom uploads a new one, shared with every ta
+ * immediately, same /api/upload + /api/assets round trip as a video/image.
+ */
 function renderCtxMenuIconPicker() {
   CTX_MENU.innerHTML =
     '<div class="ctx-title">Choose an icon</div>' +
@@ -1331,13 +1529,72 @@ function renderCtxMenuIconPicker() {
       ICON_LIBRARY.map(function (ic, i) {
         return '<button type="button" class="ctx-icon-btn" data-icon="' + i + '" title="' + ic.label + '">' + ic.svg + '</button>';
       }).join("") +
-    '</div>';
+    '</div>' +
+    '<div class="ctx-title">Icons your team added</div>' +
+    '<div class="ctx-icons ctx-custom-icons"></div>' +
+    '<input type="file" class="ctx-file-input" accept="image/*">' +
+    '<div class="ctx-file-msg ctx-upload-msg"></div>';
   CTX_MENU.querySelectorAll(".ctx-icon-btn").forEach(function (btn) {
     btn.addEventListener("click", function () {
       var ic = ICON_LIBRARY[parseInt(btn.getAttribute("data-icon"), 10)];
       addCustomElement("icon", CTX_POS.x, CTX_POS.y, { icon: ic.svg });
       hideCtxMenu();
     });
+  });
+
+  var customWrap = CTX_MENU.querySelector(".ctx-custom-icons");
+  var me = currentTaUsername();
+  fetchCustomAssets("icon").then(function (list) {
+    CUSTOM_ICONS = list;
+    /* the menu may have closed, or been swapped to a different sub-view,
+       before this resolved: bail rather than paint into a stale node */
+    if (!CTX_MENU.contains(customWrap)) return;
+    customWrap.innerHTML = "";
+    if (!list.length) {
+      customWrap.innerHTML = '<div class="ctx-file-msg">None yet</div>';
+      return;
+    }
+    list.forEach(function (ic) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "ctx-icon-btn";
+      btn.title = ic.name + " (added by " + ic.owner + ")";
+      btn.innerHTML = '<img src="' + ic.url + '" alt="">';
+      btn.addEventListener("click", function () {
+        addCustomElement("icon", CTX_POS.x, CTX_POS.y, { url: ic.url });
+        hideCtxMenu();
+      });
+      if (ic.owner === me) {
+        var del = document.createElement("span");
+        del.className = "ctx-icon-del";
+        del.title = "Remove (you added this)";
+        del.textContent = "×";
+        del.addEventListener("mousedown", function (e) { e.preventDefault(); e.stopPropagation(); });
+        del.addEventListener("click", function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          deleteCustomAsset("icon", ic.id).then(function () { renderCtxMenuIconPicker(); });
+        });
+        btn.appendChild(del);
+      }
+      customWrap.appendChild(btn);
+    });
+  });
+
+  var input = CTX_MENU.querySelector(".ctx-file-input");
+  var msg = CTX_MENU.querySelector(".ctx-upload-msg");
+  input.addEventListener("change", function () {
+    var file = input.files[0];
+    if (!file) return;
+    input.disabled = true;
+    msg.textContent = "Uploading...";
+    uploadEditorFile(file)
+      .then(function (url) { return createCustomAsset("icon", file.name, url); })
+      .then(function () { renderCtxMenuIconPicker(); })
+      .catch(function () {
+        msg.textContent = "Upload failed, try again.";
+        input.disabled = false;
+      });
   });
 }
 
@@ -1364,7 +1621,7 @@ function renderCtxMenuButtonLink() {
 
 /**
  * Swaps the menu into its "Add image" sub-view: a real file picker (see
- * uploadImageFile()), same "choose a file, it uploads immediately" pattern
+ * uploadEditorFile()), same "choose a file, it uploads immediately" pattern
  * as every other upload input on the site (attachments, gallery, home
  * images), not the earlier flat placeholder box. The menu stays open with a
  * status line during the upload so a slow connection doesn't look broken;
@@ -1382,7 +1639,7 @@ function renderCtxMenuImagePicker() {
     if (!file) return;
     input.disabled = true;
     msg.textContent = "Uploading...";
-    uploadImageFile(file)
+    uploadEditorFile(file)
       .then(function (url) {
         addCustomElement("image", CTX_POS.x, CTX_POS.y, { url: url });
         hideCtxMenu();
@@ -1395,15 +1652,45 @@ function renderCtxMenuImagePicker() {
 }
 
 /**
- * Handles a click on one of the root menu's 5 options: textbox/box add
- * immediately and close the menu, icon/button/image swap to a picker/link/
- * file sub-view first.
- * @param kind "text", "box", "image", "icon", or "button"
+ * Swaps the menu into its "Add video" sub-view: a real file picker, same
+ * "choose a file, it uploads immediately" pattern as Image, just pointed at
+ * /api/upload with a video accept filter and a wider default box.
+ */
+function renderCtxMenuVideoPicker() {
+  CTX_MENU.innerHTML =
+    '<div class="ctx-title">Add video</div>' +
+    '<input type="file" class="ctx-file-input" accept="video/*">' +
+    '<div class="ctx-file-msg"></div>';
+  var input = CTX_MENU.querySelector(".ctx-file-input");
+  var msg = CTX_MENU.querySelector(".ctx-file-msg");
+  input.addEventListener("change", function () {
+    var file = input.files[0];
+    if (!file) return;
+    input.disabled = true;
+    msg.textContent = "Uploading...";
+    uploadEditorFile(file)
+      .then(function (url) {
+        addCustomElement("video", CTX_POS.x, CTX_POS.y, { url: url });
+        hideCtxMenu();
+      })
+      .catch(function () {
+        msg.textContent = "Upload failed, try again.";
+        input.disabled = false;
+      });
+  });
+}
+
+/**
+ * Handles a click on one of the root menu's 6 options: textbox/box add
+ * immediately and close the menu, icon/button/image/video swap to a
+ * picker/link/file sub-view first.
+ * @param kind "text", "box", "image", "video", "icon", or "button"
  */
 function handleCtxAdd(kind) {
   if (kind === "icon") { renderCtxMenuIconPicker(); return; }
   if (kind === "button") { renderCtxMenuButtonLink(); return; }
   if (kind === "image") { renderCtxMenuImagePicker(); return; }
+  if (kind === "video") { renderCtxMenuVideoPicker(); return; }
   addCustomElement(kind, CTX_POS.x, CTX_POS.y);
   hideCtxMenu();
 }
@@ -1593,6 +1880,43 @@ var TEXT_FONTS = [
   { label: "Arial", value: "Arial, Helvetica, sans-serif" }
 ];
 
+/**
+ * The generated css font-family name a ta-uploaded font (see CUSTOM_FONTS)
+ * is referenced by, both in the toolbar's select and in a saved
+ * content.text_styles[id].fontFamily. Just the asset's own id, so it's
+ * always unique and never collides with a built-in TEXT_FONTS value.
+ * @param id the custom font asset's id
+ * @return the css font-family name
+ */
+function customFontFamily(id) {
+  return "cf" + id;
+}
+
+/* family names already given an @font-face declaration this page load, so
+   re-selecting or re-applying the same font never injects a duplicate
+   <style> tag, see ensureFontFace(). */
+var INJECTED_FONTS = {};
+
+/**
+ * Declares an @font-face rule for a ta-uploaded font so `font-family: name`
+ * actually renders it, injected straight into <head>: unlike an icon/video/
+ * image (which just need their url dropped into a src/href), a font needs a
+ * page-wide declaration before any element can reference it by name. Runs
+ * both in the editor (as soon as a font's picked or uploaded) and on every
+ * ordinary page load (applyTextStyleOverrides(), live site included) since
+ * a real visitor's browser needs the same declaration to render text a ta
+ * styled with it, not just the ta's own portal tab.
+ * @param family the css font-family name (see customFontFamily())
+ * @param url the uploaded font file's url
+ */
+function ensureFontFace(family, url) {
+  if (INJECTED_FONTS[family]) return;
+  INJECTED_FONTS[family] = true;
+  var style = document.createElement("style");
+  style.textContent = '@font-face { font-family: "' + family + '"; src: url("' + url + '"); font-display: swap; }';
+  document.head.appendChild(style);
+}
+
 /* single-color inline svgs for the 4 align buttons, same convention as
    every other icon on the site (no emoji/unicode glyphs) */
 var ALIGN_ICONS = {
@@ -1622,6 +1946,9 @@ function buildTextToolbar() {
     '<select class="tt-font" title="Font">' +
       TEXT_FONTS.map(function (f) { return '<option value="' + f.value + '">' + f.label + '</option>'; }).join("") +
     '</select>' +
+    '<button type="button" class="tt-font-add" title="Upload a font, shared with your whole team">+</button>' +
+    '<button type="button" class="tt-font-del" title="Remove this font (you added it)" style="display:none">×</button>' +
+    '<input type="file" class="tt-font-file" accept=".woff,.woff2,.ttf,.otf" style="display:none">' +
     '<span class="tt-sep"></span>' +
     '<button type="button" class="fs-dn" title="Smaller text">A-</button>' +
     '<button type="button" class="fs-up" title="Larger text">A+</button>' +
@@ -1692,10 +2019,101 @@ function buildTextToolbar() {
   TEXT_TOOLBAR.querySelector(".tt-font").addEventListener("change", function () {
     if (!TEXT_TOOLBAR_EL) return;
     var val = this.value;
+    var custom = CUSTOM_FONTS.filter(function (f) { return customFontFamily(f.id) === val; })[0];
+    if (custom) ensureFontFace(val, custom.url);
     TEXT_TOOLBAR_EL.style.fontFamily = val;
-    saveTextStyle(TEXT_TOOLBAR_EL.getAttribute("data-edit-id"), "fontFamily", val);
+    saveFontFamily(TEXT_TOOLBAR_EL.getAttribute("data-edit-id"), val, custom ? custom.url : "");
+    updateFontDeleteButton();
     TEXT_TOOLBAR_EL.focus();
   });
+
+  TEXT_TOOLBAR.querySelector(".tt-font-add").addEventListener("click", function () {
+    TEXT_TOOLBAR.querySelector(".tt-font-file").click();
+  });
+
+  TEXT_TOOLBAR.querySelector(".tt-font-file").addEventListener("change", function () {
+    var input = this;
+    var file = input.files[0];
+    var el = TEXT_TOOLBAR_EL;
+    if (!file || !el) return;
+    input.disabled = true;
+    var name = file.name.replace(/\.[^.]+$/, "");
+    uploadEditorFile(file)
+      .then(function (url) {
+        return createCustomAsset("font", name, url).then(function (id) {
+          return { id: id, name: name, owner: currentTaUsername(), url: url };
+        });
+      })
+      .then(function (asset) {
+        CUSTOM_FONTS.push(asset);
+        var family = customFontFamily(asset.id);
+        ensureFontFace(family, asset.url);
+        refreshFontSelect();
+        TEXT_TOOLBAR.querySelector(".tt-font").value = family;
+        el.style.fontFamily = family;
+        saveFontFamily(el.getAttribute("data-edit-id"), family, asset.url);
+        updateFontDeleteButton();
+        el.focus();
+      })
+      .catch(function () {})
+      .then(function () { input.disabled = false; input.value = ""; });
+  });
+
+  TEXT_TOOLBAR.querySelector(".tt-font-del").addEventListener("click", function () {
+    var id = this.dataset.assetId;
+    if (!id) return;
+    deleteCustomAsset("font", id).then(function () {
+      CUSTOM_FONTS = CUSTOM_FONTS.filter(function (f) { return String(f.id) !== String(id); });
+      refreshFontSelect();
+      if (TEXT_TOOLBAR_EL) {
+        TEXT_TOOLBAR_EL.style.fontFamily = "";
+        saveFontFamily(TEXT_TOOLBAR_EL.getAttribute("data-edit-id"), "", "");
+      }
+      updateFontDeleteButton();
+    });
+  });
+}
+
+/**
+ * Rebuilds the font <select>'s option list: the built-ins (TEXT_FONTS)
+ * first, then whatever custom fonts any ta has uploaded (CUSTOM_FONTS, see
+ * fetchCustomAssets()) in their own optgroup. Keeps whatever value the
+ * select already had; if that font just got deleted (by anyone) the select
+ * naturally falls back to Default, since "" is always a valid option value.
+ */
+function refreshFontSelect() {
+  if (!TEXT_TOOLBAR) return;
+  var select = TEXT_TOOLBAR.querySelector(".tt-font");
+  var current = select.value;
+  var html = TEXT_FONTS.map(function (f) {
+    return '<option value="' + f.value + '">' + f.label + '</option>';
+  }).join("");
+  if (CUSTOM_FONTS.length) {
+    html += '<optgroup label="Your team">' +
+      CUSTOM_FONTS.map(function (f) {
+        return '<option value="' + customFontFamily(f.id) + '">' + f.name + '</option>';
+      }).join("") +
+      '</optgroup>';
+  }
+  select.innerHTML = html;
+  select.value = current;
+}
+
+/**
+ * Shows the "×" delete button next to the font select only when the
+ * currently-selected font is a custom one the logged-in ta is the owner of
+ * (never a built-in, never another ta's upload, mirrors the icon picker's
+ * per-item delete rule).
+ */
+function updateFontDeleteButton() {
+  if (!TEXT_TOOLBAR) return;
+  var del = TEXT_TOOLBAR.querySelector(".tt-font-del");
+  var val = TEXT_TOOLBAR.querySelector(".tt-font").value;
+  var mine = CUSTOM_FONTS.filter(function (f) {
+    return customFontFamily(f.id) === val && f.owner === currentTaUsername();
+  })[0];
+  del.style.display = mine ? "" : "none";
+  del.dataset.assetId = mine ? mine.id : "";
 }
 
 /**
@@ -1727,7 +2145,19 @@ function showTextToolbar(el) {
   if (!TEXT_TOOLBAR) buildTextToolbar();
   TEXT_TOOLBAR_EL = el;
   TEXT_TOOLBAR.querySelector(".tt-font").value = el.style.fontFamily || "";
+  updateFontDeleteButton();
   updateTextToolbarState();
+  /* fetched fresh every time, so a teammate's just-uploaded font shows up
+     in the picker without a reload */
+  fetchCustomAssets("font").then(function (list) {
+    CUSTOM_FONTS = list;
+    list.forEach(function (f) { ensureFontFace(customFontFamily(f.id), f.url); });
+    if (TEXT_TOOLBAR_EL !== el) return; /* editing moved on before this resolved */
+    var current = el.style.fontFamily || "";
+    refreshFontSelect();
+    TEXT_TOOLBAR.querySelector(".tt-font").value = current;
+    updateFontDeleteButton();
+  });
   /* shown (and thus laid out) before measuring: the toolbar wraps onto a
      second row past a certain width (flex-wrap, see .text-toolbar's
      max-width), so its real height varies with viewport width and can't be
@@ -1996,6 +2426,38 @@ function saveTextStyle(id, prop, value) {
   if (!snapshot.text_styles[id]) snapshot.text_styles[id] = {};
   if (value) snapshot.text_styles[id][prop] = value;
   else delete snapshot.text_styles[id][prop];
+  if (!Object.keys(snapshot.text_styles[id]).length) delete snapshot.text_styles[id];
+  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
+ * Persists a font choice (see showTextToolbar()'s font select) into the
+ * preview snapshot, the same as saveTextStyle() but carrying the font
+ * file's url alongside a ta-uploaded font's family name: a built-in
+ * (TEXT_FONTS) has no url and never needs one, but a custom font's
+ * @font-face has to be re-declared on every future load (see
+ * applyTextStyleOverrides()), including for a real visitor who never opens
+ * the ta portal at all, so the url has to travel with the saved style
+ * rather than being looked up from the (ta-only) asset list at render time.
+ * @param id the element's data-edit-id
+ * @param family the css font-family name, or "" to clear back to the default
+ * @param url the custom font's file url, or "" for a built-in/cleared font
+ */
+function saveFontFamily(id, family, url) {
+  var raw;
+  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  if (!snapshot.text_styles || typeof snapshot.text_styles !== "object") snapshot.text_styles = {};
+  if (!snapshot.text_styles[id]) snapshot.text_styles[id] = {};
+  if (family) {
+    snapshot.text_styles[id].fontFamily = family;
+    if (url) snapshot.text_styles[id].fontUrl = url;
+    else delete snapshot.text_styles[id].fontUrl;
+  } else {
+    delete snapshot.text_styles[id].fontFamily;
+    delete snapshot.text_styles[id].fontUrl;
+  }
   if (!Object.keys(snapshot.text_styles[id]).length) delete snapshot.text_styles[id];
   try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
 }

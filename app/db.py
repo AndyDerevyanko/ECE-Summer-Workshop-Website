@@ -239,6 +239,23 @@ def init_db():
         )
         """
     )
+    # ta-uploaded icons/videos/fonts for the visual editor's Add element menu
+    # and text toolbar font picker: visible to every ta right away (unlike a
+    # profile, there's no separate "share" step), but only the ta who added
+    # one can remove it again, see api_delete_asset() in app/main.py. the
+    # site's own built-in icons/fonts aren't rows here at all, so they can
+    # never be deleted through this table.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS custom_assets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL CHECK (kind IN ('icon', 'video', 'font')),
+            owner TEXT NOT NULL,
+            name TEXT NOT NULL,
+            url TEXT NOT NULL
+        )
+        """
+    )
     conn.commit()
     _seed_users(conn)
     _backfill_plain(conn)
@@ -515,5 +532,62 @@ def delete_profile(profile_id):
     """
     conn = get_db()
     conn.execute("DELETE FROM profiles WHERE id = ?", (profile_id,))
+    conn.commit()
+    conn.close()
+
+
+def list_custom_assets(kind):
+    """lists every ta-uploaded asset of one kind, shared with every ta.
+    @param kind "icon", "video", or "font"
+    @return a list of {id, owner, name, url} rows
+    """
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id, owner, name, url FROM custom_assets WHERE kind = ? ORDER BY id",
+        (kind,),
+    ).fetchall()
+    conn.close()
+    return [{"id": r["id"], "owner": r["owner"], "name": r["name"], "url": r["url"]} for r in rows]
+
+
+def create_custom_asset(kind, owner, name, url):
+    """adds one ta-uploaded asset, visible to every ta immediately.
+    @param kind "icon", "video", or "font"
+    @param owner the uploading ta's username
+    @param name display name
+    @param url the already-uploaded file's url (see /api/upload)
+    @return the new asset's id
+    """
+    conn = get_db()
+    cur = conn.execute(
+        "INSERT INTO custom_assets (kind, owner, name, url) VALUES (?, ?, ?, ?)",
+        (kind, owner, name, url),
+    )
+    conn.commit()
+    conn.close()
+    return cur.lastrowid
+
+
+def get_custom_asset(asset_id):
+    """looks up one custom asset.
+    @param asset_id the asset's id
+    @return the asset row ({id, kind, owner, name, url}), or none if it doesn't exist
+    """
+    conn = get_db()
+    row = conn.execute(
+        "SELECT id, kind, owner, name, url FROM custom_assets WHERE id = ?", (asset_id,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {"id": row["id"], "kind": row["kind"], "owner": row["owner"], "name": row["name"], "url": row["url"]}
+
+
+def delete_custom_asset(asset_id):
+    """deletes a ta-uploaded asset.
+    @param asset_id the asset to delete
+    """
+    conn = get_db()
+    conn.execute("DELETE FROM custom_assets WHERE id = ?", (asset_id,))
     conn.commit()
     conn.close()

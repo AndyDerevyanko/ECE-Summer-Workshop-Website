@@ -1451,6 +1451,8 @@ body.edit-mode .apply-bob { animation: none; }
 }
 .text-toolbar button:hover, .text-toolbar button.active { background: var(--accent); color: #fff; }
 .text-toolbar .tt-align svg { width: 14px; height: 14px; }
+.text-toolbar .tt-font-del { color: var(--rose, #c0576b); }
+.text-toolbar .tt-font-del:hover { background: var(--rose, #c0576b); color: #fff; }
 
 /* right-click "Add element" menu (js/main.js's wireAddElementMenu()), a
    plain small popover, one singleton like the ring/text toolbar above */
@@ -1494,8 +1496,24 @@ body.edit-mode .apply-bob { animation: none; }
   grid-template-columns: repeat(3, 1fr);
   gap: 4px;
 }
-.ctx-menu .ctx-icon-btn { justify-content: center; padding: 10px; }
+.ctx-menu .ctx-icon-btn { justify-content: center; padding: 10px; position: relative; }
 .ctx-menu .ctx-icon-btn svg { width: 20px; height: 20px; }
+.ctx-menu .ctx-icon-btn img { width: 20px; height: 20px; object-fit: contain; }
+.ctx-menu .ctx-icon-del {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--rose, #c0576b);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: .7rem;
+  line-height: 1;
+}
 .ctx-menu .ctx-link-input {
   margin: 2px 8px 8px;
   padding: 6px 8px;

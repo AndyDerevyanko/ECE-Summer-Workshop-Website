@@ -12,21 +12,27 @@ from pydantic import BaseModel
 
 from app.db import (
     UPLOAD_DIR,
+    create_custom_asset,
     create_profile,
     create_session,
     create_user,
+    delete_custom_asset,
     delete_profile,
     delete_user,
     get_content,
+    get_custom_asset,
     get_profile,
     get_session,
     init_db,
+    list_custom_assets,
     list_profiles,
     list_users,
     save_content,
     update_profile,
     verify_login,
 )
+
+ASSET_KINDS = ("icon", "video", "font")
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -241,6 +247,57 @@ def api_upload(file: UploadFile, _ta=Depends(require_ta)):
     with open(UPLOAD_DIR / stored_name, "wb") as out:
         out.write(file.file.read())
     return {"name": file.filename, "url": f"/uploads/{stored_name}"}
+
+
+@app.get("/api/assets/{kind}")
+def api_list_assets(kind: str, _ta=Depends(require_ta)):
+    """lists every ta-uploaded icon/video/font, shared with every ta right
+    away (unlike a profile there's no separate share step). ta-only.
+    @param kind "icon", "video", or "font"
+    @return a list of {id, owner, name, url} rows
+    """
+    if kind not in ASSET_KINDS:
+        raise HTTPException(status_code=404, detail="No such asset kind.")
+    return list_custom_assets(kind)
+
+
+class NewAssetRequest(BaseModel):
+    name: str
+    url: str
+
+
+@app.post("/api/assets/{kind}")
+def api_create_asset(kind: str, payload: NewAssetRequest, ta=Depends(require_ta)):
+    """registers an already-uploaded file (see /api/upload) as a shared
+    icon/video/font, owned by whoever added it. ta-only.
+    @param kind "icon", "video", or "font"
+    @param payload {name, url}
+    @return {id} of the new asset
+    """
+    if kind not in ASSET_KINDS:
+        raise HTTPException(status_code=404, detail="No such asset kind.")
+    name = payload.name.strip() or kind
+    asset_id = create_custom_asset(kind, ta["username"], name, payload.url)
+    return {"id": asset_id}
+
+
+@app.delete("/api/assets/{kind}/{asset_id}")
+def api_delete_asset(kind: str, asset_id: int, ta=Depends(require_ta)):
+    """deletes a ta-uploaded icon/video/font. owner only: never a built-in
+    (those were never rows in this table to begin with) and never another
+    ta's upload.
+    @param kind "icon", "video", or "font"
+    @param asset_id the asset to delete
+    """
+    if kind not in ASSET_KINDS:
+        raise HTTPException(status_code=404, detail="No such asset kind.")
+    asset = get_custom_asset(asset_id)
+    if not asset or asset["kind"] != kind:
+        raise HTTPException(status_code=404, detail="No such asset.")
+    if asset["owner"] != ta["username"]:
+        raise HTTPException(status_code=403, detail="Only the ta who added it can remove it.")
+    delete_custom_asset(asset_id)
+    return {"ok": True}
 
 
 @app.get("/")

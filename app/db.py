@@ -280,6 +280,11 @@ def init_db():
     )
     # saved drafts of the whole content blob, per ta. shared=1 makes a
     # profile visible (and editable) to every ta, not just its owner.
+    # is_default=1 marks the one seeded "Default" profile (see
+    # _seed_default_profile()): shared with everyone, its data can never be
+    # edited (api_update_profile in app/main.py 403s regardless of owner/
+    # shared), but any ta can still delete it, unlike an ordinary profile
+    # where only the owner can.
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS profiles (
@@ -287,7 +292,26 @@ def init_db():
             owner TEXT NOT NULL,
             name TEXT NOT NULL,
             data TEXT NOT NULL,
-            shared INTEGER NOT NULL DEFAULT 0
+            shared INTEGER NOT NULL DEFAULT 0,
+            is_default INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    # guarded add for dbs created before is_default existed.
+    try:
+        conn.execute("ALTER TABLE profiles ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+    # tiny flag table so _seed_default_profile() only ever inserts once,
+    # ever: guarding it on "the profiles table happens to be empty" instead
+    # would reseed a fresh "Default" the moment a ta deletes the only
+    # profile that ever existed, on the server's very next restart, making
+    # a delete that's supposed to stick silently undo itself.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS meta (
+            key TEXT PRIMARY KEY,
+            value TEXT
         )
         """
     )
@@ -312,6 +336,7 @@ def init_db():
     _seed_users(conn)
     _backfill_plain(conn)
     _seed_content(conn)
+    _seed_default_profile(conn)
     conn.close()
 
 
@@ -466,6 +491,36 @@ def _seed_content(conn):
     conn.commit()
 
 
+def _seed_default_profile(conn):
+    """inserts a shared, read-only "Default" profile holding DEFAULT_CONTENT
+    (the site exactly as it looks out of the box), exactly once, ever,
+    tracked by the meta table (not by "the profiles table is empty", which
+    would reseed a fresh one the moment a ta deletes it if it was the only
+    profile that ever existed, undoing a delete that's supposed to stick).
+    Claims the meta flag with INSERT OR IGNORE first and checks rowcount,
+    rather than a separate SELECT-then-INSERT: a dev server can restart
+    twice in quick succession (eg two --reload events off one save), and a
+    check-then-act gap would let both processes see "not seeded yet" and
+    both insert, duplicating the profile. The meta table's key is a PRIMARY
+    KEY, so only one INSERT OR IGNORE across any number of racing
+    processes actually inserts a row; sqlite serializes the writes, so
+    rowcount reliably tells this call whether it's the one that won.
+    @param conn an open db connection
+    """
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO meta (key, value) VALUES ('default_profile_seeded', '1')"
+    )
+    conn.commit()
+    if cur.rowcount == 0:
+        return
+    conn.execute(
+        "INSERT INTO profiles (owner, name, data, shared, is_default)"
+        " VALUES (?, ?, ?, 1, 1)",
+        ("system", "Default", json.dumps(DEFAULT_CONTENT)),
+    )
+    conn.commit()
+
+
 def get_content():
     """reads the live ta-editable content blob.
     @return the content dict, with any keys missing from an older save filled in from DEFAULT_CONTENT
@@ -503,7 +558,7 @@ def list_profiles(username):
     """
     conn = get_db()
     rows = conn.execute(
-        "SELECT id, owner, name, data, shared FROM profiles"
+        "SELECT id, owner, name, data, shared, is_default FROM profiles"
         " WHERE owner = ? OR shared = 1 ORDER BY id",
         (username,),
     ).fetchall()
@@ -514,6 +569,7 @@ def list_profiles(username):
             "owner": r["owner"],
             "name": r["name"],
             "shared": bool(r["shared"]),
+            "is_default": bool(r["is_default"]),
             "mine": r["owner"] == username,
             "data": json.loads(r["data"]),
         }
@@ -528,7 +584,7 @@ def get_profile(profile_id):
     """
     conn = get_db()
     row = conn.execute(
-        "SELECT id, owner, name, data, shared FROM profiles WHERE id = ?",
+        "SELECT id, owner, name, data, shared, is_default FROM profiles WHERE id = ?",
         (profile_id,),
     ).fetchone()
     conn.close()
@@ -539,6 +595,7 @@ def get_profile(profile_id):
         "owner": row["owner"],
         "name": row["name"],
         "shared": bool(row["shared"]),
+        "is_default": bool(row["is_default"]),
         "data": json.loads(row["data"]),
     }
 

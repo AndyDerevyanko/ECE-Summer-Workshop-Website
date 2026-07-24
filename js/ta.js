@@ -1490,7 +1490,7 @@ function loadLive(okMsg) {
  * @return the display label
  */
 function profileLabel(p) {
-  if (p.mine) return p.name;
+  if (p.is_default || p.mine) return p.name;
   if (/^Profile \d+$/.test(p.name)) return p.owner + "'s " + p.name;
   return p.owner + "'s \"" + p.name + "\" profile";
 }
@@ -1542,11 +1542,15 @@ function syncProfileBar() {
     txt.textContent = 'Editing "' + profileLabel(EDITING) + '". Students see none of this until you apply it.';
     apply.textContent = "Apply this profile";
     save.textContent = "Save profile";
+    save.disabled = !!EDITING.is_default;
+    save.title = EDITING.is_default ? "The Default profile can't be edited." : "";
   } else {
     txt.style.display = "none";
     back.style.display = "none";
     apply.textContent = "Apply changes";
     save.textContent = "Save to profile";
+    save.disabled = false;
+    save.title = "";
   }
 }
 
@@ -1619,7 +1623,10 @@ function renderProfiles() {
     } else {
       html += '<span class="rname">' + profileLabel(p) + '</span>';
     }
-    if (p.shared) {
+    if (p.is_default) {
+      html += '<span class="shared-flag" title="The site\'s original look out of the box. Can\'t be edited, but any staff member can delete it.">' +
+        SHARE_SVG_CHIP + 'default, shared with everyone</span>';
+    } else if (p.shared) {
       html += '<span class="shared-flag" title="Every staff member can see and edit this profile">' + SHARE_SVG_CHIP + 'shared</span>' +
         '<button class="btn btn-ghost pr-unshare" type="button">Unshare</button>';
     }
@@ -1628,6 +1635,8 @@ function renderProfiles() {
       (open ? "Editing" : "Edit") + '</button>';
     if (p.mine) {
       if (!p.shared) html += '<button class="btn btn-ghost pr-share" type="button">Share</button>';
+      html += '<button class="btn btn-ghost pr-del" type="button">Delete</button>';
+    } else if (p.is_default) {
       html += '<button class="btn btn-ghost pr-del" type="button">Delete</button>';
     }
     html += '</span></div>';
@@ -1715,7 +1724,11 @@ function applyContent() {
       else clearPreviewSnapshot();
       if (EDITING) {
         EDITING.data = JSON.parse(JSON.stringify(STATE));
-        updateProfile(EDITING.id, { data: STATE });
+        /* the Default profile's own data never changes (see
+           _seed_default_profile() in app/db.py), and the server rejects
+           writes to it anyway; skip the resave so applying it doesn't
+           also trigger a doomed update_profile() and a confusing error */
+        if (!EDITING.is_default) updateProfile(EDITING.id, { data: STATE });
         showMsg("Profile applied. Students see it now.", true);
       } else {
         showMsg("Applied. Students see this now.", true);

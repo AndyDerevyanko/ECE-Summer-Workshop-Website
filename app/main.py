@@ -147,13 +147,17 @@ def api_create_profile(payload: dict[str, Any], ta=Depends(require_ta)):
 @app.post("/api/profiles/{profile_id}")
 def api_update_profile(profile_id: int, payload: dict[str, Any], ta=Depends(require_ta)):
     """partially updates a profile: name/shared are owner-only, data needs
-    ownership or sharing.
+    ownership or sharing. the seeded "Default" profile (is_default) rejects
+    every field, regardless of owner or shared, see _seed_default_profile()
+    in app/db.py.
     @param profile_id the profile to update
     @param payload any subset of {name, data, shared}
     """
     prof = get_profile(profile_id)
     if not prof:
         raise HTTPException(status_code=404, detail="No such profile.")
+    if prof["is_default"]:
+        raise HTTPException(status_code=403, detail="The Default profile can't be edited.")
     is_owner = prof["owner"] == ta["username"]
     # anyone can save content into a shared profile, and anyone can take a
     # shared profile off the shared list, but only the owner can rename,
@@ -175,13 +179,15 @@ def api_update_profile(profile_id: int, payload: dict[str, Any], ta=Depends(requ
 
 @app.delete("/api/profiles/{profile_id}")
 def api_delete_profile(profile_id: int, ta=Depends(require_ta)):
-    """deletes a profile. owner only.
+    """deletes a profile. owner only, except the seeded "Default" profile
+    (is_default), which any ta can delete, see _seed_default_profile() in
+    app/db.py.
     @param profile_id the profile to delete
     """
     prof = get_profile(profile_id)
     if not prof:
         raise HTTPException(status_code=404, detail="No such profile.")
-    if prof["owner"] != ta["username"]:
+    if prof["owner"] != ta["username"] and not prof["is_default"]:
         raise HTTPException(status_code=403, detail="Only the owner can delete a profile.")
     delete_profile(profile_id)
     return {"ok": True}

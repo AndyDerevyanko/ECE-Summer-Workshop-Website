@@ -681,6 +681,12 @@ function applyPositionOverrides(positions) {
   els.forEach(paintPos);
 }
 
+/* every id currently deleted (data-edit-id/data-resize-id), kept in sync by
+   applyHiddenOverrides()/setElementHidden() below. setHiddenVisual() checks
+   this so hiding a wrapper never forces a child that's independently
+   deleted back to visible, see its own doc comment. */
+var HIDDEN_IDS = {};
+
 /**
  * Hides every element a ta deleted in the visual editor (see
  * deleteElement()), on every load, live site included, same as
@@ -690,6 +696,8 @@ function applyPositionOverrides(positions) {
  * @param hidden array of data-edit-id/data-resize-id values to hide
  */
 function applyHiddenOverrides(hidden) {
+  HIDDEN_IDS = {};
+  (hidden || []).forEach(function (id) { HIDDEN_IDS[id] = true; });
   (hidden || []).forEach(function (id) {
     document.querySelectorAll('[data-edit-id="' + id + '"], [data-resize-id="' + id + '"]').forEach(function (el) {
       setHiddenVisual(el, true);
@@ -699,10 +707,11 @@ function applyHiddenOverrides(hidden) {
 
 /**
  * Whether el has any independently-tagged element nested inside it (eg the
- * brand link wraps the logo image and brand text, each separately
- * resizable/editable). Used to tell a plain leaf link (a hero CTA button,
- * nothing tracked nested inside it) from a wrapper link other tagged
- * elements depend on staying visible when it's deleted.
+ * brand link wraps the logo image and brand text, or the hero section wraps
+ * its own eyebrow/title/countdown box, each separately resizable/editable).
+ * Used to tell a plain leaf element (a hero CTA button, nothing tracked
+ * nested inside it) from a wrapper other tagged elements depend on staying
+ * visible/present when it's deleted.
  * @param el the element
  * @return true if el has a tracked descendant
  */
@@ -714,34 +723,42 @@ function hasTrackedDescendants(el) {
  * Applies (or removes) the "deleted" look/behavior for one element, without
  * persisting anything (setElementHidden() below does that on top of this;
  * applyHiddenOverrides() calls this directly on every load, since a real
- * visitor's page must never write to localStorage). A plain element gets
- * display:none, detached from flow first (see detachFromFlow()) so its own
- * slot stays reserved and removing it can never reflow a sibling into the
- * gap, same "no attachment between elements" guarantee a move/resize
- * already gets. A link wrapping other independently-tagged elements (eg the
- * brand link around the logo image and brand text) can't use display:none
- * at all, css unconditionally hides every descendant of a hidden element
- * too, which would take the logo and text down with it even though neither
- * was the thing actually selected for deletion, and physically moving them
- * out to become the link's own siblings (an earlier attempt at this) broke
- * just as badly: it dropped them out of whatever flex/inline layout the
- * link used to arrange them, straight into the surrounding nav's own flow,
- * visibly reshuffling everything else in it. Instead the link is made
- * inert: pointer-events:none on the link itself (so it can no longer be
- * hovered, clicked, or targeted by the ring/right-click menu, and a real
- * visitor's click no longer navigates), with pointer-events:auto on its
- * tracked children so they stay independently hoverable/editable exactly as
- * before. Nothing moves, nothing's hidden, so the link's own layout role is
- * completely undisturbed.
+ * visitor's page must never write to localStorage). A leaf element (nothing
+ * independently tracked inside it) gets display:none, detached from flow
+ * first (see detachFromFlow()) so its own slot stays reserved and removing
+ * it can never reflow a sibling into the gap, same "no attachment between
+ * elements" guarantee a move/resize already gets.
+ *
+ * Any element wrapping other independently-tagged elements (eg the brand
+ * link around the logo image and brand text, or a section/card around its
+ * own nested text/images/icons) can't use display:none at all: css
+ * unconditionally hides every descendant of a hidden element too, which
+ * would take those down with it even though none of them was the thing
+ * actually selected for deletion. Physically moving them out to become
+ * siblings (an earlier attempt at this) broke just as badly, dropping them
+ * out of whatever flex/inline layout the wrapper used to arrange them,
+ * straight into the surrounding layout's own flow, visibly reshuffling
+ * everything else in it. Instead the wrapper is made invisible but still
+ * present: visibility:hidden on it (unlike display:none, this doesn't
+ * force-hide descendants, css lets any of them override back to visible on
+ * their own), with visibility:visible stamped onto every tracked descendant
+ * so they stay fully visible and interactive exactly as before, deleting a
+ * section can never take its independent children down with it. A
+ * descendant that's independently deleted in its own right (its id is in
+ * HIDDEN_IDS) is left alone here rather than forced visible, so deleting a
+ * wrapper never accidentally resurrects something inside it that was
+ * already separately deleted.
  * @param el the element
  * @param hide true to hide/delete it, false to restore it
  */
 function setHiddenVisual(el, hide) {
-  if (el.tagName === "A" && hasTrackedDescendants(el)) {
-    el.style.pointerEvents = hide ? "none" : "";
+  if (hasTrackedDescendants(el)) {
     el.classList.toggle("el-deleted", hide);
+    el.style.visibility = hide ? "hidden" : "";
     el.querySelectorAll(RESIZABLE_SEL).forEach(function (child) {
-      child.style.pointerEvents = hide ? "auto" : "";
+      var childId = elId(child);
+      if (childId && HIDDEN_IDS[childId]) return;
+      child.style.visibility = hide ? "visible" : "";
     });
   } else {
     if (hide) detachFromFlow(el);
@@ -2169,13 +2186,14 @@ function resetPosDbl(e) {
  * node" rule mirrorEditedField() already applies to text (deleting the brand
  * wordmark takes it out of the nav and the footer together, not just
  * whichever copy was clicked). The actual hide/show is setHiddenVisual()
- * (display:none for a plain element, inert-but-present for a link wrapping
- * other tracked elements, see its doc comment); this just applies that to
- * every matching element and persists the change.
+ * (display:none for a leaf element, invisible-but-present for a wrapper
+ * around other tracked elements, see its doc comment); this just applies
+ * that to every matching element and persists the change.
  * @param id the element's data-edit-id or data-resize-id
  * @param hidden true to hide/delete it, false to restore it
  */
 function setElementHidden(id, hidden) {
+  if (hidden) HIDDEN_IDS[id] = true; else delete HIDDEN_IDS[id];
   document.querySelectorAll('[data-edit-id="' + id + '"], [data-resize-id="' + id + '"]').forEach(function (el) {
     setHiddenVisual(el, hidden);
   });
@@ -2185,11 +2203,11 @@ function setElementHidden(id, hidden) {
 /**
  * Deletes the currently-selected element (ring's trash handle, or the
  * Delete/Backspace key, see wireResizable()), and it really is deleted, same
- * as anything else in the editor (see setHiddenVisual() for how a link
- * wrapping other tracked elements, eg the brand link around the logo image
- * and brand text, is handled differently so it can't take them down with
- * it). Pushed onto the same undo stack as a text edit so Ctrl+Z brings it
- * right back.
+ * as anything else in the editor (see setHiddenVisual() for how a wrapper
+ * around other tracked elements, eg the brand link around the logo image
+ * and brand text or a section around its own nested content, is handled
+ * differently so it can't take them down with it). Pushed onto the same
+ * undo stack as a text edit so Ctrl+Z brings it right back.
  * @param el the element to delete (always the current RING_EL)
  */
 function deleteElement(el) {

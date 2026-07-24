@@ -177,6 +177,36 @@ DEFAULT_CONTENT = {
     # element regardless of layer order, see toggleFixed() in js/main.js.
     # defaults to the nav bar and everything inside it.
     "fixed_elements": list(NAV_FIXED_IDS),
+    # visual editor style popover's color picker, keyed by data-edit-id/
+    # data-resize-id, a css color string. text color, icon color, or
+    # background color depending on the element, see setElementColor() in
+    # js/main.js.
+    "colors": {},
+    # visual editor style popover's opacity slider, keyed by data-edit-id/
+    # data-resize-id, a number 0-1.
+    "opacity": {},
+    # ids locked against being moved in the visual editor (right-click >
+    # Lock element), see toggleLocked() in js/main.js. a flat list, same
+    # shape as fixed_elements.
+    "locked": [],
+    # elements duplicated in the visual editor's right-click "Duplicate"
+    # option, {sourceId, suffix} pairs: the duplicate's own id is always
+    # sourceId+suffix, reconstructed on every load by re-cloning whatever
+    # sourceId currently renders as, see renderDuplicates() in js/main.js.
+    "duplicates": [],
+    # visual editor style popover's Fill control, keyed by data-edit-id.
+    # a textbox's own background surface, separate from its font color
+    # (content.colors), see applyFillOverrides() in js/main.js.
+    "fill": {},
+    # visual editor style popover's Radius slider, keyed by data-edit-id/
+    # data-resize-id, a whole-number px value.
+    "radius": {},
+    # visual editor style popover's Border row, keyed by data-edit-id/
+    # data-resize-id, {w, color}.
+    "border": {},
+    # ids with the shared drop-shadow (style popover's Shadow checkbox)
+    # turned on, a flat list, same shape as fixed_elements/locked.
+    "shadow": [],
 }
 
 

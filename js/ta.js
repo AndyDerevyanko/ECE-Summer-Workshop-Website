@@ -92,7 +92,35 @@ function seed() {
     /* ids "promoted to navbar" via the visual editor's right-click menu,
        always stacked above every non-fixed element, see toggleFixed() in
        js/main.js. defaults to the nav bar and everything inside it. */
-    fixed_elements: NAV_FIXED_IDS.slice()
+    fixed_elements: NAV_FIXED_IDS.slice(),
+    /* visual editor style popover's color picker, keyed by data-edit-id/
+       data-resize-id, a css color string, see setElementColor() in
+       js/main.js */
+    colors: {},
+    /* visual editor style popover's opacity slider, keyed by data-edit-id/
+       data-resize-id, a number 0-1 */
+    opacity: {},
+    /* ids locked against being moved via the visual editor's right-click
+       menu, see toggleLocked() in js/main.js. flat list, same shape as
+       fixed_elements */
+    locked: [],
+    /* elements duplicated via the visual editor's right-click "Duplicate"
+       option, {sourceId, suffix} pairs, see renderDuplicates() in
+       js/main.js */
+    duplicates: [],
+    /* visual editor style popover's Fill control, keyed by data-edit-id,
+       a textbox's own background surface, separate from colors (its font
+       color), see applyFillOverrides() in js/main.js */
+    fill: {},
+    /* visual editor style popover's Radius slider, keyed by data-edit-id/
+       data-resize-id, a whole-number px value */
+    radius: {},
+    /* visual editor style popover's Border row, keyed by data-edit-id/
+       data-resize-id, {w, color} */
+    border: {},
+    /* ids with the shared drop-shadow (style popover's Shadow checkbox)
+       turned on, flat list, same shape as fixed_elements/locked */
+    shadow: []
   };
 }
 
@@ -222,6 +250,14 @@ function normalizeState() {
   if (!Array.isArray(STATE.custom_elements)) STATE.custom_elements = [];
   if (!Array.isArray(STATE.layers)) STATE.layers = [];
   if (!Array.isArray(STATE.fixed_elements)) STATE.fixed_elements = NAV_FIXED_IDS.slice();
+  if (!STATE.colors || typeof STATE.colors !== "object") STATE.colors = {};
+  if (!STATE.opacity || typeof STATE.opacity !== "object") STATE.opacity = {};
+  if (!Array.isArray(STATE.locked)) STATE.locked = [];
+  if (!Array.isArray(STATE.duplicates)) STATE.duplicates = [];
+  if (!STATE.fill || typeof STATE.fill !== "object") STATE.fill = {};
+  if (!STATE.radius || typeof STATE.radius !== "object") STATE.radius = {};
+  if (!STATE.border || typeof STATE.border !== "object") STATE.border = {};
+  if (!Array.isArray(STATE.shadow)) STATE.shadow = [];
   /* footer contact line used to be its own field, edited from a dedicated
      input in this section; now it's click-to-edit like the rest of the
      landing page copy, so fold any already-saved value in once and stop

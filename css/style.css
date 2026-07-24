@@ -1324,6 +1324,17 @@ body.edit-mode [data-resize-id].edit-link.edit-fixed {
   outline-color: orange;
 }
 
+/* an element locked against moving (right-click > Lock element, see
+   toggleLocked()/applyLockHighlight() in js/main.js): grey instead of
+   whatever color it'd otherwise be, so a locked element reads as
+   deliberately inert at a glance same as a fixed one reads as "always on
+   top". takes priority over edit-link/edit-fixed's own colors since it's
+   the rarer, more deliberate state and a ta needs to notice it easily. */
+body.edit-mode [data-edit-id].edit-locked,
+body.edit-mode [data-resize-id].edit-locked {
+  outline-color: #888;
+}
+
 /* a link deleted while it still had other tracked elements nested inside it
    (see setHiddenVisual() in js/main.js): can't use display:none like a
    normal delete, so it stays in the dom, inert, instead. hide its own
@@ -1388,6 +1399,16 @@ body.edit-mode .apply-bob { animation: none; }
   pointer-events: auto;
 }
 
+/* locked element (see isLocked()/startMoveDrag() in js/main.js): the move
+   handle can't do anything, so it looks and acts disabled instead of
+   inviting a drag that will just refuse to start */
+.sel-ring.locked .mvh {
+  background: var(--surface-2, #333);
+  cursor: not-allowed;
+  pointer-events: none;
+  opacity: .5;
+}
+
 /* delete handle, inset into the top-right corner (move handle mirrors it
    top-left) so it stays reachable even on an element flush against the
    viewport edge */
@@ -1408,14 +1429,16 @@ body.edit-mode .apply-bob { animation: none; }
 }
 .sel-ring .delh svg { width: 10px; height: 10px; }
 
-/* layer up/down handles, inset into the bottom corners (mirroring the move/
-   delete handles at the top corners): bring forward / send backward one
-   step in the stacking order each click, see moveLayer() in js/main.js */
+/* one layer-order handle, inset into the bottom-center (move/delete mirror
+   it at the top corners): opens the layer-order popover (bring forward/
+   send backward/to front/to back, see toggleLayerMenu() in js/main.js) */
 .sel-ring .lyh {
   position: absolute;
   bottom: 3px;
-  width: 15px;
-  height: 15px;
+  left: 50%;
+  margin-left: -8.5px;
+  width: 17px;
+  height: 17px;
   border-radius: 3px;
   background: var(--surface-2, #333);
   color: var(--text, #fff);
@@ -1425,9 +1448,81 @@ body.edit-mode .apply-bob { animation: none; }
   align-items: center;
   justify-content: center;
 }
-.sel-ring .lyh svg { width: 11px; height: 11px; }
-.sel-ring .lyu { left: 3px; }
-.sel-ring .lyd { right: 3px; }
+.sel-ring .lyh svg { width: 12px; height: 12px; }
+.sel-ring .lyh:hover { background: var(--accent); color: #fff; }
+.sel-ring .lyh:active { background: var(--accent-2, var(--accent)); }
+
+/* layer-order popover: reuses .ctx-menu's look (see below), just needs a
+   tighter width since its 4 buttons are all one line of plain text */
+.ctx-menu.layer-menu { min-width: 140px; }
+
+/* style (color/opacity) handle, inset into the bottom-right corner
+   (mirrors the layer handle at bottom-center, delete at top-right): opens
+   the style popover, see toggleStyleMenu() in js/main.js */
+.sel-ring .sth {
+  position: absolute;
+  bottom: 3px;
+  right: 3px;
+  width: 17px;
+  height: 17px;
+  border-radius: 3px;
+  background: var(--surface-2, #333);
+  color: var(--text, #fff);
+  cursor: pointer;
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sel-ring .sth svg { width: 12px; height: 12px; }
+.sel-ring .sth:hover { background: var(--accent); color: #fff; }
+.sel-ring .sth:active { background: var(--accent-2, var(--accent)); }
+
+/* style popover: reuses .ctx-menu's look, laid out as two rows (color
+   picker + reset, opacity slider + readout) instead of buttons */
+.ctx-menu.style-menu { min-width: 190px; padding: 10px 12px; gap: 10px; }
+.ctx-menu .sm-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ctx-menu .sm-row label {
+  font-size: 12px;
+  color: var(--muted);
+  width: 50px;
+  flex-shrink: 0;
+}
+.ctx-menu .sm-color,
+.ctx-menu .sm-fill {
+  width: 32px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+}
+.ctx-menu .sm-color-reset,
+.ctx-menu .sm-fill-reset {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: none;
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.ctx-menu .sm-color-reset:hover,
+.ctx-menu .sm-fill-reset:hover { background: var(--accent); color: #fff; }
+.ctx-menu .sm-opacity { flex: 1; }
+.ctx-menu .sm-opacity-val {
+  font-size: 12px;
+  color: var(--muted);
+  width: 34px;
+  text-align: right;
+  flex-shrink: 0;
+}
 
 /* frozen slot an element leaves behind when its first resize detaches it
    from flow (detachFromFlow() in js/main.js) */

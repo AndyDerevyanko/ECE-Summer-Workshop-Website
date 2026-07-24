@@ -401,6 +401,27 @@ function ancestorPos(el) {
 }
 
 /**
+ * The id of el's nearest tracked ancestor (its own local stacking-context
+ * scope, see applyLayerOrder()), or "" if el is top-level (no tracked
+ * ancestor). Same walk as ancestorPos(), just returning the id instead of
+ * the offset: z-index only ever compares elements within the SAME
+ * stacking context, so two elements only "layer" against each other
+ * meaningfully when they share this same nearest tracked ancestor (an icon
+ * inside one card can never visually out-layer a button inside a totally
+ * different section, no matter what a flat page-wide order says).
+ * @param el the element
+ * @return the ancestor's data-edit-id/data-resize-id, or ""
+ */
+function nearestTrackedAncestorId(el) {
+  var p = el.parentElement;
+  while (p && p !== document.body) {
+    if (p.matches && p.matches(RESIZABLE_SEL)) return elId(p);
+    p = p.parentElement;
+  }
+  return "";
+}
+
+/**
  * Writes el's painted transform: its own move offset minus its tracked
  * ancestors' (see ancestorPos()). A translate is a purely paint-time
  * effect, so moving an element can never push or reflow anything else on
@@ -419,6 +440,19 @@ function paintPos(el) {
   var tx = own.tx - anc.tx, ty = own.ty - anc.ty;
   var xf = tx || ty ? "translate(" + tx + "px, " + ty + "px)" : "";
   if (el.dataset.baseXf) xf = (xf ? xf + " " : "") + el.dataset.baseXf;
+  /* a naturally *inline* element (a plain <span>, eg. the hero title text)
+     ignores transform entirely per spec until blockified, same reason a
+     move/resize of the span ITSELF already calls detachFromFlow() first
+     (see startMoveDrag()). This is the same problem one step removed: el's
+     OWN offset can be 0 (it was never individually touched) and it can
+     still need a non-empty transform here purely to cancel out a tracked
+     ANCESTOR's move (see ancestorPos()) - without this, the cancellation
+     is silently a no-op and el visually drags along with its ancestor,
+     exactly contradicting "no attachment between elements". Forcing
+     inline-block (not a full detachFromFlow: nothing here needs a frozen
+     size or position:absolute, only the ability to accept a transform) is
+     enough, and only applied once a transform is actually needed. */
+  if (xf && getComputedStyle(el).display === "inline") el.style.display = "inline-block";
   el.style.transform = xf;
   /* a css transition on transform (eg. .card's) would make el lag behind
      the cursor for its duration, and the ring reads el's rect synchronously */
@@ -800,6 +834,74 @@ function saveFixedElements(ids) {
   try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
 }
 
+/* ids locked against being moved (right-click "Lock element"/"Unlock
+   element", see toggleLocked()): blocks both the drag-anywhere-to-move
+   affordance and the ring's own move handle from starting a drag, so a
+   placed element can't be nudged out of position by an accidental
+   click-drag. Resizing, text editing, deleting, layering, and color/
+   opacity are all still allowed while locked, only moving is blocked. an
+   object keyed by id for O(1) lookup, same shape as FIXED_SET. */
+var LOCKED_SET = {};
+
+/**
+ * Whether an id is currently locked against moving.
+ * @param id a data-edit-id or data-resize-id value
+ * @return true if locked
+ */
+function isLocked(id) {
+  return !!LOCKED_SET[id];
+}
+
+/**
+ * Rebuilds LOCKED_SET from a saved content.locked list, same pattern as
+ * setFixedElements().
+ * @param ids content.locked
+ */
+function setLockedElements(ids) {
+  LOCKED_SET = {};
+  (ids || []).forEach(function (id) { LOCKED_SET[id] = true; });
+}
+
+/**
+ * Toggles one id in or out of the locked set (the right-click "Lock
+ * element"/"Unlock element" option), repaints the grey edit-mode
+ * highlight, and persists the change. Its own inverse, same as
+ * toggleFixed(), so undo/redo just call it again either direction.
+ * @param id the element's data-edit-id or data-resize-id
+ */
+function toggleLocked(id) {
+  if (LOCKED_SET[id]) delete LOCKED_SET[id];
+  else LOCKED_SET[id] = true;
+  saveLockedElements(Object.keys(LOCKED_SET));
+  applyLockHighlight();
+}
+
+/**
+ * Persists the whole locked-elements set into the preview snapshot, the
+ * same localStorage draft every other override here uses. Rewritten
+ * wholesale, same as saveFixedElements().
+ * @param ids Object.keys(LOCKED_SET)
+ */
+function saveLockedElements(ids) {
+  var raw;
+  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  snapshot.locked = ids;
+  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
+ * Paints the always-visible grey "this is locked" outline (.edit-locked in
+ * css/style.css) onto every currently-rendered element in LOCKED_SET, and
+ * clears it off everything else, same pattern as applyFixedHighlight().
+ */
+function applyLockHighlight() {
+  document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
+    el.classList.toggle("edit-locked", isLocked(elId(el)));
+  });
+}
+
 /**
  * Paints the always-visible red "this is fixed" outline (see .edit-fixed in
  * css/style.css) onto every currently-rendered element in FIXED_SET, and
@@ -829,20 +931,27 @@ function applyLinkHighlight() {
 
 /**
  * Applies an explicit stacking order to every tracked element: z-index is
- * just an id's position in the list (bottom = 1), so the layer up/down
- * handles (see moveLayer()) are the only thing that ever reorders elements,
- * resizing or moving one no longer silently bumps it above its neighbours.
- * Reconciles the saved list with what's actually on the page first: any id
- * missing from it is appended in DOM order (see domOrderIds()), so a page
- * that's never had anything reordered still stacks exactly as if there were
- * no layer system at all. Fixed elements (FIXED_SET, see setFixedElements())
- * are always stacked above every non-fixed one: the order is split into two
- * bands, non-fixed first then fixed, each keeping its own relative order
- * from the list, so within either group elements are still individually
- * reorderable (see moveLayer()) but no fixed element's z-index can ever fall
- * below a non-fixed one's. Runs on every load, live site included, same as
- * applyTextOverrides(). Forces position:relative on a still-static element
- * first, z-index has no effect otherwise.
+ * just an id's rank within its own local stacking scope (bottom = 1), so
+ * the layer menu (see moveLayer()/moveLayerExtreme()) is the only thing
+ * that ever reorders elements, resizing or moving one no longer silently
+ * bumps it above its neighbours. Scoped per nearest tracked ancestor (see
+ * nearestTrackedAncestorId()), NOT one page-wide z-index: css only ever
+ * compares z-index within the same stacking context, so an icon inside one
+ * card and a button inside an unrelated section were never actually
+ * competing for the same visual "front", a single global counter across
+ * both just changed numbers with no visible effect. Reconciles the saved
+ * order with what's actually on the page first: any id missing from it is
+ * appended in DOM order (see domOrderIds()), so a page that's never had
+ * anything reordered still stacks exactly as if there were no layer system
+ * at all. Within each scope, fixed elements (FIXED_SET, see
+ * setFixedElements()) are always stacked above every non-fixed one there:
+ * the scope's members are split into two bands, non-fixed first then
+ * fixed, each keeping its own relative order, so within either group
+ * elements are still individually reorderable (see moveLayer()) but no
+ * fixed element's z-index can ever fall below a non-fixed sibling's. Runs
+ * on every load, live site included, same as applyTextOverrides(). Forces
+ * position:relative on a still-static element first, z-index has no effect
+ * otherwise.
  * @param layers content.layers, ordered ids bottom to top
  */
 function applyLayerOrder(layers) {
@@ -853,42 +962,129 @@ function applyLayerOrder(layers) {
     if (!have[id]) { order.push(id); have[id] = true; }
   });
   LAYER_ORDER = order;
-  var nonFixed = [], fixed = [];
-  order.forEach(function (id) { (isFixed(id) ? fixed : nonFixed).push(id); });
-  var z = 1;
-  nonFixed.concat(fixed).forEach(function (id) {
-    document.querySelectorAll('[data-edit-id="' + id + '"], [data-resize-id="' + id + '"]').forEach(function (el) {
-      if (getComputedStyle(el).position === "static") el.style.position = "relative";
-      el.style.zIndex = String(z);
+  var rank = {};
+  order.forEach(function (id, i) { rank[id] = i; });
+
+  /* group every actual DOM element by its own stacking scope (its nearest
+     tracked ancestor, see nearestTrackedAncestorId()) rather than stamping
+     one page-wide z-index: z-index is only ever compared within the SAME
+     stacking context, so ranking an icon against an unrelated button three
+     sections away (which the old flat pass did) had no visual effect,
+     that's why "bring forward" so often did nothing. Grouped by DOM
+     element, not just id, since a mirrored id (eg the brand wordmark,
+     shared by the nav and footer) sits in two different scopes at once. */
+  var scopes = {};
+  document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
+    var id = elId(el);
+    if (!id) return;
+    var scope = nearestTrackedAncestorId(el);
+    (scopes[scope] = scopes[scope] || []).push({ el: el, id: id });
+  });
+  Object.keys(scopes).forEach(function (scope) {
+    var members = scopes[scope];
+    var nonFixed = members.filter(function (m) { return !isFixed(m.id); });
+    var fixed = members.filter(function (m) { return isFixed(m.id); });
+    var byRank = function (a, b) { return (rank[a.id] || 0) - (rank[b.id] || 0); };
+    nonFixed.sort(byRank);
+    fixed.sort(byRank);
+    var z = 1;
+    nonFixed.concat(fixed).forEach(function (m) {
+      if (getComputedStyle(m.el).position === "static") m.el.style.position = "relative";
+      m.el.style.zIndex = String(z);
+      z++;
     });
-    z++;
   });
 }
 
 /**
  * Shifts one element one step up or down the stacking order (a plain
  * adjacent swap with its neighbour, so repeated clicks walk it further each
- * time, see the ring's .lyu/.lyd handles), repaints every element's z-index,
+ * time, see the layer menu's Up/Down buttons), repaints every element's z-index,
  * and persists the whole order. A no-op at either end of the stack. Only
  * ever swaps with the nearest neighbour in the SAME fixed/non-fixed group
- * (skipping over any in between), so a fixed element can never be walked
- * below a non-fixed one this way either, it can only reorder among its own
- * group, matching what applyLayerOrder()'s banding already enforces.
+ * AND the same stacking scope (see nearestTrackedAncestorId()), skipping
+ * over any others in between: swapping past an element in a different
+ * scope (eg a totally different section, or id's own parent container)
+ * would change LAYER_ORDER without changing anything visible, since they
+ * were never being compared against each other in the first place.
  * @param id the element's data-edit-id or data-resize-id
  * @param dir +1 to bring forward one step, -1 to send backward one step
+ * @return true if it actually moved, false at either end of its group (so
+ *   pushLayerUndo() knows not to record a no-op step)
  */
 function moveLayer(id, dir) {
+  var el = document.querySelector('[data-edit-id="' + id + '"], [data-resize-id="' + id + '"]');
+  var scope = el ? nearestTrackedAncestorId(el) : "";
+  function scopeOf(otherId) {
+    var oe = document.querySelector('[data-edit-id="' + otherId + '"], [data-resize-id="' + otherId + '"]');
+    return oe ? nearestTrackedAncestorId(oe) : "";
+  }
   var i = LAYER_ORDER.indexOf(id);
   if (i === -1) { LAYER_ORDER.push(id); i = LAYER_ORDER.length - 1; }
   var group = isFixed(id);
   var j = i + dir;
-  while (j >= 0 && j < LAYER_ORDER.length && isFixed(LAYER_ORDER[j]) !== group) j += dir;
-  if (j < 0 || j >= LAYER_ORDER.length) return;
+  while (j >= 0 && j < LAYER_ORDER.length &&
+         (isFixed(LAYER_ORDER[j]) !== group || scopeOf(LAYER_ORDER[j]) !== scope)) j += dir;
+  if (j < 0 || j >= LAYER_ORDER.length) return false;
   var tmp = LAYER_ORDER[i];
   LAYER_ORDER[i] = LAYER_ORDER[j];
   LAYER_ORDER[j] = tmp;
   applyLayerOrder(LAYER_ORDER);
   saveLayerOrder(LAYER_ORDER);
+  return true;
+}
+
+/**
+ * Pushes a "layer" undo entry for a bring-forward/send-backward step (see
+ * the layer menu's Up/Down buttons), unless moveLayer() reports it was a
+ * no-op (already at that end of its fixed/non-fixed group).
+ * @param id the element's data-edit-id or data-resize-id
+ * @param dir +1 (forward) or -1 (backward), same as moveLayer()
+ */
+function pushLayerUndo(id, dir) {
+  if (!moveLayer(id, dir)) return;
+  EDIT_UNDO.push({ type: "layer", id: id, dir: dir });
+  EDIT_REDO.length = 0;
+}
+
+/**
+ * Moves id all the way to the front or back of its own scope+fixed group
+ * (the layer menu's "To top"/"To bottom" buttons): unlike moveLayer()'s
+ * single-step swap, this just pulls id out of LAYER_ORDER and drops it back
+ * in at the extreme end of the WHOLE array, no scope search needed. Only
+ * relative order among the same-scope, same-fixed-band members matters for
+ * the z-index applyLayerOrder() ends up assigning (see its doc comment), so
+ * an absolute end of the full array is always ALSO an extreme end of
+ * whichever scope/group id actually belongs to, since nothing can be more
+ * extreme than the literal ends of the whole list.
+ * @param id the element's data-edit-id or data-resize-id
+ * @param toTop true for "to top" (front), false for "to bottom" (back)
+ * @return true if the order actually changed
+ */
+function moveLayerExtreme(id, toTop) {
+  var before = LAYER_ORDER.slice();
+  var i = LAYER_ORDER.indexOf(id);
+  if (i !== -1) LAYER_ORDER.splice(i, 1);
+  if (toTop) LAYER_ORDER.push(id); else LAYER_ORDER.unshift(id);
+  if (LAYER_ORDER.join("") === before.join("")) { LAYER_ORDER = before; return false; }
+  applyLayerOrder(LAYER_ORDER);
+  saveLayerOrder(LAYER_ORDER);
+  return true;
+}
+
+/**
+ * Pushes a "layerorder" undo entry for a to-top/to-bottom jump, unless
+ * moveLayerExtreme() reports it was a no-op. Stores the whole before/after
+ * stack (not just an id+dir like the single-step version) since jumping to
+ * an extreme isn't its own inverse the way an adjacent swap is.
+ * @param id the element's data-edit-id or data-resize-id
+ * @param toTop true for "to top", false for "to bottom", same as moveLayerExtreme()
+ */
+function pushLayerExtremeUndo(id, toTop) {
+  var before = LAYER_ORDER.slice();
+  if (!moveLayerExtreme(id, toTop)) return;
+  EDIT_UNDO.push({ type: "layerorder", before: before, after: LAYER_ORDER.slice() });
+  EDIT_REDO.length = 0;
 }
 
 /**
@@ -909,8 +1105,10 @@ function saveLayerOrder(order) {
 
 /* undo/redo for every visual editor action, a plain stack of commits: see
    applyHistoryAction()'s doc comment for the full list of entry shapes
-   (text, delete, move, resize, fontsize, align, letterspacing, fontfamily).
-   a fresh edit clears the redo stack, same convention as any text editor. */
+   (text, delete, add, move, resize, fontsize, align, letterspacing,
+   fontfamily, layer, layerorder, fixed, color, opacity, locked). a
+   duplicate reuses the "add" entry shape, see duplicateElement(). a fresh
+   edit clears the redo stack, same convention as any text editor. */
 var EDIT_UNDO = [];
 var EDIT_REDO = [];
 
@@ -956,12 +1154,19 @@ function detachFromFlow(el) {
     w = rect.width; h = rect.height;
   }
   var naturalDisplay = getComputedStyle(el).display;
+  /* el's own margin becomes the gap flow siblings expect around its old
+     slot; moved onto the wrap below so zeroing it on el (needed so its
+     absolute box isn't shoved off (0,0) inside the wrap) doesn't collapse
+     that spacing and pull the next sibling up into it */
+  var cs = getComputedStyle(el);
+  var mTop = cs.marginTop, mRight = cs.marginRight, mBottom = cs.marginBottom, mLeft = cs.marginLeft;
 
   wrap = document.createElement("span");
   wrap.className = "free-wrap";
   wrap.style.display = naturalDisplay === "inline" ? "inline-block" : "block";
   wrap.style.width = w + "px";
   wrap.style.height = h + "px";
+  wrap.style.margin = mTop + " " + mRight + " " + mBottom + " " + mLeft;
   el.parentNode.insertBefore(wrap, el);
   wrap.appendChild(el);
 
@@ -984,6 +1189,24 @@ function detachFromFlow(el) {
      changes the box size. Switching to "fill" (so the box freely dictates
      the image's shape) only happens once an actual resize drag starts, see
      startResizeDrag() and applySizeOverrides() below, never here. */
+
+  /* if el holds any independently-tracked descendants (eg the hero section
+     around its own eyebrow/title/buttons), those get counter-translated by
+     paintPos()/ancestorPos() to stay visually put while el itself moves,
+     exactly the "no attachment between elements" rule this whole system is
+     built on. But that only works if el can't clip them: an "overflow:
+     hidden/clip" ancestor (eg .hero's own clip, meant for its background
+     video) crops anything outside its OWN box regardless of how a child got
+     there, so as el moved further from its start point its "staying put"
+     children would fall outside el's new box and vanish. Forcing visible
+     here (inline, only once el is actually detached, never touching the
+     stylesheet) is scoped to exactly the containers that need it: nothing
+     tracked inside means nothing can ever escape el's box in the first
+     place, so an untouched or childless element keeps its authored clip. */
+  if (el.querySelectorAll(RESIZABLE_SEL).length > 0) {
+    if (cs.overflowX === "hidden" || cs.overflowX === "clip") el.style.overflowX = "visible";
+    if (cs.overflowY === "hidden" || cs.overflowY === "clip") el.style.overflowY = "visible";
+  }
   return wrap;
 }
 
@@ -997,6 +1220,10 @@ function detachFromFlow(el) {
 var RING = null;
 var RING_EL = null;
 var RING_DRAGGING = false;
+/* the ring's one layer-order button, so the popover can anchor under it */
+var LAYER_BTN = null;
+/* the ring's one style (color/opacity) button, so the popover can anchor under it */
+var STYLE_BTN = null;
 
 /* handle name -> [x edge, y edge] it drags: -1 left/top, 1 right/bottom */
 var RING_DIRS = {
@@ -1006,8 +1233,9 @@ var RING_DIRS = {
 
 /**
  * Builds the ring and its handles once, appended to body: 8 resize handles,
- * a move handle, a delete handle, and the two layer handles (bring forward/
- * send backward one step, see moveLayer()).
+ * a move handle, a delete handle, and one layer-order handle that opens a
+ * popover (bring forward/send backward/to front/to back, see
+ * toggleLayerMenu()).
  */
 function buildRing() {
   RING = document.createElement("div");
@@ -1047,41 +1275,634 @@ function buildRing() {
   });
   RING.appendChild(del);
 
-  var lyUp = document.createElement("span");
-  lyUp.className = "lyh lyu";
-  lyUp.title = "Bring forward";
-  lyUp.innerHTML =
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" ' +
-    'stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg>';
-  lyUp.addEventListener("mousedown", function (e) { e.preventDefault(); e.stopPropagation(); });
-  lyUp.addEventListener("click", function (e) {
+  var ly = document.createElement("span");
+  ly.className = "lyh";
+  ly.title = "Layer order";
+  ly.innerHTML =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4.5-8 4.5-8-4.5 8-4.5z"/>' +
+    '<path d="M4 12l8 4.5 8-4.5"/><path d="M4 16.5l8 4.5 8-4.5"/></svg>';
+  ly.addEventListener("mousedown", function (e) { e.preventDefault(); e.stopPropagation(); });
+  ly.addEventListener("click", function (e) {
     e.preventDefault();
     e.stopPropagation();
-    if (RING_EL) moveLayer(elId(RING_EL), 1);
+    toggleLayerMenu(ly);
   });
-  RING.appendChild(lyUp);
+  RING.appendChild(ly);
+  LAYER_BTN = ly;
 
-  var lyDn = document.createElement("span");
-  lyDn.className = "lyh lyd";
-  lyDn.title = "Send backward";
-  lyDn.innerHTML =
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" ' +
-    'stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
-  lyDn.addEventListener("mousedown", function (e) { e.preventDefault(); e.stopPropagation(); });
-  lyDn.addEventListener("click", function (e) {
+  var st = document.createElement("span");
+  st.className = "sth";
+  st.title = "Color / opacity";
+  st.innerHTML =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18h1.5a2 2 0 0 0 ' +
+    '2-2 1.8 1.8 0 0 0-.5-1.2 1.8 1.8 0 0 1 1.3-3 2 2 0 0 0 2-2A9 9 0 0 0 12 3z"/>' +
+    '<circle cx="7.5" cy="10.5" r="1.1" fill="currentColor" stroke="none"/>' +
+    '<circle cx="12" cy="7.5" r="1.1" fill="currentColor" stroke="none"/>' +
+    '<circle cx="16.2" cy="10" r="1.1" fill="currentColor" stroke="none"/></svg>';
+  st.addEventListener("mousedown", function (e) { e.preventDefault(); e.stopPropagation(); });
+  st.addEventListener("click", function (e) {
     e.preventDefault();
     e.stopPropagation();
-    if (RING_EL) moveLayer(elId(RING_EL), -1);
+    toggleStyleMenu(st);
   });
-  RING.appendChild(lyDn);
+  RING.appendChild(st);
+  STYLE_BTN = st;
 
   document.body.appendChild(RING);
+}
+
+/* the layer-order popover's own singleton, opened by the ring's one .lyh
+   button (see buildRing()): "Bring forward"/"Send backward" (a single
+   adjacent-swap step, see moveLayer()) and "Bring to front"/"Send to back"
+   (all the way to one end of the stack, see moveLayerExtreme()). the id it
+   acts on is captured once at open time so it keeps acting on the same
+   element even if the mouse wanders elsewhere while it's open. */
+var LAYER_MENU = null;
+var LAYER_MENU_ID = null;
+
+/** Builds the layer-order popover once, lazily, reusing the ctx-menu's own look. */
+function buildLayerMenu() {
+  LAYER_MENU = document.createElement("div");
+  LAYER_MENU.className = "ctx-menu layer-menu";
+  LAYER_MENU.innerHTML =
+    '<button type="button" data-ly="up">Bring forward</button>' +
+    '<button type="button" data-ly="down">Send backward</button>' +
+    '<button type="button" data-ly="top">Bring to front</button>' +
+    '<button type="button" data-ly="bottom">Send to back</button>';
+  LAYER_MENU.querySelectorAll("button[data-ly]").forEach(function (btn) {
+    /* deliberately does NOT hide the menu after acting, so several steps
+       (eg two "bring forward" clicks) don't need reopening it each time */
+    btn.addEventListener("click", function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!LAYER_MENU_ID) return;
+      var kind = btn.getAttribute("data-ly");
+      if (kind === "up") pushLayerUndo(LAYER_MENU_ID, 1);
+      else if (kind === "down") pushLayerUndo(LAYER_MENU_ID, -1);
+      else if (kind === "top") pushLayerExtremeUndo(LAYER_MENU_ID, true);
+      else if (kind === "bottom") pushLayerExtremeUndo(LAYER_MENU_ID, false);
+    });
+  });
+  document.body.appendChild(LAYER_MENU);
+}
+
+/**
+ * Opens the layer-order popover anchored under the ring's layer button (or
+ * closes it, if it's already open, so re-clicking the button toggles it).
+ * @param anchorEl the ring's .lyh button
+ */
+function toggleLayerMenu(anchorEl) {
+  if (!LAYER_MENU) buildLayerMenu();
+  if (LAYER_MENU.classList.contains("show")) { hideLayerMenu(); return; }
+  if (!RING_EL) return;
+  LAYER_MENU_ID = elId(RING_EL);
+  var r = anchorEl.getBoundingClientRect();
+  LAYER_MENU.classList.add("show");
+  var w = LAYER_MENU.offsetWidth, h = LAYER_MENU.offsetHeight;
+  var maxX = window.innerWidth - w - 4, maxY = window.innerHeight + window.scrollY - h - 4;
+  var x = r.left + window.scrollX;
+  var y = r.bottom + window.scrollY + 4;
+  LAYER_MENU.style.left = Math.max(0, Math.min(x, maxX)) + "px";
+  LAYER_MENU.style.top = Math.max(0, Math.min(y, maxY)) + "px";
+}
+
+/** Closes the layer-order popover, if open. */
+function hideLayerMenu() {
+  if (LAYER_MENU) LAYER_MENU.classList.remove("show");
+  LAYER_MENU_ID = null;
+}
+
+/**
+ * Which css property a color override actually lands on, for a given
+ * element: an icon (svg, currentColor stroke/fill throughout this
+ * codebase's icon set) gets its foreground color; a plain click-to-edit
+ * text field gets its font color; everything else (cards, sections, nav,
+ * footer, buttons, the countdown box) gets its background color, since
+ * that's the only visible surface a resize-id container has.
+ * @param el the element
+ * @return "icon", "text", or "bg"
+ */
+function colorTarget(el) {
+  if (elKind(el) === "icon") return "icon";
+  var isButton = el.tagName === "A" && el.classList.contains("btn");
+  if (el.hasAttribute("data-edit-id") && !isButton) return "text";
+  return "bg";
+}
+
+/**
+ * Paints one element's color override onto whichever css property
+ * colorTarget() says it should (icon/text color both use el.style.color,
+ * currentColor is how every svg icon in this codebase is drawn).
+ * @param el the element
+ * @param value a css color string, or "" to clear back to the template default
+ */
+function setElementColor(el, value) {
+  if (colorTarget(el) === "bg") el.style.backgroundColor = value;
+  else el.style.color = value;
+}
+
+/**
+ * Applies saved color overrides (from the style popover, see
+ * buildStyleMenu()) on top of the page's own default colors. Runs on every
+ * load, live site included, same as applyTextOverrides(). Images/videos
+ * are deliberately skipped: a background color painted behind an
+ * object-fit: cover element is never visible, there's nothing for a color
+ * picker to usefully do there.
+ * @param colors content.colors, {id: css color string}
+ */
+function applyColorOverrides(colors) {
+  colors = colors || {};
+  document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
+    var v = colors[elId(el)];
+    if (!v || elKind(el) === "img") return;
+    setElementColor(el, v);
+  });
+}
+
+/**
+ * Applies saved opacity overrides (from the style popover's slider) on top
+ * of the page's own default (fully opaque). Runs on every load, live site
+ * included, same as applyTextOverrides().
+ * @param opacity content.opacity, {id: number 0-1}
+ */
+function applyOpacityOverrides(opacity) {
+  opacity = opacity || {};
+  document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
+    var v = opacity[elId(el)];
+    if (v === undefined || v === null) return;
+    el.style.opacity = String(v);
+  });
+}
+
+/**
+ * Applies saved textbox background-fill overrides (from the style
+ * popover's Fill control) on top of the page's own default (no fill).
+ * Runs on every load, live site included, same as applyColorOverrides().
+ * @param fill content.fill, {id: css color string}
+ */
+function applyFillOverrides(fill) {
+  fill = fill || {};
+  document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
+    var v = fill[elId(el)];
+    if (!v) return;
+    el.style.backgroundColor = v;
+  });
+}
+
+/**
+ * Applies saved border-radius overrides on top of the page's own default
+ * corners. Runs on every load, live site included.
+ * @param radius content.radius, {id: px number}
+ */
+function applyRadiusOverrides(radius) {
+  radius = radius || {};
+  document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
+    var v = radius[elId(el)];
+    if (!v) return;
+    el.style.borderRadius = v + "px";
+  });
+}
+
+/**
+ * Applies saved border width/color overrides on top of the page's own
+ * default (no border, see --border in css/style.css). Runs on every load,
+ * live site included.
+ * @param border content.border, {id: {w, color}}
+ */
+function applyBorderOverrides(border) {
+  border = border || {};
+  document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
+    var v = border[elId(el)];
+    if (!v || !v.w) return;
+    el.style.border = v.w + "px solid " + v.color;
+  });
+}
+
+/**
+ * Applies the shared drop-shadow (see BOX_SHADOW_VALUE) to every id in the
+ * saved list. Runs on every load, live site included.
+ * @param shadow content.shadow, a flat array of ids
+ */
+function applyShadowOverrides(shadow) {
+  shadow = shadow || [];
+  shadow.forEach(function (id) {
+    var el = styleMenuElById(id);
+    if (el) el.style.boxShadow = BOX_SHADOW_VALUE;
+  });
+}
+
+/* the style (color/opacity) popover's own singleton, opened by the ring's
+   .sth button. same "captured once at open time, stays open across
+   interactions" pattern as the layer menu, since dialing in a color/opacity
+   is naturally a multi-step, no-need-to-reopen interaction. */
+var STYLE_MENU = null;
+var STYLE_MENU_ID = null;
+/* the value a color/opacity control held right before its current drag/
+   picker session, so releasing it (native "change") can push exactly one
+   undo step for the whole gesture instead of one per intermediate "input" */
+var STYLE_COLOR_BEFORE = "";
+var STYLE_OPACITY_BEFORE = "";
+var STYLE_FILL_BEFORE = "";
+var STYLE_RADIUS_BEFORE = "0";
+var STYLE_BORDER_BEFORE = { w: 0, color: "#000000" };
+
+/* fixed, tasteful drop-shadow value every shadow-enabled box shares, one
+   flat on/off toggle rather than a configurable blur/spread picker, same
+   "few controls, not a design-tool megabundle" spirit as TEXT_FONTS */
+var BOX_SHADOW_VALUE = "0 8px 24px rgba(0, 0, 0, .35)";
+
+/** Builds the style popover once, lazily, reusing the ctx-menu's own look. */
+function buildStyleMenu() {
+  STYLE_MENU = document.createElement("div");
+  STYLE_MENU.className = "ctx-menu style-menu";
+  STYLE_MENU.innerHTML =
+    '<div class="sm-row sm-color-row">' +
+      '<label>Color</label>' +
+      '<input type="color" class="sm-color">' +
+      '<button type="button" class="sm-color-reset" title="Reset to default">×</button>' +
+    '</div>' +
+    '<div class="sm-row sm-fill-row">' +
+      '<label>Fill</label>' +
+      '<input type="color" class="sm-fill">' +
+      '<button type="button" class="sm-fill-reset" title="Reset to default">×</button>' +
+    '</div>' +
+    '<div class="sm-row sm-shape-row sm-radius-row">' +
+      '<label>Radius</label>' +
+      '<input type="range" class="sm-radius" min="0" max="60" step="1">' +
+      '<span class="sm-radius-val">0px</span>' +
+    '</div>' +
+    '<div class="sm-row sm-shape-row sm-border-row">' +
+      '<label>Border</label>' +
+      '<input type="range" class="sm-border-w" min="0" max="10" step="1">' +
+      '<span class="sm-border-val">0px</span>' +
+      '<input type="color" class="sm-border-color">' +
+    '</div>' +
+    '<div class="sm-row sm-shape-row sm-shadow-row">' +
+      '<label>Shadow</label>' +
+      '<input type="checkbox" class="sm-shadow">' +
+    '</div>' +
+    '<div class="sm-row">' +
+      '<label>Opacity</label>' +
+      '<input type="range" class="sm-opacity" min="10" max="100" step="1">' +
+      '<span class="sm-opacity-val">100%</span>' +
+    '</div>';
+  document.body.appendChild(STYLE_MENU);
+
+  var colorInput = STYLE_MENU.querySelector(".sm-color");
+  var colorReset = STYLE_MENU.querySelector(".sm-color-reset");
+  var fillInput = STYLE_MENU.querySelector(".sm-fill");
+  var fillReset = STYLE_MENU.querySelector(".sm-fill-reset");
+  var radiusInput = STYLE_MENU.querySelector(".sm-radius");
+  var radiusVal = STYLE_MENU.querySelector(".sm-radius-val");
+  var borderW = STYLE_MENU.querySelector(".sm-border-w");
+  var borderVal = STYLE_MENU.querySelector(".sm-border-val");
+  var borderColor = STYLE_MENU.querySelector(".sm-border-color");
+  var shadowInput = STYLE_MENU.querySelector(".sm-shadow");
+  var opacityInput = STYLE_MENU.querySelector(".sm-opacity");
+  var opacityVal = STYLE_MENU.querySelector(".sm-opacity-val");
+
+  [colorInput, colorReset, fillInput, fillReset, radiusInput, borderW, borderColor, shadowInput, opacityInput].forEach(function (el) {
+    el.addEventListener("mousedown", function (e) { e.stopPropagation(); });
+  });
+
+  colorInput.addEventListener("input", function () {
+    if (!STYLE_MENU_ID) return;
+    var el = styleMenuEl();
+    if (!el) return;
+    setElementColor(el, colorInput.value);
+    saveEditedColor(STYLE_MENU_ID, colorInput.value);
+  });
+  colorInput.addEventListener("change", function () {
+    if (!STYLE_MENU_ID) return;
+    var after = colorInput.value;
+    if (after !== STYLE_COLOR_BEFORE) {
+      EDIT_UNDO.push({ type: "color", id: STYLE_MENU_ID, before: STYLE_COLOR_BEFORE, after: after });
+      EDIT_REDO.length = 0;
+    }
+    STYLE_COLOR_BEFORE = after;
+  });
+
+  colorReset.addEventListener("click", function () {
+    if (!STYLE_MENU_ID) return;
+    var el = styleMenuEl();
+    if (!el) return;
+    var before = STYLE_COLOR_BEFORE;
+    setElementColor(el, "");
+    saveEditedColor(STYLE_MENU_ID, "");
+    var after = currentColorValue(el);
+    colorInput.value = after;
+    if (before !== "") {
+      EDIT_UNDO.push({ type: "color", id: STYLE_MENU_ID, before: before, after: "" });
+      EDIT_REDO.length = 0;
+    }
+    STYLE_COLOR_BEFORE = "";
+  });
+
+  fillInput.addEventListener("input", function () {
+    if (!STYLE_MENU_ID) return;
+    var el = styleMenuEl();
+    if (!el) return;
+    el.style.backgroundColor = fillInput.value;
+    saveEditedFill(STYLE_MENU_ID, fillInput.value);
+  });
+  fillInput.addEventListener("change", function () {
+    if (!STYLE_MENU_ID) return;
+    var after = fillInput.value;
+    if (after !== STYLE_FILL_BEFORE) {
+      EDIT_UNDO.push({ type: "fill", id: STYLE_MENU_ID, before: STYLE_FILL_BEFORE, after: after });
+      EDIT_REDO.length = 0;
+    }
+    STYLE_FILL_BEFORE = after;
+  });
+
+  fillReset.addEventListener("click", function () {
+    if (!STYLE_MENU_ID) return;
+    var el = styleMenuEl();
+    if (!el) return;
+    var before = STYLE_FILL_BEFORE;
+    el.style.backgroundColor = "";
+    saveEditedFill(STYLE_MENU_ID, "");
+    var after = currentFillValue(el);
+    fillInput.value = after;
+    if (before !== "") {
+      EDIT_UNDO.push({ type: "fill", id: STYLE_MENU_ID, before: before, after: "" });
+      EDIT_REDO.length = 0;
+    }
+    STYLE_FILL_BEFORE = "";
+  });
+
+  radiusInput.addEventListener("input", function () {
+    if (!STYLE_MENU_ID) return;
+    var el = styleMenuEl();
+    if (!el) return;
+    var px = parseInt(radiusInput.value, 10);
+    el.style.borderRadius = px + "px";
+    radiusVal.textContent = px + "px";
+    saveEditedRadius(STYLE_MENU_ID, px);
+  });
+  radiusInput.addEventListener("change", function () {
+    if (!STYLE_MENU_ID) return;
+    var after = radiusInput.value;
+    if (after !== STYLE_RADIUS_BEFORE) {
+      EDIT_UNDO.push({ type: "radius", id: STYLE_MENU_ID, before: parseInt(STYLE_RADIUS_BEFORE, 10), after: parseInt(after, 10) });
+      EDIT_REDO.length = 0;
+    }
+    STYLE_RADIUS_BEFORE = after;
+  });
+
+  function commitBorder() {
+    if (!STYLE_MENU_ID) return;
+    var el = styleMenuEl();
+    if (!el) return;
+    var w = parseInt(borderW.value, 10);
+    if (w > 0) el.style.border = w + "px solid " + borderColor.value;
+    else el.style.border = "none";
+    borderVal.textContent = w + "px";
+    saveEditedBorder(STYLE_MENU_ID, w, borderColor.value);
+  }
+  borderW.addEventListener("input", commitBorder);
+  borderColor.addEventListener("input", commitBorder);
+  borderW.addEventListener("change", function () {
+    if (!STYLE_MENU_ID) return;
+    var after = { w: parseInt(borderW.value, 10), color: borderColor.value };
+    if (after.w !== STYLE_BORDER_BEFORE.w || after.color !== STYLE_BORDER_BEFORE.color) {
+      EDIT_UNDO.push({ type: "border", id: STYLE_MENU_ID, before: STYLE_BORDER_BEFORE, after: after });
+      EDIT_REDO.length = 0;
+    }
+    STYLE_BORDER_BEFORE = after;
+  });
+  borderColor.addEventListener("change", function () {
+    if (!STYLE_MENU_ID) return;
+    var after = { w: parseInt(borderW.value, 10), color: borderColor.value };
+    if (after.w !== STYLE_BORDER_BEFORE.w || after.color !== STYLE_BORDER_BEFORE.color) {
+      EDIT_UNDO.push({ type: "border", id: STYLE_MENU_ID, before: STYLE_BORDER_BEFORE, after: after });
+      EDIT_REDO.length = 0;
+    }
+    STYLE_BORDER_BEFORE = after;
+  });
+
+  shadowInput.addEventListener("change", function () {
+    if (!STYLE_MENU_ID) return;
+    var el = styleMenuEl();
+    if (!el) return;
+    el.style.boxShadow = shadowInput.checked ? BOX_SHADOW_VALUE : "none";
+    saveEditedShadow(STYLE_MENU_ID, shadowInput.checked);
+    EDIT_UNDO.push({ type: "shadow", id: STYLE_MENU_ID });
+    EDIT_REDO.length = 0;
+  });
+
+  opacityInput.addEventListener("input", function () {
+    if (!STYLE_MENU_ID) return;
+    var el = styleMenuEl();
+    if (!el) return;
+    var v = (parseFloat(opacityInput.value) / 100).toFixed(2);
+    el.style.opacity = v;
+    opacityVal.textContent = opacityInput.value + "%";
+    saveEditedOpacity(STYLE_MENU_ID, parseFloat(v));
+  });
+  opacityInput.addEventListener("change", function () {
+    if (!STYLE_MENU_ID) return;
+    var after = opacityInput.value;
+    if (after !== STYLE_OPACITY_BEFORE) {
+      EDIT_UNDO.push({ type: "opacity", id: STYLE_MENU_ID, before: STYLE_OPACITY_BEFORE, after: after });
+      EDIT_REDO.length = 0;
+    }
+    STYLE_OPACITY_BEFORE = after;
+  });
+}
+
+/**
+ * The element the style popover is currently acting on, re-queried each
+ * time rather than cached, same reasoning as the layer menu's LAYER_MENU_ID.
+ * @return the element, or null if it's no longer in the document
+ */
+function styleMenuEl() {
+  return styleMenuElById(STYLE_MENU_ID);
+}
+
+/**
+ * Looks up any tracked element by its data-edit-id/data-resize-id, same
+ * query every override in this file uses to find its target.
+ * @param id the element's id
+ * @return the element, or null if it's no longer in the document
+ */
+function styleMenuElById(id) {
+  return document.querySelector('[data-edit-id="' + id + '"], [data-resize-id="' + id + '"]');
+}
+
+/**
+ * Reads an element's current color override as a hex string a native
+ * <input type=color> can display, "#000000" if none is set (the input
+ * itself has no real "unset" state to fall back to).
+ * @param el the element
+ * @return a "#rrggbb" string
+ */
+function currentColorValue(el) {
+  var cs = getComputedStyle(el);
+  var live = colorTarget(el) === "bg" ? cs.backgroundColor : cs.color;
+  return rgbToHex(live) || "#000000";
+}
+
+/**
+ * Converts a computed "rgb(r, g, b)"/"rgba(r, g, b, a)" string to a
+ * "#rrggbb" hex string an <input type=color> can take as its value.
+ * @param rgb the computed color string
+ * @return a hex string, or "" if it couldn't be parsed (eg "transparent")
+ */
+function rgbToHex(rgb) {
+  var m = /^rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(rgb || "");
+  if (!m) return "";
+  function hex(n) { return ("0" + parseInt(n, 10).toString(16)).slice(-2); }
+  return "#" + hex(m[1]) + hex(m[2]) + hex(m[3]);
+}
+
+/**
+ * Reads an element's current background fill (a textbox's own surface
+ * color, separate from its font color, see colorTarget()) as a hex string,
+ * "#ffffff" if it's transparent/unset (an <input type=color> has no real
+ * "unset" state of its own).
+ * @param el the element
+ * @return a "#rrggbb" string
+ */
+function currentFillValue(el) {
+  var cs = getComputedStyle(el).backgroundColor;
+  var m = /^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/.exec(cs || "");
+  if (!m || (m[4] !== undefined && parseFloat(m[4]) === 0)) return "#ffffff";
+  return rgbToHex(cs) || "#ffffff";
+}
+
+/**
+ * Reads an element's current (uniform, all four corners) border radius in
+ * css px, off the live computed style so an element already rounded by the
+ * stylesheet (eg a .card) starts the slider at its real look, not 0.
+ * @param el the element
+ * @return a whole-number px value
+ */
+function currentRadiusValue(el) {
+  return Math.round(parseFloat(getComputedStyle(el).borderTopLeftRadius) || 0);
+}
+
+/**
+ * Reads an element's current border width/color off the live computed
+ * style. A computed border-width resolves to 0 when border-style is "none"
+ * (the css spec, not a manual check here), but this project's own
+ * untouched elements instead draw a real 1px solid border with a fully
+ * transparent color (--border in css/style.css, "no borders anywhere" is
+ * achieved by hiding the color, not removing the border), which the spec
+ * does NOT zero out on its own: read literally, that would show a
+ * misleading "1px" in the picker, and worse, undo could restore it as a
+ * solid black border once rgbToHex() collapses the unparseable alpha away.
+ * So a fully transparent computed color is treated as no border too,
+ * same alpha check currentFillValue() already does.
+ * @param el the element
+ * @return {w, color}
+ */
+function currentBorderValue(el) {
+  var cs = getComputedStyle(el);
+  var m = /^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/.exec(cs.borderTopColor || "");
+  if (!m || (m[4] !== undefined && parseFloat(m[4]) === 0)) return { w: 0, color: "#000000" };
+  return {
+    w: Math.round(parseFloat(cs.borderTopWidth) || 0),
+    color: rgbToHex(cs.borderTopColor) || "#000000"
+  };
+}
+
+/**
+ * Whether el currently has the shared drop-shadow applied (see
+ * BOX_SHADOW_VALUE), read straight off its own inline style since that's
+ * the only place applyShadowOverrides()/the shadow checkbox ever write it.
+ * @param el the element
+ * @return true if its box-shadow is set to anything other than "none"
+ */
+function currentShadowOn(el) {
+  var v = getComputedStyle(el).boxShadow;
+  return !!v && v !== "none";
+}
+
+/**
+ * Opens the style popover anchored under the ring's style button (or
+ * closes it, if it's already open, so re-clicking the button toggles it),
+ * pre-filling both controls from the element's current live color/opacity.
+ * @param anchorEl the ring's .sth button
+ */
+function toggleStyleMenu(anchorEl) {
+  if (!STYLE_MENU) buildStyleMenu();
+  if (STYLE_MENU.classList.contains("show")) { hideStyleMenu(); return; }
+  if (!RING_EL) return;
+  STYLE_MENU_ID = elId(RING_EL);
+  var el = RING_EL;
+  var kind = elKind(el);
+  var isImg = kind === "img";
+  var isIcon = kind === "icon";
+  var isText = colorTarget(el) === "text";
+  STYLE_MENU.querySelector(".sm-color-row").style.display = isImg ? "none" : "";
+  STYLE_MENU.querySelector(".sm-fill-row").style.display = isText ? "" : "none";
+  var shapeDisplay = isIcon ? "none" : "";
+  STYLE_MENU.querySelectorAll(".sm-shape-row").forEach(function (row) { row.style.display = shapeDisplay; });
+
+  var colorInput = STYLE_MENU.querySelector(".sm-color");
+  var fillInput = STYLE_MENU.querySelector(".sm-fill");
+  var radiusInput = STYLE_MENU.querySelector(".sm-radius");
+  var radiusVal = STYLE_MENU.querySelector(".sm-radius-val");
+  var borderW = STYLE_MENU.querySelector(".sm-border-w");
+  var borderVal = STYLE_MENU.querySelector(".sm-border-val");
+  var borderColor = STYLE_MENU.querySelector(".sm-border-color");
+  var shadowInput = STYLE_MENU.querySelector(".sm-shadow");
+  var opacityInput = STYLE_MENU.querySelector(".sm-opacity");
+  var opacityVal = STYLE_MENU.querySelector(".sm-opacity-val");
+
+  colorInput.value = currentColorValue(el);
+  STYLE_COLOR_BEFORE = colorInput.value;
+
+  if (isText) {
+    fillInput.value = currentFillValue(el);
+    STYLE_FILL_BEFORE = fillInput.value;
+  }
+
+  if (!isIcon) {
+    var rad = currentRadiusValue(el);
+    radiusInput.value = rad;
+    radiusVal.textContent = rad + "px";
+    STYLE_RADIUS_BEFORE = String(rad);
+
+    var bd = currentBorderValue(el);
+    borderW.value = bd.w;
+    borderVal.textContent = bd.w + "px";
+    borderColor.value = bd.color;
+    STYLE_BORDER_BEFORE = bd;
+
+    shadowInput.checked = currentShadowOn(el);
+  }
+
+  var op = Math.round((parseFloat(getComputedStyle(el).opacity) || 1) * 100);
+  opacityInput.value = op;
+  opacityVal.textContent = op + "%";
+  STYLE_OPACITY_BEFORE = String(op);
+
+  var r = anchorEl.getBoundingClientRect();
+  STYLE_MENU.classList.add("show");
+  var w = STYLE_MENU.offsetWidth, h = STYLE_MENU.offsetHeight;
+  var maxX = window.innerWidth - w - 4, maxY = window.innerHeight + window.scrollY - h - 4;
+  var x = r.left + window.scrollX;
+  var y = r.bottom + window.scrollY + 4;
+  STYLE_MENU.style.left = Math.max(0, Math.min(x, maxX)) + "px";
+  STYLE_MENU.style.top = Math.max(0, Math.min(y, maxY)) + "px";
+}
+
+/** Closes the style popover, if open. */
+function hideStyleMenu() {
+  if (STYLE_MENU) STYLE_MENU.classList.remove("show");
+  STYLE_MENU_ID = null;
 }
 
 /**
  * Snaps the ring onto its current element's rendered box. Document
  * coordinates (rect + scroll), re-run on scroll/resize since the sticky
- * nav's document position changes as the page scrolls.
+ * nav's document position changes as the page scrolls. Also toggles
+ * .locked so the move handle can dim/disable itself for a locked element
+ * (see isLocked()/startMoveDrag()).
  */
 function positionRing() {
   if (!RING || !RING_EL) return;
@@ -1091,6 +1912,7 @@ function positionRing() {
   RING.style.top = (r.top + window.scrollY) + "px";
   RING.style.width = r.width + "px";
   RING.style.height = r.height + "px";
+  RING.classList.toggle("locked", isLocked(elId(RING_EL)));
 }
 
 /**
@@ -1207,11 +2029,13 @@ function startResizeDrag(e) {
  * forces a blockified, absolutely-positioned box, whose old flow slot is
  * held open by its frozen wrap, so nothing shifts either way. A no-op past
  * the first detach. Tracked elements inside a moved container visually stay
- * put, see setOwnPos().
+ * put, see setOwnPos(). Locked elements (see isLocked()) don't start a
+ * drag at all, so a placed element can't be accidentally nudged out of
+ * position; the handle itself is also dimmed/disabled via .sel-ring.locked.
  * @param e the handle's mousedown
  */
 function startMoveDrag(e) {
-  if (!RING_EL) return;
+  if (!RING_EL || isLocked(elId(RING_EL))) return;
   e.preventDefault();
   e.stopPropagation();
   var el = RING_EL;
@@ -1684,6 +2508,260 @@ function saveCustomElements(list) {
 }
 
 /**
+ * Looks up any tracked element by its data-edit-id/data-resize-id, same
+ * query every override in this file uses to find its target. First match
+ * only: an id shared by mirrored elements (eg nav.brand in the nav and
+ * footer) resolves to whichever one happens to come first in the DOM,
+ * which is fine here since mirrored elements are always kept identical by
+ * design (see mirrorEditedField()).
+ * @param id the element's id
+ * @return the element, or null if none match
+ */
+function elByAnyId(id) {
+  return document.querySelector('[data-edit-id="' + id + '"], [data-resize-id="' + id + '"]');
+}
+
+/**
+ * A fresh suffix to append to every id in a duplicated subtree (see
+ * buildDuplicateClone()), same timestamp+random uid scheme
+ * addCustomElement() already uses for the same "guaranteed collision-free,
+ * no lookup needed" reason: checking just the root id against the live dom
+ * isn't enough here, since one duplicate operation renames a whole subtree
+ * of ids at once, and two unrelated duplicates (say, this element's icon
+ * duplicated on its own earlier, then the element's whole parent
+ * duplicated later) could otherwise land on the same nested id if they
+ * both happened to pick the same small counter value. The "~" is
+ * deliberately not a character any hand-written id in this codebase uses
+ * (ids are dot-separated words), so a duplicate's id can never collide
+ * with a genuine template/custom-element id no matter how it's suffixed.
+ * @return a fresh suffix, "~dupk3j2x1a4b" or similar
+ */
+function uniqueDupSuffix() {
+  return "~dup" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
+/**
+ * Clones sourceEl (or, if it's already been individually moved/resized/
+ * deleted at some point, its whole .free-wrap, see detachFromFlow()) and
+ * gives the clone and every tracked descendant inside it a fresh id: the
+ * same suffix appended to every original id found in the subtree, so
+ * nested ids stay unique relative to each other exactly as they were
+ * (two elements that used to mirror each other, eg the brand text sitting
+ * inside a duplicated nav, would still mirror each other within the
+ * clone, just not with the original anymore). Any DOM id="..." attribute
+ * (a handful of nav elements like #portalLink are addressed that way
+ * elsewhere in this file) is stripped from the clone so it can never
+ * collide with the original's, since the clone doesn't inherit that
+ * element's singleton role. Pure: doesn't touch the DOM, storage, or undo,
+ * see insertDuplicateClone()/copyDuplicateOverrides() for the parts that do.
+ * @param sourceEl the element (or one of its mirrored instances) to clone
+ * @param suffix see uniqueDupSuffix()
+ * @return {clone, wrap, pairs, rootEl}: clone is the node to insert into
+ *   the dom (either sourceEl's clone or its wrap's clone), wrap is the
+ *   original's .free-wrap parent if it has one (else null), pairs is
+ *   every {old, new, el} id remap found (el is the clone's own node), and
+ *   rootEl is the pairs entry (a live node) corresponding to sourceEl itself
+ */
+function buildDuplicateClone(sourceEl, suffix) {
+  var sourceId = elId(sourceEl);
+  var wrap = sourceEl.parentElement && sourceEl.parentElement.classList.contains("free-wrap") ?
+    sourceEl.parentElement : null;
+  var nodeToClone = wrap || sourceEl;
+  var clone = nodeToClone.cloneNode(true);
+  if (clone.hasAttribute && clone.hasAttribute("id")) clone.removeAttribute("id");
+  if (clone.querySelectorAll) {
+    clone.querySelectorAll("[id]").forEach(function (e) { e.removeAttribute("id"); });
+  }
+  var tracked = [];
+  if (clone.matches && clone.matches(RESIZABLE_SEL)) tracked.push(clone);
+  clone.querySelectorAll(RESIZABLE_SEL).forEach(function (e) { tracked.push(e); });
+  var pairs = [];
+  var rootEl = null;
+  tracked.forEach(function (el) {
+    var oldId = elId(el);
+    var newId = oldId + suffix;
+    if (el.hasAttribute("data-edit-id")) el.setAttribute("data-edit-id", newId);
+    if (el.hasAttribute("data-resize-id")) el.setAttribute("data-resize-id", newId);
+    pairs.push({ old: oldId, new: newId, el: el });
+    if (oldId === sourceId && !rootEl) rootEl = el;
+  });
+  return { clone: clone, wrap: wrap, pairs: pairs, rootEl: rootEl };
+}
+
+/**
+ * Inserts a built duplicate (see buildDuplicateClone()) into the dom: a
+ * still-in-flow source (never individually moved/resized) gets its clone
+ * dropped in right after it as a plain sibling, so it slots naturally into
+ * whatever flex/grid layout the two now share (a duplicated card in a row
+ * of cards, say), no coordinate math needed. A source that's been detached
+ * from flow gets its whole wrap cloned in beside the original wrap
+ * instead, then nudged +24px/+24px from the original so the copy doesn't
+ * render exactly on top of it (an in-flow insert never needs this, flow
+ * layout already separates the two).
+ * @param sourceEl the element that was duplicated
+ * @param built the object buildDuplicateClone() returned
+ */
+function insertDuplicateClone(sourceEl, built) {
+  if (built.wrap) {
+    built.wrap.parentNode.insertBefore(built.clone, built.wrap.nextSibling);
+    var base = getPos(built.rootEl);
+    built.rootEl.dataset.ovTx = base.tx + 24;
+    built.rootEl.dataset.ovTy = base.ty + 24;
+    built.pairs.forEach(function (p) { paintPos(p.el); });
+  } else {
+    sourceEl.parentNode.insertBefore(built.clone, sourceEl.nextSibling);
+  }
+}
+
+/**
+ * One-time copy of every existing per-id override (size, position, font
+ * size, text style, color, opacity, click-to-edit text) from a
+ * duplicate's old ids to its new ones, so the copy starts out looking
+ * identical to the original instead of snapping back to the template
+ * default. Only ever called right when a duplicate is created
+ * (duplicateElement()), never on a later reload (renderDuplicates()):
+ * every one of these maps is already keyed by the new ids permanently
+ * after this runs once, so redoing it on every load would blow away any
+ * independent edit made to the duplicate afterward. text_styles gets a
+ * shallow copy of its per-id object rather than sharing the same
+ * reference, since saveTextStyle()/saveFontFamily() mutate that object
+ * in place, sharing it would leak a later font/align change on either
+ * copy onto the other.
+ * @param pairs the {old, new} id pairs from buildDuplicateClone()
+ */
+function copyDuplicateOverrides(pairs) {
+  var raw;
+  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  var snap;
+  try { snap = raw ? JSON.parse(raw) : {}; } catch (e) { snap = {}; }
+  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "radius", "border"];
+  pairs.forEach(function (p) {
+    plainMaps.forEach(function (m) {
+      if (snap[m] && snap[m][p.old] !== undefined) {
+        snap[m] = snap[m] || {};
+        snap[m][p.new] = snap[m][p.old];
+      }
+    });
+    if (snap.text_styles && snap.text_styles[p.old]) {
+      snap.text_styles = snap.text_styles || {};
+      snap.text_styles[p.new] = Object.assign({}, snap.text_styles[p.old]);
+    }
+    if (Array.isArray(snap.shadow) && snap.shadow.indexOf(p.old) !== -1 && snap.shadow.indexOf(p.new) === -1) {
+      snap.shadow.push(p.new);
+    }
+  });
+  try { localStorage.setItem("preview_content", JSON.stringify(snap)); } catch (e) {}
+}
+
+/**
+ * Registers a duplicate so it survives a reload: content.duplicates is a
+ * flat list of {sourceId, suffix}, just enough for renderDuplicates() to
+ * redo the exact same clone+remap on every future load (the actual style/
+ * text overrides for its ids are already sitting in the normal maps by
+ * then, see copyDuplicateOverrides(), this only has to recreate the DOM
+ * structure itself).
+ * @param sourceId the id that was duplicated
+ * @param suffix see uniqueDupSuffix()
+ */
+function saveDuplicateEntry(sourceId, suffix) {
+  var raw;
+  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  var snap;
+  try { snap = raw ? JSON.parse(raw) : {}; } catch (e) { snap = {}; }
+  if (!Array.isArray(snap.duplicates)) snap.duplicates = [];
+  snap.duplicates.push({ sourceId: sourceId, suffix: suffix });
+  try { localStorage.setItem("preview_content", JSON.stringify(snap)); } catch (e) {}
+}
+
+/**
+ * Duplicates one element from the visual editor's right-click menu
+ * (Duplicate): clones it (or its whole free-wrap, if it's been moved/
+ * resized/deleted before) with a fresh id on itself and every tracked
+ * element nested inside it, drops the copy into the dom right next to the
+ * original (or nudged +24px/+24px if the original was out of flow),
+ * copies over any existing style/text overrides so it starts out looking
+ * identical, registers it in content.duplicates so it survives a reload,
+ * and wires up click-to-edit on every text field inside the copy (dom
+ * clones don't carry over js event listeners, only markup). Undo/redo
+ * reuses the plain "add" entry shape: undoing just hides the new element
+ * again (setElementHidden(), same as any delete), redoing unhides it,
+ * neither side ever needs to rebuild or discard content.duplicates' own
+ * entry, which is exactly how a right-click "Add element" already works.
+ * @param sourceEl the specific element node that was right-clicked (see
+ *   CTX_TARGET_EL, not just its id, which a mirrored element can share
+ *   with another node)
+ */
+function duplicateElement(sourceEl) {
+  var sourceId = elId(sourceEl);
+  if (!sourceId) return;
+  var suffix = uniqueDupSuffix();
+  var built = buildDuplicateClone(sourceEl, suffix);
+  insertDuplicateClone(sourceEl, built);
+  copyDuplicateOverrides(built.pairs);
+  if (built.wrap) {
+    var rootPos = getPos(built.rootEl);
+    saveEditedPosition(elId(built.rootEl), rootPos.tx, rootPos.ty);
+  }
+  saveDuplicateEntry(sourceId, suffix);
+  built.pairs.forEach(function (p) {
+    if (p.el.hasAttribute("data-edit-id")) wireTextField(p.el);
+  });
+  var rootNewId = sourceId + suffix;
+  LAYER_ORDER.push(rootNewId);
+  applyLayerOrder(LAYER_ORDER);
+  saveLayerOrder(LAYER_ORDER);
+  applyFixedHighlight();
+  applyLinkHighlight();
+  applyLockHighlight();
+  EDIT_UNDO.push({ type: "add", id: rootNewId });
+  EDIT_REDO.length = 0;
+}
+
+/**
+ * Recreates every duplicate a ta has made via the visual editor's
+ * right-click "Duplicate" option, on every load, live site included, same
+ * as renderCustomElements(). Unlike a custom element (built from scratch
+ * off a structured recipe), a duplicate is reconstructed by re-cloning
+ * whatever its source id currently renders as, so it always matches the
+ * source's own template markup/structure even if that source was a
+ * template element this codebase's markup later changed. Runs in
+ * repeated passes (capped) so a duplicate-of-a-duplicate (chained
+ * suffixes) renders correctly regardless of array order: each pass
+ * renders whatever entries have a currently-findable source and skips the
+ * rest, stopping once a full pass makes no progress. Called before every
+ * apply*Overrides() pass (same spot renderCustomElements() runs), so those
+ * can find a duplicate's ids exactly like any template one; specifically
+ * before applyHiddenOverrides(), so a duplicate created from a
+ * since-deleted source still gets cloned from what the source looked like
+ * before it was hidden, not skipped because the live source node is
+ * momentarily still mid-reload.
+ * @param list content.duplicates
+ */
+function renderDuplicates(list) {
+  var remaining = (list || []).slice();
+  var wireText = isPreviewMode() && isEditMode();
+  for (var pass = 0; pass < 20 && remaining.length; pass++) {
+    var progressed = false;
+    remaining = remaining.filter(function (d) {
+      var rootId = d.sourceId + d.suffix;
+      if (elByAnyId(rootId)) return false;
+      var src = elByAnyId(d.sourceId);
+      if (!src) return true;
+      var built = buildDuplicateClone(src, d.suffix);
+      insertDuplicateClone(src, built);
+      if (wireText) {
+        built.pairs.forEach(function (p) {
+          if (p.el.hasAttribute("data-edit-id")) wireTextField(p.el);
+        });
+      }
+      progressed = true;
+      return false;
+    });
+    if (!progressed) break;
+  }
+}
+
+/**
  * Uploads one file for the "Add element" menu (Image, Video, or an
  * uploaded Icon), the same ta-only /api/upload endpoint every other upload
  * on the site already posts to (attachments, gallery, hero video, home
@@ -1742,6 +2820,13 @@ function addCustomElement(kind, x, y, extra) {
   applyLayerOrder(LAYER_ORDER);
   saveLayerOrder(LAYER_ORDER);
   if (kind === "text" || kind === "button") wireTextField(el);
+  /* undoing an add just hides the new element again (setElementHidden(),
+     same "before" state a delete leaves behind), rather than actually
+     unbuilding it: the element and its content.custom_elements entry both
+     stay around either way, so redo can just unhide it instead of having
+     to rebuild it from scratch. */
+  EDIT_UNDO.push({ type: "add", id: d.id });
+  EDIT_REDO.length = 0;
   return el;
 }
 
@@ -1755,6 +2840,10 @@ var CTX_POS = { x: 0, y: 0 };
    navbar" toggle for it, see wireAddElementMenu(). null when the menu was
    opened on empty space. */
 var CTX_TARGET_ID = null;
+/* the actual DOM node right-clicked (not just its id, which an id like
+   "nav.brand" can share with more than one mirrored element): duplicateElement()
+   needs the specific node, not just any element carrying that id. */
+var CTX_TARGET_EL = null;
 
 /** Builds the context menu once, lazily. */
 function buildCtxMenu() {
@@ -1764,16 +2853,31 @@ function buildCtxMenu() {
 }
 
 /**
- * Renders the menu's root list: an optional "Promote to navbar"/"Remove
- * from navbar" toggle first (only when the menu was opened by right-
- * clicking an existing tagged element, see CTX_TARGET_ID), then the 6
- * things that can be added.
+ * Renders the menu's root list: an optional "This element" section first
+ * (only when the menu was opened by right-clicking an existing tagged
+ * element, see CTX_TARGET_ID) with Duplicate, Lock/Unlock, and Promote/
+ * Remove from navbar, then the 6 things that can be added. Duplicate is
+ * left out for the countdown box/info tiles (ids starting "countdown."/
+ * "logistics.") and anything containing #heroCountdown/#logisticsGrid
+ * (eg the whole logistics section): those render their content from their
+ * own structured content fields (content.logistics, the countdown's text
+ * overrides) via getElementById(), not static template markup a generic
+ * clone can carry over, so a duplicate of one would come out empty (or
+ * carry dead, un-restorable copies of their nested ids) the moment it's
+ * reconstructed on a reload rather than just visually copied in the
+ * moment, see duplicateElement()'s doc comment.
  */
 function renderCtxMenuRoot() {
   var toggleHtml = "";
   if (CTX_TARGET_ID) {
+    var isSpecial = CTX_TARGET_ID.indexOf("logistics.") === 0 || CTX_TARGET_ID.indexOf("countdown.") === 0 ||
+      (CTX_TARGET_EL && CTX_TARGET_EL.querySelector && CTX_TARGET_EL.querySelector("#heroCountdown, #logisticsGrid"));
     toggleHtml =
       '<div class="ctx-title">This element</div>' +
+      (isSpecial ? "" : '<button type="button" data-dup="1">Duplicate</button>') +
+      '<button type="button" data-lock-toggle="1">' +
+      (isLocked(CTX_TARGET_ID) ? "Unlock element" : "Lock element") +
+      '</button>' +
       '<button type="button" data-fixed-toggle="1">' +
       (isFixed(CTX_TARGET_ID) ? "Remove from navbar" : "Promote to navbar") +
       '</button>';
@@ -1790,10 +2894,28 @@ function renderCtxMenuRoot() {
   CTX_MENU.querySelectorAll("button[data-add]").forEach(function (btn) {
     btn.addEventListener("click", function () { handleCtxAdd(btn.getAttribute("data-add")); });
   });
+  var dupBtn = CTX_MENU.querySelector("[data-dup]");
+  if (dupBtn) {
+    dupBtn.addEventListener("click", function () {
+      if (CTX_TARGET_EL) duplicateElement(CTX_TARGET_EL);
+      hideCtxMenu();
+    });
+  }
+  var lockBtn = CTX_MENU.querySelector("[data-lock-toggle]");
+  if (lockBtn) {
+    lockBtn.addEventListener("click", function () {
+      toggleLocked(CTX_TARGET_ID);
+      EDIT_UNDO.push({ type: "locked", id: CTX_TARGET_ID });
+      EDIT_REDO.length = 0;
+      hideCtxMenu();
+    });
+  }
   var toggleBtn = CTX_MENU.querySelector("[data-fixed-toggle]");
   if (toggleBtn) {
     toggleBtn.addEventListener("click", function () {
       toggleFixed(CTX_TARGET_ID);
+      EDIT_UNDO.push({ type: "fixed", id: CTX_TARGET_ID });
+      EDIT_REDO.length = 0;
       hideCtxMenu();
     });
   }
@@ -2020,11 +3142,14 @@ function handleCtxAdd(kind) {
  * @param y top, document px
  * @param targetId the right-clicked element's id (see CTX_TARGET_ID), or
  *   null if the click landed on empty space
+ * @param targetEl the actual right-clicked element (see CTX_TARGET_EL), or
+ *   null if the click landed on empty space
  */
-function showCtxMenu(x, y, targetId) {
+function showCtxMenu(x, y, targetId, targetEl) {
   if (!CTX_MENU) buildCtxMenu();
   CTX_POS = { x: x, y: y };
   CTX_TARGET_ID = targetId || null;
+  CTX_TARGET_EL = targetEl || null;
   renderCtxMenuRoot();
   CTX_MENU.classList.add("show");
   var w = CTX_MENU.offsetWidth, h = CTX_MENU.offsetHeight;
@@ -2042,7 +3167,10 @@ function hideCtxMenu() {
 /**
  * Wires up the right-click "Add element" menu, only called in the ta
  * portal's Visual editor tab alongside wireResizable()/wireClickToEdit().
- * Replaces the browser's own context menu everywhere in the editor.
+ * Replaces the browser's own context menu everywhere in the editor. Also
+ * owns the outside-click/Escape dismissal for the ring's layer-order popover
+ * (see toggleLayerMenu() in wireResizable()), since both are the same kind
+ * of floating menu and only ever exist together in this tab.
  */
 function wireAddElementMenu() {
   document.addEventListener("contextmenu", function (e) {
@@ -2051,7 +3179,7 @@ function wireAddElementMenu() {
     if (e.target.closest && e.target.closest("[contenteditable='true']")) return;
     e.preventDefault();
     var t = e.target.closest ? e.target.closest(RESIZABLE_SEL) : null;
-    showCtxMenu(e.pageX, e.pageY, t ? elId(t) : null);
+    showCtxMenu(e.pageX, e.pageY, t ? elId(t) : null, t);
   });
   /* mousedown (not click) so this runs and reads e.target BEFORE a menu
      button's own click handler gets a chance to rewrite CTX_MENU's
@@ -2060,9 +3188,21 @@ function wireAddElementMenu() {
      click that follows and close it out from under itself */
   document.addEventListener("mousedown", function (e) {
     if (CTX_MENU && CTX_MENU.classList.contains("show") && !CTX_MENU.contains(e.target)) hideCtxMenu();
+    /* the layer button itself is excluded too: it has its own click handler
+       that toggles the menu, a mousedown here closing it first would just
+       have that click immediately reopen it */
+    if (LAYER_MENU && LAYER_MENU.classList.contains("show") &&
+        !LAYER_MENU.contains(e.target) && e.target !== LAYER_BTN) hideLayerMenu();
+    /* same reasoning as the layer button above, the style button toggles
+       its own popover on click */
+    if (STYLE_MENU && STYLE_MENU.classList.contains("show") &&
+        !STYLE_MENU.contains(e.target) && e.target !== STYLE_BTN) hideStyleMenu();
   }, true);
   document.addEventListener("keydown", function (e) {
-    if (e.key === "Escape" && CTX_MENU && CTX_MENU.classList.contains("show")) hideCtxMenu();
+    if (e.key !== "Escape") return;
+    if (CTX_MENU && CTX_MENU.classList.contains("show")) hideCtxMenu();
+    if (LAYER_MENU && LAYER_MENU.classList.contains("show")) hideLayerMenu();
+    if (STYLE_MENU && STYLE_MENU.classList.contains("show")) hideStyleMenu();
   });
 }
 
@@ -2104,6 +3244,8 @@ function wireResizable() {
     if (!el) return;
     /* mid-edit: leave the mouse to text selection/caret placement */
     if (el.isContentEditable) return;
+    /* locked: don't even start tracking a possible drag, see isLocked() */
+    if (isLocked(elId(el))) return;
 
     var startX = e.clientX, startY = e.clientY;
     var base = getPos(el);
@@ -2135,8 +3277,8 @@ function wireResizable() {
       JUST_DRAGGED = true;
       setTimeout(function () { JUST_DRAGGED = false; }, 0);
       var p = getPos(el);
-      if (p.tx || p.ty) saveEditedPosition(elId(el), Math.round(p.tx), Math.round(p.ty));
-      else saveEditedPosition(elId(el), null, null);
+      commitPosition(el);
+      pushMoveUndo(elId(el), base, p);
     }
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
@@ -2168,6 +3310,31 @@ function wireResizable() {
     if (active && (active.isContentEditable || active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT")) return;
     e.preventDefault();
     deleteElement(RING_EL);
+  });
+
+  /* Arrow keys nudge whatever the ring is currently on, 1px a press, 10px
+     with shift held, for lining something up more precisely than a mouse
+     drag can manage. Same guards as Delete/Backspace above (a locked
+     element can't be nudged either, same rule a drag already follows, see
+     startMoveDrag()), plus its own one-entry-per-press undo step since
+     each press is already its own discrete action, not a drag gesture. */
+  var ARROW_DELTAS = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] };
+  document.addEventListener("keydown", function (e) {
+    var d = ARROW_DELTAS[e.key];
+    if (!d) return;
+    if (!RING_EL || isLocked(elId(RING_EL))) return;
+    var active = document.activeElement;
+    if (active && (active.isContentEditable || active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT")) return;
+    e.preventDefault();
+    var el = RING_EL;
+    var step = e.shiftKey ? 10 : 1;
+    detachFromFlow(el);
+    var before = getPos(el);
+    var after = { tx: before.tx + d[0] * step, ty: before.ty + d[1] * step };
+    setOwnPos(el, after.tx, after.ty);
+    positionRing();
+    commitPosition(el);
+    pushMoveUndo(elId(el), before, after);
   });
 }
 
@@ -2550,8 +3717,12 @@ function hideTextToolbar() {
  */
 function wireTextField(el) {
   /* undo neuterLink()'s dimming, if any: an editable element should look
-     normal (own hover affordance) rather than disabled */
-  el.style.opacity = "";
+     normal (own hover affordance) rather than disabled. Only clears an
+     opacity that's exactly neuterLink()'s own dimmed value (".5"), not a
+     real saved style-popover opacity override that just happens to already
+     be applied by the time this runs (applyOpacityOverrides() runs before
+     wireClickToEdit() wires up every field, see fetchContent()) */
+  if (el.style.opacity === ".5") el.style.opacity = "";
   el.style.cursor = "";
 
   var beforeEdit = "";
@@ -2679,6 +3850,14 @@ function redoEdit() {
  *  - "fontsize": css font-size, or "" for the template default
  *  - "align"/"letterspacing": the css value, or "" for the template default
  *  - "fontfamily": {family, url} (url only set for a ta-uploaded font)
+ *  - "add": existed (after) vs hidden (before), same shape as "delete", just
+ *    the two sides swapped (see addCustomElement())
+ *  - "layer": no before/after value, just replays moveLayer(id, +-dir)
+ *  - "layerorder": {before, after} full LAYER_ORDER snapshots (a to-top/
+ *    to-bottom jump isn't its own inverse like an adjacent swap is, so the
+ *    whole stack is stored on both sides, see moveLayerExtreme())
+ *  - "fixed": no before/after value either, toggleFixed(id) is its own
+ *    inverse so either side just calls it again
  * @param action the stack entry
  * @param side "before" or "after", which side of the action to restore
  */
@@ -2686,6 +3865,28 @@ function applyHistoryAction(action, side) {
   var val = action[side];
   if (action.type === "delete") {
     setElementHidden(action.id, side === "after");
+    return;
+  }
+  if (action.type === "add") {
+    setElementHidden(action.id, side === "before");
+    return;
+  }
+  if (action.type === "layer") {
+    moveLayer(action.id, side === "after" ? action.dir : -action.dir);
+    return;
+  }
+  if (action.type === "layerorder") {
+    LAYER_ORDER = (side === "before" ? action.before : action.after).slice();
+    applyLayerOrder(LAYER_ORDER);
+    saveLayerOrder(LAYER_ORDER);
+    return;
+  }
+  if (action.type === "fixed") {
+    toggleFixed(action.id);
+    return;
+  }
+  if (action.type === "locked") {
+    toggleLocked(action.id);
     return;
   }
   if (action.type === "text") {
@@ -2733,6 +3934,78 @@ function applyHistoryAction(action, side) {
     if (TEXT_TOOLBAR_EL === fontEl) {
       TEXT_TOOLBAR.querySelector(".tt-font").value = val.family;
       updateFontDeleteButton();
+    }
+    return;
+  }
+  if (action.type === "color") {
+    var colorEl = styleMenuElById(action.id);
+    if (!colorEl) return;
+    setElementColor(colorEl, val || "");
+    saveEditedColor(action.id, val || "");
+    if (STYLE_MENU_ID === action.id) {
+      STYLE_MENU.querySelector(".sm-color").value = currentColorValue(colorEl);
+      STYLE_COLOR_BEFORE = val || "";
+    }
+    return;
+  }
+  if (action.type === "fill") {
+    var fillEl = styleMenuElById(action.id);
+    if (!fillEl) return;
+    fillEl.style.backgroundColor = val || "";
+    saveEditedFill(action.id, val || "");
+    if (STYLE_MENU_ID === action.id) {
+      STYLE_MENU.querySelector(".sm-fill").value = currentFillValue(fillEl);
+      STYLE_FILL_BEFORE = val || "";
+    }
+    return;
+  }
+  if (action.type === "radius") {
+    var radEl = styleMenuElById(action.id);
+    if (!radEl) return;
+    var px = parseInt(val, 10) || 0;
+    radEl.style.borderRadius = px + "px";
+    saveEditedRadius(action.id, px);
+    if (STYLE_MENU_ID === action.id) {
+      STYLE_MENU.querySelector(".sm-radius").value = px;
+      STYLE_MENU.querySelector(".sm-radius-val").textContent = px + "px";
+      STYLE_RADIUS_BEFORE = String(px);
+    }
+    return;
+  }
+  if (action.type === "border") {
+    var bdEl = styleMenuElById(action.id);
+    if (!bdEl) return;
+    var bw = (val && val.w) || 0;
+    if (bw > 0) bdEl.style.border = bw + "px solid " + val.color;
+    else bdEl.style.border = "none";
+    saveEditedBorder(action.id, bw, val ? val.color : "#000000");
+    if (STYLE_MENU_ID === action.id) {
+      STYLE_MENU.querySelector(".sm-border-w").value = bw;
+      STYLE_MENU.querySelector(".sm-border-val").textContent = bw + "px";
+      STYLE_MENU.querySelector(".sm-border-color").value = val ? val.color : "#000000";
+      STYLE_BORDER_BEFORE = { w: bw, color: val ? val.color : "#000000" };
+    }
+    return;
+  }
+  if (action.type === "shadow") {
+    var shEl = styleMenuElById(action.id);
+    if (!shEl) return;
+    var on = !currentShadowOn(shEl);
+    shEl.style.boxShadow = on ? BOX_SHADOW_VALUE : "none";
+    saveEditedShadow(action.id, on);
+    if (STYLE_MENU_ID === action.id) STYLE_MENU.querySelector(".sm-shadow").checked = on;
+    return;
+  }
+  if (action.type === "opacity") {
+    var opEl = styleMenuElById(action.id);
+    if (!opEl) return;
+    var pct = parseFloat(val) || 100;
+    opEl.style.opacity = (pct / 100).toFixed(2);
+    saveEditedOpacity(action.id, pct / 100);
+    if (STYLE_MENU_ID === action.id) {
+      STYLE_MENU.querySelector(".sm-opacity").value = pct;
+      STYLE_MENU.querySelector(".sm-opacity-val").textContent = pct + "%";
+      STYLE_OPACITY_BEFORE = String(pct);
     }
     return;
   }
@@ -2908,6 +4181,111 @@ function saveEditedVisibility(id, hidden) {
 }
 
 /**
+ * Persists a color pick from the style popover (see buildStyleMenu()) into
+ * the preview snapshot, the same draft everything else here uses.
+ * @param id the element's data-edit-id or data-resize-id
+ * @param value a css color string, or "" to clear back to the template default
+ */
+function saveEditedColor(id, value) {
+  var raw;
+  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  if (!snapshot.colors || typeof snapshot.colors !== "object") snapshot.colors = {};
+  if (!value) delete snapshot.colors[id];
+  else snapshot.colors[id] = value;
+  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
+ * Persists an opacity change from the style popover's slider into the
+ * preview snapshot, the same draft everything else here uses.
+ * @param id the element's data-edit-id or data-resize-id
+ * @param value a number 0-1, or null/1 to clear back to the template default
+ */
+function saveEditedOpacity(id, value) {
+  var raw;
+  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  if (!snapshot.opacity || typeof snapshot.opacity !== "object") snapshot.opacity = {};
+  if (value === null || value === undefined || value >= 1) delete snapshot.opacity[id];
+  else snapshot.opacity[id] = value;
+  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
+ * Persists a textbox's background fill from the style popover's Fill
+ * control into the preview snapshot, the same draft everything else here
+ * uses. Separate map from content.colors since a text field's "Color" row
+ * already means its font color (see colorTarget()); fill is its surface.
+ * @param id the element's data-edit-id
+ * @param value a css color string, or "" to clear back to no fill
+ */
+function saveEditedFill(id, value) {
+  var raw;
+  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  if (!snapshot.fill || typeof snapshot.fill !== "object") snapshot.fill = {};
+  if (!value) delete snapshot.fill[id];
+  else snapshot.fill[id] = value;
+  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
+ * Persists a border-radius change from the style popover's Radius slider.
+ * @param id the element's data-edit-id or data-resize-id
+ * @param px a whole-number px value, 0 to clear back to the template default
+ */
+function saveEditedRadius(id, px) {
+  var raw;
+  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  if (!snapshot.radius || typeof snapshot.radius !== "object") snapshot.radius = {};
+  if (!px) delete snapshot.radius[id];
+  else snapshot.radius[id] = px;
+  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
+ * Persists a border width/color change from the style popover's Border row.
+ * @param id the element's data-edit-id or data-resize-id
+ * @param w border width in css px, 0 to clear back to no border
+ * @param color a css color string (ignored when w is 0)
+ */
+function saveEditedBorder(id, w, color) {
+  var raw;
+  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  if (!snapshot.border || typeof snapshot.border !== "object") snapshot.border = {};
+  if (!w) delete snapshot.border[id];
+  else snapshot.border[id] = { w: w, color: color };
+  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
+ * Persists the shared drop-shadow toggle (see BOX_SHADOW_VALUE) into the
+ * preview snapshot as a flat list of ids, the same shape content.locked/
+ * content.fixed_elements already use for a per-id boolean flag.
+ * @param id the element's data-edit-id or data-resize-id
+ * @param on true to add the shadow, false to remove it
+ */
+function saveEditedShadow(id, on) {
+  var raw;
+  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  if (!Array.isArray(snapshot.shadow)) snapshot.shadow = [];
+  var idx = snapshot.shadow.indexOf(id);
+  if (on && idx === -1) snapshot.shadow.push(id);
+  else if (!on && idx !== -1) snapshot.shadow.splice(idx, 1);
+  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
  * Still logged in from a previous visit? Point the nav link back at your
  * portal and show a log out button, instead of always saying "Access
  * portal", which read as having been logged out. Skipped in preview mode:
@@ -3024,16 +4402,25 @@ document.addEventListener("DOMContentLoaded", function () {
         textMap["footer.contact"] = data.contact_text;
       }
       renderCustomElements(data.custom_elements);
+      renderDuplicates(data.duplicates);
       applyTextOverrides(textMap);
       applySizeOverrides(data.sizes);
       applyFontSizeOverrides(data.font_sizes);
       applyTextStyleOverrides(data.text_styles);
       applyPositionOverrides(data.positions);
+      applyColorOverrides(data.colors);
+      applyFillOverrides(data.fill);
+      applyRadiusOverrides(data.radius);
+      applyBorderOverrides(data.border);
+      applyShadowOverrides(data.shadow);
+      applyOpacityOverrides(data.opacity);
       applyHiddenOverrides(data.hidden);
       setFixedElements(data.fixed_elements);
+      setLockedElements(data.locked);
       applyLayerOrder(data.layers);
       applyFixedHighlight();
       applyLinkHighlight();
+      applyLockHighlight();
       if (isPreviewMode() && isEditMode()) { wireResizable(); wireClickToEdit(); wireAddElementMenu(); }
     })
     .catch(function () {

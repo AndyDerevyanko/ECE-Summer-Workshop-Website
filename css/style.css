@@ -1335,6 +1335,19 @@ body.edit-mode [data-resize-id].edit-locked {
   outline-color: #888;
 }
 
+/* an element currently queued for grouping (shift-click to toggle, see
+   toggleSelected()/updateSelectionHighlight() in js/main.js): a solid
+   thicker outline instead of the ever-present thin dashed one, so it's
+   obvious at a glance which elements are queued before right-clicking one
+   to choose "Group N elements". Takes priority over locked/fixed/link's own
+   colors since it's a deliberate, active, in-progress selection, same
+   reasoning edit-locked already uses to win over edit-fixed/edit-link. */
+body.edit-mode [data-edit-id].multi-selected,
+body.edit-mode [data-resize-id].multi-selected {
+  outline: 3px solid limegreen;
+  outline-offset: 3px;
+}
+
 /* a link deleted while it still had other tracked elements nested inside it
    (see setHiddenVisual() in js/main.js): can't use display:none like a
    normal delete, so it stays in the dom, inert, instead. hide its own
@@ -1527,6 +1540,12 @@ body.edit-mode .apply-bob { animation: none; }
 /* frozen slot an element leaves behind when its first resize detaches it
    from flow (detachFromFlow() in js/main.js) */
 .free-wrap { position: relative; }
+
+/* image/video tint overlay (setElementTint() in js/main.js): an object-fit:
+   cover element has no background-color of its own to paint over, so a
+   tint paints this same-size layer on top instead, blended in via
+   mix-blend-mode rather than a flat opaque color */
+.tint-ov { position: absolute; inset: 0; pointer-events: none; mix-blend-mode: color; }
 
 /* floating text toolbar (font, A-/A+ size, bold/italic/underline, align,
    letter spacing), shown above a text field only while it's actively being

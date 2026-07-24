@@ -1083,6 +1083,19 @@ function applyLayerOrder(layers) {
     nonFixed.concat(fixed).forEach(function (m) {
       if (getComputedStyle(m.el).position === "static") m.el.style.position = "relative";
       m.el.style.zIndex = String(z);
+      /* a tint overlay (setElementTint()) is a plain untracked sibling div
+         appended right after its image inside the same free-wrap: without
+         its own z-index it stays at the implicit 0/auto, and ANY element
+         here with a real explicit z-index (which is every one of them,
+         including its own image) paints above z-index:auto regardless of
+         dom order, hiding the tint completely. Giving it the SAME z-index
+         as its image is enough, not a higher one: for two elements sharing
+         one z-index, plain dom order decides, and the overlay is already
+         the later sibling. */
+      if (m.el.parentNode && m.el.parentNode.classList && m.el.parentNode.classList.contains("free-wrap")) {
+        var tintOv = m.el.parentNode.querySelector(".tint-ov");
+        if (tintOv) tintOv.style.zIndex = String(z);
+      }
       z++;
     });
   });
@@ -1312,6 +1325,8 @@ function detachFromFlow(el) {
 var RING = null;
 var RING_EL = null;
 var RING_DRAGGING = false;
+/* pending hover-intent switch, see wireResizable()'s mouseover listener */
+var RING_HOVER_TIMER = null;
 /* the ring's one layer-order button, so the popover can anchor under it */
 var LAYER_BTN = null;
 /* the ring's one style (color/opacity) button, so the popover can anchor under it */
@@ -1484,15 +1499,98 @@ function colorTarget(el) {
 }
 
 /**
+ * Whether el's opacity has to fade its own background surface instead of
+ * using real css opacity: css opacity is a group compositing effect that
+ * unconditionally fades an element's WHOLE subtree (the exact same problem
+ * setHiddenVisual() already had to solve for delete, see its own doc
+ * comment), so a wrapper with independently tracked children inside it (a
+ * card, a section, the countdown box) can't use real opacity without
+ * dragging those children's own look down with it. Scoped to "bg" targets
+ * (colorTarget()) since that covers every container in this project that
+ * can have nested tracked content (cards/sections/nav/footer/buttons/the
+ * countdown box all paint via backgroundColor); an icon is always a leaf
+ * svg (never wraps anything tracked) and a lone click-to-edit text field
+ * wrapping other tracked elements doesn't occur in this template, so both
+ * keep using plain css opacity, same as an image/video (also always a leaf).
+ * @param el the element
+ * @return true if opacity should fade backgroundColor instead of el itself
+ */
+function fadesOwnBackground(el) {
+  return colorTarget(el) === "bg" && hasTrackedDescendants(el);
+}
+
+/**
+ * Converts a "#rrggbb" hex string to an "rgba(r, g, b, a)" string.
+ * @param hex a "#rrggbb" string
+ * @param alpha 0-1
+ * @return the rgba() string, "rgba(0, 0, 0, a)" if hex doesn't parse
+ */
+function hexToRgba(hex, alpha) {
+  var m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || "");
+  var r = m ? parseInt(m[1], 16) : 0, g = m ? parseInt(m[2], 16) : 0, b = m ? parseInt(m[3], 16) : 0;
+  return "rgba(" + r + ", " + g + ", " + b + ", " + alpha + ")";
+}
+
+/**
+ * Repaints a fadesOwnBackground() wrapper's real backgroundColor from its
+ * last-known color (data-op-color) and opacity (data-op-alpha), kept on the
+ * element's own dataset rather than re-derived from the live computed style
+ * every time: color and opacity both have to land on this SAME css
+ * property, and re-reading an already alpha-blended computed color as the
+ * "base" for the next change would compound (each edit fading it further
+ * than intended) instead of composing the two independently. data-op-color
+ * defaults to whatever the element's pristine background already was
+ * (data-base-color, captured once by applyColorOverrides() before either
+ * override ever touches it, or the live computed style as a last resort)
+ * so an element that's never had an explicit color override still fades
+ * its own real surface, not an invented one.
+ * @param el the element
+ */
+function paintSurface(el) {
+  var hex = el.dataset.opColor || el.dataset.baseColor || rgbToHex(getComputedStyle(el).backgroundColor) || "#000000";
+  var alpha = el.dataset.opAlpha !== undefined ? parseFloat(el.dataset.opAlpha) : 1;
+  el.style.opacity = "";
+  el.style.backgroundColor = hexToRgba(hex, alpha);
+}
+
+/**
  * Paints one element's color override onto whichever css property
  * colorTarget() says it should (icon/text color both use el.style.color,
- * currentColor is how every svg icon in this codebase is drawn).
+ * currentColor is how every svg icon in this codebase is drawn). A
+ * fadesOwnBackground() wrapper never writes backgroundColor directly here:
+ * it stashes the color on the dataset and repaints through paintSurface()
+ * instead, so a color change composes with whatever opacity is already
+ * active rather than resetting it back to fully opaque.
  * @param el the element
  * @param value a css color string, or "" to clear back to the template default
  */
 function setElementColor(el, value) {
+  if (fadesOwnBackground(el)) {
+    el.dataset.opColor = value || el.dataset.baseColor || "";
+    if (!el.dataset.opColor) delete el.dataset.opColor;
+    paintSurface(el);
+    return;
+  }
   if (colorTarget(el) === "bg") el.style.backgroundColor = value;
   else el.style.color = value;
+}
+
+/**
+ * Applies value (0-1) as el's own opacity without ever touching anything
+ * nested inside it, see fadesOwnBackground()'s doc comment for why a plain
+ * css opacity can't be used on a wrapper. Used on every load
+ * (applyOpacityOverrides()), by the style popover's live slider, and by
+ * undo/redo, so all three ways of setting opacity behave identically.
+ * @param el the element
+ * @param value 0-1
+ */
+function applyElementOpacity(el, value) {
+  if (fadesOwnBackground(el)) {
+    el.dataset.opAlpha = String(value);
+    paintSurface(el);
+  } else {
+    el.style.opacity = String(value);
+  }
 }
 
 /**
@@ -1501,12 +1599,19 @@ function setElementColor(el, value) {
  * load, live site included, same as applyTextOverrides(). Images/videos
  * are deliberately skipped: a background color painted behind an
  * object-fit: cover element is never visible, there's nothing for a color
- * picker to usefully do there.
+ * picker to usefully do there. Also captures every fadesOwnBackground()
+ * wrapper's pristine default background (data-base-color) before anything
+ * this load could have touched it, so a later opacity fade (or a reset
+ * back to "no color override") always has the real template default to
+ * fall back to, see paintSurface().
  * @param colors content.colors, {id: css color string}
  */
 function applyColorOverrides(colors) {
   colors = colors || {};
   document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
+    if (fadesOwnBackground(el) && el.dataset.baseColor === undefined) {
+      el.dataset.baseColor = rgbToHex(getComputedStyle(el).backgroundColor) || "#000000";
+    }
     var v = colors[elId(el)];
     if (!v || elKind(el) === "img") return;
     setElementColor(el, v);
@@ -1516,7 +1621,9 @@ function applyColorOverrides(colors) {
 /**
  * Applies saved opacity overrides (from the style popover's slider) on top
  * of the page's own default (fully opaque). Runs on every load, live site
- * included, same as applyTextOverrides().
+ * included, same as applyTextOverrides(). Must run after
+ * applyColorOverrides() so a fadesOwnBackground() wrapper's data-base-color
+ * is already captured.
  * @param opacity content.opacity, {id: number 0-1}
  */
 function applyOpacityOverrides(opacity) {
@@ -1524,7 +1631,7 @@ function applyOpacityOverrides(opacity) {
   document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
     var v = opacity[elId(el)];
     if (v === undefined || v === null) return;
-    el.style.opacity = String(v);
+    applyElementOpacity(el, v);
   });
 }
 
@@ -1540,6 +1647,55 @@ function applyFillOverrides(fill) {
     var v = fill[elId(el)];
     if (!v) return;
     el.style.backgroundColor = v;
+  });
+}
+
+/**
+ * Paints (or removes) a color tint over an image/video. An object-fit:
+ * cover element has no visible background-color of its own to paint over
+ * (see colorTarget()'s doc comment on why the plain Color row is hidden for
+ * images), so tinting one needs an actual overlay layer instead: a same-
+ * size, pointer-events:none ".tint-ov" div in mix-blend-mode "color"
+ * (css/style.css), painted right on top of it. Forces el into its own
+ * free-wrap first (detachFromFlow(), the same lazy "first special action
+ * detaches" rule a resize/move/delete already follows) so the overlay has
+ * something position:relative to size itself against.
+ * @param el the image/video element
+ * @param hex a "#rrggbb" tint color, or "" to remove the tint
+ */
+function setElementTint(el, hex) {
+  var wrap = detachFromFlow(el);
+  var ov = wrap.querySelector(".tint-ov");
+  if (!hex) {
+    if (ov) ov.remove();
+    return;
+  }
+  if (!ov) {
+    ov = document.createElement("div");
+    ov.className = "tint-ov";
+    wrap.appendChild(ov);
+  }
+  ov.style.backgroundColor = hex;
+  /* match el's own current z-index right away (same reasoning as
+     applyLayerOrder()'s own copy of this, see its doc comment): without
+     this a freshly-picked tint would stay invisible, behind el, until the
+     next time applyLayerOrder() happens to run */
+  ov.style.zIndex = getComputedStyle(el).zIndex;
+}
+
+/**
+ * Applies saved image/video tint overrides on top of the page's own default
+ * (no tint). Runs on every load, live site included, same as
+ * applyColorOverrides(). Only ever touches elKind() === "img" elements
+ * (images and videos both); the Tint row is hidden for anything else.
+ * @param tint content.tint, {id: css color string}
+ */
+function applyTintOverrides(tint) {
+  tint = tint || {};
+  document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
+    if (elKind(el) !== "img") return;
+    var v = tint[elId(el)];
+    if (v) setElementTint(el, v);
   });
 }
 
@@ -1597,6 +1753,7 @@ var STYLE_MENU_ID = null;
 var STYLE_COLOR_BEFORE = "";
 var STYLE_OPACITY_BEFORE = "";
 var STYLE_FILL_BEFORE = "";
+var STYLE_TINT_BEFORE = "";
 var STYLE_RADIUS_BEFORE = "0";
 var STYLE_BORDER_BEFORE = { w: 0, color: "#000000" };
 
@@ -1619,6 +1776,11 @@ function buildStyleMenu() {
       '<label>Fill</label>' +
       '<input type="color" class="sm-fill">' +
       '<button type="button" class="sm-fill-reset" title="Reset to default">×</button>' +
+    '</div>' +
+    '<div class="sm-row sm-tint-row">' +
+      '<label>Tint</label>' +
+      '<input type="color" class="sm-tint">' +
+      '<button type="button" class="sm-tint-reset" title="Remove tint">×</button>' +
     '</div>' +
     '<div class="sm-row sm-shape-row sm-radius-row">' +
       '<label>Radius</label>' +
@@ -1646,6 +1808,8 @@ function buildStyleMenu() {
   var colorReset = STYLE_MENU.querySelector(".sm-color-reset");
   var fillInput = STYLE_MENU.querySelector(".sm-fill");
   var fillReset = STYLE_MENU.querySelector(".sm-fill-reset");
+  var tintInput = STYLE_MENU.querySelector(".sm-tint");
+  var tintReset = STYLE_MENU.querySelector(".sm-tint-reset");
   var radiusInput = STYLE_MENU.querySelector(".sm-radius");
   var radiusVal = STYLE_MENU.querySelector(".sm-radius-val");
   var borderW = STYLE_MENU.querySelector(".sm-border-w");
@@ -1655,7 +1819,7 @@ function buildStyleMenu() {
   var opacityInput = STYLE_MENU.querySelector(".sm-opacity");
   var opacityVal = STYLE_MENU.querySelector(".sm-opacity-val");
 
-  [colorInput, colorReset, fillInput, fillReset, radiusInput, borderW, borderColor, shadowInput, opacityInput].forEach(function (el) {
+  [colorInput, colorReset, fillInput, fillReset, tintInput, tintReset, radiusInput, borderW, borderColor, shadowInput, opacityInput].forEach(function (el) {
     el.addEventListener("mousedown", function (e) { e.stopPropagation(); });
   });
 
@@ -1725,6 +1889,38 @@ function buildStyleMenu() {
     STYLE_FILL_BEFORE = "";
   });
 
+  tintInput.addEventListener("input", function () {
+    if (!STYLE_MENU_ID) return;
+    var el = styleMenuEl();
+    if (!el) return;
+    setElementTint(el, tintInput.value);
+    saveEditedTint(STYLE_MENU_ID, tintInput.value);
+  });
+  tintInput.addEventListener("change", function () {
+    if (!STYLE_MENU_ID) return;
+    var after = tintInput.value;
+    if (after !== STYLE_TINT_BEFORE) {
+      EDIT_UNDO.push({ type: "tint", id: STYLE_MENU_ID, before: STYLE_TINT_BEFORE, after: after });
+      EDIT_REDO.length = 0;
+    }
+    STYLE_TINT_BEFORE = after;
+  });
+
+  tintReset.addEventListener("click", function () {
+    if (!STYLE_MENU_ID) return;
+    var el = styleMenuEl();
+    if (!el) return;
+    var before = STYLE_TINT_BEFORE;
+    setElementTint(el, "");
+    saveEditedTint(STYLE_MENU_ID, "");
+    tintInput.value = "#ffffff";
+    if (before !== "") {
+      EDIT_UNDO.push({ type: "tint", id: STYLE_MENU_ID, before: before, after: "" });
+      EDIT_REDO.length = 0;
+    }
+    STYLE_TINT_BEFORE = "";
+  });
+
   radiusInput.addEventListener("input", function () {
     if (!STYLE_MENU_ID) return;
     var el = styleMenuEl();
@@ -1789,10 +1985,10 @@ function buildStyleMenu() {
     if (!STYLE_MENU_ID) return;
     var el = styleMenuEl();
     if (!el) return;
-    var v = (parseFloat(opacityInput.value) / 100).toFixed(2);
-    el.style.opacity = v;
+    var v = parseFloat((parseFloat(opacityInput.value) / 100).toFixed(2));
+    applyElementOpacity(el, v);
     opacityVal.textContent = opacityInput.value + "%";
-    saveEditedOpacity(STYLE_MENU_ID, parseFloat(v));
+    saveEditedOpacity(STYLE_MENU_ID, v);
   });
   opacityInput.addEventListener("change", function () {
     if (!STYLE_MENU_ID) return;
@@ -1838,16 +2034,42 @@ function currentColorValue(el) {
 }
 
 /**
- * Converts a computed "rgb(r, g, b)"/"rgba(r, g, b, a)" string to a
+ * Parses a computed color string into 0-255 r/g/b and a 0-1 alpha,
+ * whichever of the two syntaxes the browser used to serialize it: the
+ * usual "rgb(r, g, b)"/"rgba(r, g, b, a)", or "color(srgb r g b / a)"
+ * (0-1 floats), which Chromium uses instead when the computed value came
+ * from a color-mix() (this project's own --surface tokens are all defined
+ * that way, eg the countdown box's "color-mix(in srgb, var(--surface) 75%,
+ * transparent)" background) - a plain rgba?() regex alone never matches
+ * that second form at all, silently falling back to black everywhere a
+ * color-mix()'d surface's current color needed reading back.
+ * @param str the computed color string
+ * @return {r, g, b, a} (0-255, 0-255, 0-255, 0-1), or null if unparseable
+ */
+function parseComputedColor(str) {
+  var m = /^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/.exec(str || "");
+  if (m) return { r: +m[1], g: +m[2], b: +m[3], a: m[4] !== undefined ? parseFloat(m[4]) : 1 };
+  var cm = /^color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)(?:\s*\/\s*([\d.]+))?\)/.exec(str || "");
+  if (cm) {
+    return {
+      r: Math.round(parseFloat(cm[1]) * 255), g: Math.round(parseFloat(cm[2]) * 255), b: Math.round(parseFloat(cm[3]) * 255),
+      a: cm[4] !== undefined ? parseFloat(cm[4]) : 1
+    };
+  }
+  return null;
+}
+
+/**
+ * Converts a computed color string (see parseComputedColor()) to a
  * "#rrggbb" hex string an <input type=color> can take as its value.
  * @param rgb the computed color string
  * @return a hex string, or "" if it couldn't be parsed (eg "transparent")
  */
 function rgbToHex(rgb) {
-  var m = /^rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(rgb || "");
-  if (!m) return "";
-  function hex(n) { return ("0" + parseInt(n, 10).toString(16)).slice(-2); }
-  return "#" + hex(m[1]) + hex(m[2]) + hex(m[3]);
+  var c = parseComputedColor(rgb);
+  if (!c) return "";
+  function hex(n) { return ("0" + n.toString(16)).slice(-2); }
+  return "#" + hex(c.r) + hex(c.g) + hex(c.b);
 }
 
 /**
@@ -1859,10 +2081,23 @@ function rgbToHex(rgb) {
  * @return a "#rrggbb" string
  */
 function currentFillValue(el) {
-  var cs = getComputedStyle(el).backgroundColor;
-  var m = /^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/.exec(cs || "");
-  if (!m || (m[4] !== undefined && parseFloat(m[4]) === 0)) return "#ffffff";
-  return rgbToHex(cs) || "#ffffff";
+  var c = parseComputedColor(getComputedStyle(el).backgroundColor);
+  if (!c || c.a === 0) return "#ffffff";
+  return rgbToHex(getComputedStyle(el).backgroundColor) || "#ffffff";
+}
+
+/**
+ * Reads an image/video's current tint color (see setElementTint()) as a hex
+ * string, "#ffffff" if it has none (an <input type=color> has no real
+ * "unset" state of its own, same convention as currentFillValue()).
+ * @param el the image/video element
+ * @return a "#rrggbb" string
+ */
+function currentTintValue(el) {
+  var wrap = el.parentNode;
+  var ov = wrap && wrap.classList && wrap.classList.contains("free-wrap") ? wrap.querySelector(".tint-ov") : null;
+  if (!ov) return "#ffffff";
+  return rgbToHex(getComputedStyle(ov).backgroundColor) || "#ffffff";
 }
 
 /**
@@ -1893,8 +2128,8 @@ function currentRadiusValue(el) {
  */
 function currentBorderValue(el) {
   var cs = getComputedStyle(el);
-  var m = /^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/.exec(cs.borderTopColor || "");
-  if (!m || (m[4] !== undefined && parseFloat(m[4]) === 0)) return { w: 0, color: "#000000" };
+  var c = parseComputedColor(cs.borderTopColor);
+  if (!c || c.a === 0) return { w: 0, color: "#000000" };
   return {
     w: Math.round(parseFloat(cs.borderTopWidth) || 0),
     color: rgbToHex(cs.borderTopColor) || "#000000"
@@ -1931,11 +2166,13 @@ function toggleStyleMenu(anchorEl) {
   var isText = colorTarget(el) === "text";
   STYLE_MENU.querySelector(".sm-color-row").style.display = isImg ? "none" : "";
   STYLE_MENU.querySelector(".sm-fill-row").style.display = isText ? "" : "none";
+  STYLE_MENU.querySelector(".sm-tint-row").style.display = isImg ? "" : "none";
   var shapeDisplay = isIcon ? "none" : "";
   STYLE_MENU.querySelectorAll(".sm-shape-row").forEach(function (row) { row.style.display = shapeDisplay; });
 
   var colorInput = STYLE_MENU.querySelector(".sm-color");
   var fillInput = STYLE_MENU.querySelector(".sm-fill");
+  var tintInput = STYLE_MENU.querySelector(".sm-tint");
   var radiusInput = STYLE_MENU.querySelector(".sm-radius");
   var radiusVal = STYLE_MENU.querySelector(".sm-radius-val");
   var borderW = STYLE_MENU.querySelector(".sm-border-w");
@@ -1953,6 +2190,11 @@ function toggleStyleMenu(anchorEl) {
     STYLE_FILL_BEFORE = fillInput.value;
   }
 
+  if (isImg) {
+    tintInput.value = currentTintValue(el);
+    STYLE_TINT_BEFORE = tintInput.value === "#ffffff" ? "" : tintInput.value;
+  }
+
   if (!isIcon) {
     var rad = currentRadiusValue(el);
     radiusInput.value = rad;
@@ -1968,7 +2210,12 @@ function toggleStyleMenu(anchorEl) {
     shadowInput.checked = currentShadowOn(el);
   }
 
-  var op = Math.round((parseFloat(getComputedStyle(el).opacity) || 1) * 100);
+  /* a fadesOwnBackground() wrapper never carries a real css opacity (see its
+     own doc comment), so its actual fade lives in data-op-alpha instead;
+     reading getComputedStyle(el).opacity there would always read back 1 */
+  var op = fadesOwnBackground(el)
+    ? Math.round((el.dataset.opAlpha !== undefined ? parseFloat(el.dataset.opAlpha) : 1) * 100)
+    : Math.round((parseFloat(getComputedStyle(el).opacity) || 1) * 100);
   opacityInput.value = op;
   opacityVal.textContent = op + "%";
   STYLE_OPACITY_BEFORE = String(op);
@@ -2135,9 +2382,15 @@ function startMoveDrag(e) {
   var startX = e.clientX, startY = e.clientY;
   var base = getPos(el);
   RING_DRAGGING = true;
+  /* same rigid-group broadcast as the drag-anywhere handler, see
+     groupMembersFor() */
+  var groupMembers = groupMembersFor(elId(el));
+  groupMembers.forEach(function (m) { detachFromFlow(m.el); });
 
   function onMove(ev) {
-    setOwnPos(el, base.tx + (ev.clientX - startX), base.ty + (ev.clientY - startY));
+    var dx = ev.clientX - startX, dy = ev.clientY - startY;
+    setOwnPos(el, base.tx + dx, base.ty + dy);
+    groupMembers.forEach(function (m) { setOwnPos(m.el, m.base.tx + dx, m.base.ty + dy); });
     positionRing();
   }
   function onUp() {
@@ -2146,7 +2399,13 @@ function startMoveDrag(e) {
     RING_DRAGGING = false;
     var p = getPos(el);
     commitPosition(el);
-    pushMoveUndo(elId(el), base, p);
+    var moves = [{ id: elId(el), before: base, after: p }];
+    groupMembers.forEach(function (m) {
+      var mp = getPos(m.el);
+      commitPosition(m.el);
+      moves.push({ id: m.id, before: m.base, after: mp });
+    });
+    pushGroupMoveUndo(moves);
   }
   document.addEventListener("mousemove", onMove);
   document.addEventListener("mouseup", onUp);
@@ -2213,12 +2472,187 @@ function setElementHidden(id, hidden) {
 function deleteElement(el) {
   var id = elId(el);
   if (!id) return;
-  setElementHidden(id, true);
-  EDIT_UNDO.push({ type: "delete", id: id });
+  /* a grouped element (see groupOf()) takes every other member down with
+     it, one "groupdelete" undo entry covering the whole group instead of a
+     plain "delete" for just el, so undo brings all of them back at once */
+  var g = groupOf(id);
+  if (g && g.length > 1) {
+    g.forEach(function (gid) { setElementHidden(gid, true); });
+    EDIT_UNDO.push({ type: "groupdelete", ids: g.slice() });
+  } else {
+    setElementHidden(id, true);
+    EDIT_UNDO.push({ type: "delete", id: id });
+  }
   EDIT_REDO.length = 0;
   hideTextToolbar();
   RING_EL = null;
   if (RING) RING.style.display = "none";
+}
+
+/* every group of ids a ta has tied together (right-click > "Group N
+   elements", see createGroup()), a flat array of id-arrays, mirrors
+   content.groups exactly. moving, nudging, or deleting one member does the
+   same to every other member of its own group (see groupMembersFor()),
+   its own move/resize/delete stays completely independent otherwise: a
+   group is a deliberate, explicit tie, not a new kind of nesting, this
+   project's whole "no attachment between elements" system (see
+   ancestorPos()'s own doc comment) is exactly the opposite default. */
+var GROUPS = [];
+
+/* ids currently queued for grouping (shift-click a tracked element to
+   toggle it in/out, see toggleSelected()), session-only, never persisted:
+   this is just "what the ta has clicked so far", cleared once "Group" is
+   actually chosen (or Escape) */
+var SELECTED_IDS = [];
+
+/**
+ * The group id belongs to, if any.
+ * @param id the element's data-edit-id or data-resize-id
+ * @return the group (an array of ids, including id itself), or null
+ */
+function groupOf(id) {
+  for (var i = 0; i < GROUPS.length; i++) {
+    if (GROUPS[i].indexOf(id) !== -1) return GROUPS[i];
+  }
+  return null;
+}
+
+/**
+ * Every OTHER member of id's group, resolved to their live element and
+ * captured move offset, ready for a move/nudge to broadcast the same delta
+ * onto. Locked members are left out, same rule a direct drag on them
+ * already follows; a member no longer in the document (deleted, or this id
+ * isn't grouped at all) is left out too.
+ * @param id the element's data-edit-id or data-resize-id
+ * @return an array of {id, el, base}
+ */
+function groupMembersFor(id) {
+  var g = groupOf(id);
+  if (!g) return [];
+  var out = [];
+  g.forEach(function (otherId) {
+    if (otherId === id) return;
+    var el = document.querySelector('[data-edit-id="' + otherId + '"], [data-resize-id="' + otherId + '"]');
+    if (!el || isLocked(otherId)) return;
+    out.push({ id: otherId, el: el, base: getPos(el) });
+  });
+  return out;
+}
+
+/**
+ * Whether id is currently queued for grouping.
+ * @param id the element's data-edit-id or data-resize-id
+ * @return true if it's in SELECTED_IDS
+ */
+function isSelected(id) {
+  return SELECTED_IDS.indexOf(id) !== -1;
+}
+
+/**
+ * Adds or removes id from the current grouping selection (shift-click, see
+ * wireTextField()/the drag-anywhere mousedown handler in wireResizable()),
+ * repainting the .multi-selected highlight either way.
+ * @param id the element's data-edit-id or data-resize-id
+ */
+function toggleSelected(id) {
+  if (!id) return;
+  var i = SELECTED_IDS.indexOf(id);
+  if (i === -1) SELECTED_IDS.push(id); else SELECTED_IDS.splice(i, 1);
+  updateSelectionHighlight();
+}
+
+/** Clears the current grouping selection (Escape), repainting the highlight. */
+function clearSelection() {
+  SELECTED_IDS = [];
+  updateSelectionHighlight();
+}
+
+/**
+ * Repaints the .multi-selected outline (css/style.css) onto exactly the
+ * elements currently in SELECTED_IDS, clearing it from anything else that
+ * still carries it from a moment ago.
+ */
+function updateSelectionHighlight() {
+  document.querySelectorAll(".multi-selected").forEach(function (el) { el.classList.remove("multi-selected"); });
+  SELECTED_IDS.forEach(function (id) {
+    document.querySelectorAll('[data-edit-id="' + id + '"], [data-resize-id="' + id + '"]').forEach(function (el) {
+      el.classList.add("multi-selected");
+    });
+  });
+}
+
+/**
+ * Ties the given ids together into a new group (right-click > "Group N
+ * elements"): any of them already in another group is pulled out of that
+ * one first, so groups never overlap.
+ * @param ids the ids to group (2 or more)
+ * @return the new group, the same array passed in
+ */
+function createGroup(ids) {
+  ids = ids.slice();
+  GROUPS = GROUPS.map(function (g) { return g.filter(function (id) { return ids.indexOf(id) === -1; }); })
+    .filter(function (g) { return g.length > 1; });
+  GROUPS.push(ids);
+  saveGroups(GROUPS);
+  return ids;
+}
+
+/**
+ * Dissolves whichever group id belongs to, if any (right-click > "Ungroup").
+ * @param id an id in the group to dissolve
+ * @return the dissolved group's ids, or null if id wasn't grouped
+ */
+function dissolveGroup(id) {
+  var g = groupOf(id);
+  if (!g) return null;
+  GROUPS = GROUPS.filter(function (x) { return x !== g; });
+  saveGroups(GROUPS);
+  return g;
+}
+
+/**
+ * Persists the whole group list into the preview snapshot, the same
+ * localStorage draft every other override here uses. Rewritten wholesale,
+ * same as saveLayerOrder(), since GROUPS is always the full, current list.
+ * @param groups GROUPS
+ */
+function saveGroups(groups) {
+  var raw;
+  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  snapshot.groups = groups;
+  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
+ * Loads content.groups into the in-memory GROUPS on every load, live site
+ * included (though grouping only ever matters inside the visual editor,
+ * this keeps it consistent with every other applyXOverrides() here).
+ * @param groups content.groups
+ */
+function applyGroups(groups) {
+  GROUPS = (groups || []).map(function (g) { return g.slice(); });
+}
+
+/**
+ * Pushes one undo entry for a group move/nudge (see the drag-anywhere
+ * mousedown handler and the arrow-key nudge handler in wireResizable()):
+ * drops any member that didn't actually move (eg a locked or missing one
+ * never included to begin with), and collapses to a plain "move" entry
+ * when only one member actually moved, so an ungrouped drag's undo history
+ * looks exactly like it always has.
+ * @param moves [{id, before, after}], one entry per member that was moved
+ */
+function pushGroupMoveUndo(moves) {
+  var real = moves.filter(function (m) { return m.before.tx !== m.after.tx || m.before.ty !== m.after.ty; });
+  if (!real.length) return;
+  if (real.length === 1) {
+    EDIT_UNDO.push({ type: "move", id: real[0].id, before: real[0].before, after: real[0].after });
+  } else {
+    EDIT_UNDO.push({ type: "groupmove", moves: real });
+  }
+  EDIT_REDO.length = 0;
 }
 
 /* every custom element a ta has added via the right-click "Add element"
@@ -2729,7 +3163,7 @@ function copyDuplicateOverrides(pairs) {
   try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
   var snap;
   try { snap = raw ? JSON.parse(raw) : {}; } catch (e) { snap = {}; }
-  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "radius", "border", "links"];
+  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "radius", "border", "links"];
   pairs.forEach(function (p) {
     plainMaps.forEach(function (m) {
       if (snap[m] && snap[m][p.old] !== undefined) {
@@ -2996,7 +3430,12 @@ function renderCtxMenuRoot() {
       '</button>' +
       '<button type="button" data-fixed-toggle="1">' +
       (isFixed(CTX_TARGET_ID) ? "Remove from navbar" : "Promote to navbar") +
-      '</button>';
+      '</button>' +
+      (groupOf(CTX_TARGET_ID) ? '<button type="button" data-ungroup="1">Ungroup</button>' : "");
+  }
+  if (SELECTED_IDS.length >= 2) {
+    toggleHtml += '<div class="ctx-title">Selection</div>' +
+      '<button type="button" data-group="1">Group ' + SELECTED_IDS.length + ' elements</button>';
   }
   CTX_MENU.innerHTML =
     toggleHtml +
@@ -3036,6 +3475,27 @@ function renderCtxMenuRoot() {
       toggleFixed(CTX_TARGET_ID);
       EDIT_UNDO.push({ type: "fixed", id: CTX_TARGET_ID });
       EDIT_REDO.length = 0;
+      hideCtxMenu();
+    });
+  }
+  var ungroupBtn = CTX_MENU.querySelector("[data-ungroup]");
+  if (ungroupBtn) {
+    ungroupBtn.addEventListener("click", function () {
+      var g = dissolveGroup(CTX_TARGET_ID);
+      if (g) {
+        EDIT_UNDO.push({ type: "ungroup", ids: g });
+        EDIT_REDO.length = 0;
+      }
+      hideCtxMenu();
+    });
+  }
+  var groupBtn = CTX_MENU.querySelector("[data-group]");
+  if (groupBtn) {
+    groupBtn.addEventListener("click", function () {
+      var ids = createGroup(SELECTED_IDS);
+      EDIT_UNDO.push({ type: "group", ids: ids });
+      EDIT_REDO.length = 0;
+      clearSelection();
       hideCtxMenu();
     });
   }
@@ -3358,6 +3818,7 @@ function wireAddElementMenu() {
     if (CTX_MENU && CTX_MENU.classList.contains("show")) hideCtxMenu();
     if (LAYER_MENU && LAYER_MENU.classList.contains("show")) hideLayerMenu();
     if (STYLE_MENU && STYLE_MENU.classList.contains("show")) hideStyleMenu();
+    if (SELECTED_IDS.length) clearSelection();
   });
 }
 
@@ -3381,12 +3842,49 @@ function wireResizable() {
   buildRing();
   document.addEventListener("mouseover", function (e) {
     if (RING_DRAGGING) return;
-    if (RING.contains(e.target)) return;
+    if (RING.contains(e.target)) {
+      /* back on the ring's own frame/handles: whatever switch-away might
+         still be pending from a moment ago (see below) is moot now, cancel
+         it so it can't fire later and yank the ring out from under a click
+         that's about to land right here */
+      clearTimeout(RING_HOVER_TIMER);
+      return;
+    }
     var t = e.target.closest ? e.target.closest(RESIZABLE_SEL) : null;
-    if (t && t !== RING_EL) {
+    if (!t || t === RING_EL) {
+      /* back on the currently selected element itself: same cancellation,
+         see the pending-timer note below for why this matters just as much
+         as the RING.contains(e.target) case above */
+      clearTimeout(RING_HOVER_TIMER);
+      return;
+    }
+    /* hover-intent delay, not an immediate switch: the ring's own handles
+       (.lyh/.sth/.delh, all tucked into a corner of the CURRENTLY selected
+       element) often sit some real screen distance from wherever the mouse
+       was a moment ago (eg the ta just clicked an "Add element" menu item,
+       or is coming back from a popover), and the straight-line mouse path
+       to reach them can cross other tracked elements (a nested icon, a
+       neighbouring card) along the way. Each one fired mouseover and
+       reassigned RING_EL/repositioned the ring instantly, so by the time the
+       click on a handle actually landed it was often acting on whatever was
+       last grazed in transit, not the element the ring visibly showed a
+       moment before ("bring forward" etc quietly doing nothing to the right
+       thing, or the wrong thing, was this bug). Only committing the switch
+       after the cursor actually rests on the new element for a beat (same
+       "hover intent" trick every dropdown-menu library uses) means a quick
+       transit across other elements never reassigns anything, only an
+       actual, sustained hover over something new does.
+       Crucially, this ONLY works because the two early returns above also
+       clear a PENDING timer: without them, briefly grazing element B on the
+       way to element A's own handle (still schedules "switch to B" 120ms
+       out), then arriving back at A/A's ring before those 120ms elapse,
+       used to still let the stale "switch to B" fire later out of nowhere,
+       right as a click was landing on what looked like A's handle. */
+    clearTimeout(RING_HOVER_TIMER);
+    RING_HOVER_TIMER = setTimeout(function () {
       RING_EL = t;
       positionRing();
-    }
+    }, 120);
   });
   window.addEventListener("scroll", positionRing, true);
   window.addEventListener("resize", positionRing);
@@ -3399,12 +3897,21 @@ function wireResizable() {
     if (!el) return;
     /* mid-edit: leave the mouse to text selection/caret placement */
     if (el.isContentEditable) return;
+    /* shift-click toggles group-selection instead of starting a drag (see
+       toggleSelected()); a data-edit-id text field's own click handler
+       already does the same thing, this covers everything else (images,
+       icons, boxes, sections) that only ever goes through THIS handler */
+    if (e.shiftKey) { e.preventDefault(); e.stopPropagation(); toggleSelected(elId(el)); return; }
     /* locked: don't even start tracking a possible drag, see isLocked() */
     if (isLocked(elId(el))) return;
 
     var startX = e.clientX, startY = e.clientY;
     var base = getPos(el);
     var moving = false;
+    /* other members of el's group (see groupOf()), each moved by the exact
+       same delta as el so the group drags as one rigid unit; locked members
+       are left out, same rule a direct drag on them would already follow */
+    var groupMembers = groupMembersFor(elId(el));
 
     function onMove(ev) {
       if (!moving) {
@@ -3418,9 +3925,12 @@ function wireResizable() {
            text) ignore `transform` per spec until blockified, see
            startMoveDrag()'s doc comment */
         detachFromFlow(el);
+        groupMembers.forEach(function (m) { detachFromFlow(m.el); });
       }
       ev.preventDefault();
-      setOwnPos(el, base.tx + (ev.clientX - startX), base.ty + (ev.clientY - startY));
+      var dx = ev.clientX - startX, dy = ev.clientY - startY;
+      setOwnPos(el, base.tx + dx, base.ty + dy);
+      groupMembers.forEach(function (m) { setOwnPos(m.el, m.base.tx + dx, m.base.ty + dy); });
       positionRing();
     }
     function onUp() {
@@ -3433,7 +3943,13 @@ function wireResizable() {
       setTimeout(function () { JUST_DRAGGED = false; }, 0);
       var p = getPos(el);
       commitPosition(el);
-      pushMoveUndo(elId(el), base, p);
+      var moves = [{ id: elId(el), before: base, after: p }];
+      groupMembers.forEach(function (m) {
+        var mp = getPos(m.el);
+        commitPosition(m.el);
+        moves.push({ id: m.id, before: m.base, after: mp });
+      });
+      pushGroupMoveUndo(moves);
     }
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
@@ -3489,7 +4005,15 @@ function wireResizable() {
     setOwnPos(el, after.tx, after.ty);
     positionRing();
     commitPosition(el);
-    pushMoveUndo(elId(el), before, after);
+    var moves = [{ id: elId(el), before: before, after: after }];
+    groupMembersFor(elId(el)).forEach(function (m) {
+      detachFromFlow(m.el);
+      var mAfter = { tx: m.base.tx + d[0] * step, ty: m.base.ty + d[1] * step };
+      setOwnPos(m.el, mAfter.tx, mAfter.ty);
+      commitPosition(m.el);
+      moves.push({ id: m.id, before: m.base, after: mAfter });
+    });
+    pushGroupMoveUndo(moves);
   });
 }
 
@@ -3902,6 +4426,12 @@ function wireTextField(el) {
   var beforeEdit = "";
   el.addEventListener("click", function (e) {
     if (el.isContentEditable) return; /* already editing, let the caret land normally */
+    /* shift-click already toggled group-selection in the mousedown handler
+       above (wireResizable(), which runs for every tracked element,
+       text fields included, and fires before this click event does); this
+       just has to stop the edit from ALSO opening, not toggle a second
+       time (that would just cancel the mousedown handler's own toggle) */
+    if (e.shiftKey) { e.preventDefault(); e.stopPropagation(); return; }
     e.preventDefault();
     e.stopPropagation();
     beforeEdit = el.innerHTML;
@@ -4045,6 +4575,18 @@ function applyHistoryAction(action, side) {
     setElementHidden(action.id, side === "before");
     return;
   }
+  if (action.type === "groupdelete") {
+    action.ids.forEach(function (id) { setElementHidden(id, side === "after"); });
+    return;
+  }
+  if (action.type === "group") {
+    if (side === "after") createGroup(action.ids); else dissolveGroup(action.ids[0]);
+    return;
+  }
+  if (action.type === "ungroup") {
+    if (side === "after") dissolveGroup(action.ids[0]); else createGroup(action.ids);
+    return;
+  }
   if (action.type === "layer") {
     moveLayer(action.id, side === "after" ? action.dir : -action.dir);
     return;
@@ -4076,6 +4618,15 @@ function applyHistoryAction(action, side) {
     posEls.forEach(function (el) {
       if (action.type === "move") applyMoveSide(el, val);
       else applyResizeSide(el, val);
+    });
+    return;
+  }
+  if (action.type === "groupmove") {
+    action.moves.forEach(function (mv) {
+      var mvVal = side === "after" ? mv.after : mv.before;
+      document.querySelectorAll('[data-edit-id="' + mv.id + '"], [data-resize-id="' + mv.id + '"]').forEach(function (el) {
+        applyMoveSide(el, mvVal);
+      });
     });
     return;
   }
@@ -4142,6 +4693,17 @@ function applyHistoryAction(action, side) {
     }
     return;
   }
+  if (action.type === "tint") {
+    var tintEl = styleMenuElById(action.id);
+    if (!tintEl) return;
+    setElementTint(tintEl, val || "");
+    saveEditedTint(action.id, val || "");
+    if (STYLE_MENU_ID === action.id) {
+      STYLE_MENU.querySelector(".sm-tint").value = currentTintValue(tintEl);
+      STYLE_TINT_BEFORE = val || "";
+    }
+    return;
+  }
   if (action.type === "radius") {
     var radEl = styleMenuElById(action.id);
     if (!radEl) return;
@@ -4183,7 +4745,7 @@ function applyHistoryAction(action, side) {
     var opEl = styleMenuElById(action.id);
     if (!opEl) return;
     var pct = parseFloat(val) || 100;
-    opEl.style.opacity = (pct / 100).toFixed(2);
+    applyElementOpacity(opEl, pct / 100);
     saveEditedOpacity(action.id, pct / 100);
     if (STYLE_MENU_ID === action.id) {
       STYLE_MENU.querySelector(".sm-opacity").value = pct;
@@ -4417,6 +4979,24 @@ function saveEditedFill(id, value) {
 }
 
 /**
+ * Persists an image/video tint change from the style popover's Tint
+ * control into the preview snapshot, the same draft everything else here
+ * uses.
+ * @param id the element's data-resize-id
+ * @param value a css color string, or "" to remove the tint
+ */
+function saveEditedTint(id, value) {
+  var raw;
+  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  if (!snapshot.tint || typeof snapshot.tint !== "object") snapshot.tint = {};
+  if (!value) delete snapshot.tint[id];
+  else snapshot.tint[id] = value;
+  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
  * Persists a border-radius change from the style popover's Radius slider.
  * @param id the element's data-edit-id or data-resize-id
  * @param px a whole-number px value, 0 to clear back to the template default
@@ -4610,6 +5190,7 @@ document.addEventListener("DOMContentLoaded", function () {
       applyPositionOverrides(data.positions);
       applyColorOverrides(data.colors);
       applyFillOverrides(data.fill);
+      applyTintOverrides(data.tint);
       applyRadiusOverrides(data.radius);
       applyBorderOverrides(data.border);
       applyShadowOverrides(data.shadow);
@@ -4618,6 +5199,7 @@ document.addEventListener("DOMContentLoaded", function () {
       setFixedElements(data.fixed_elements);
       setLockedElements(data.locked);
       setLinks(data.links);
+      applyGroups(data.groups);
       applyLayerOrder(data.layers);
       applyFixedHighlight();
       applyLinkHighlight();

@@ -1630,9 +1630,11 @@ function renderProfiles() {
       html += '<span class="shared-flag" title="Every staff member can see and edit this profile">' + SHARE_SVG_CHIP + 'shared</span>' +
         '<button class="btn btn-ghost pr-unshare" type="button">Unshare</button>';
     }
-    html += '<span class="prof-btns">' +
-      '<button class="btn btn-ghost pr-edit" type="button"' + (open ? " disabled" : "") + '>' +
-      (open ? "Editing" : "Edit") + '</button>';
+    html += '<span class="prof-btns">';
+    if (!p.is_default) {
+      html += '<button class="btn btn-ghost pr-edit" type="button"' + (open ? " disabled" : "") + '>' +
+        (open ? "Editing" : "Edit") + '</button>';
+    }
     if (p.mine) {
       if (!p.shared) html += '<button class="btn btn-ghost pr-share" type="button">Share</button>';
       html += '<button class="btn btn-ghost pr-del" type="button">Delete</button>';
@@ -1656,7 +1658,8 @@ function renderProfiles() {
       });
     });
 
-    row.querySelector(".pr-edit").addEventListener("click", function () {
+    var editBtn = row.querySelector(".pr-edit");
+    if (editBtn) editBtn.addEventListener("click", function () {
       if (EDITING && EDITING.id === p.id) return;
       if (!confirm('Open "' + profileLabel(p) + '" in the editor? Unsaved edits here are discarded.')) return;
       openProfile(p);

@@ -207,6 +207,11 @@ DEFAULT_CONTENT = {
     # ids with the shared drop-shadow (style popover's Shadow checkbox)
     # turned on, a flat list, same shape as fixed_elements/locked.
     "shadow": [],
+    # right-click "Add link"/"Edit link" targets, keyed by data-edit-id/
+    # data-resize-id, a url string. a real <a> (a button, the brand link)
+    # gets a real href; anything else gets a navigate-on-click listener,
+    # see applyOneLink() in js/main.js.
+    "links": {},
 }
 
 

@@ -915,18 +915,93 @@ function applyFixedHighlight() {
 }
 
 /**
- * Marks every tagged element that's an actual link (`<a>`) with .edit-link
- * (yellow hitbox, orange if it's also fixed, see css/style.css), so a
- * clickable wrapper (eg the brand link around the logo image and brand
- * text) reads as visually distinct from the plain content nested inside
- * it, instead of just another same-colored overlapping box. A tag never
- * changes at runtime, so this only needs to run once per load, unlike
- * applyFixedHighlight() which also reruns on every toggleFixed().
+ * Marks every tagged element that's either an actual link (`<a>`) or has a
+ * right-click "Add link" url set (see LINKS/applyOneLink()) with
+ * .edit-link (yellow hitbox, orange if it's also fixed, see
+ * css/style.css), so anything that navigates when clicked reads as
+ * visually distinct from the plain content nested inside it, instead of
+ * just another same-colored overlapping box. Reruns on every
+ * setElementLink(), same as applyFixedHighlight() reruns on every
+ * toggleFixed().
  */
 function applyLinkHighlight() {
   document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
-    el.classList.toggle("edit-link", el.tagName === "A");
+    el.classList.toggle("edit-link", el.tagName === "A" || !!LINKS[elId(el)]);
   });
+}
+
+/* every id with a right-click "Add link"/"Edit link" url set, mirrors
+   content.links exactly, see setLinks() */
+var LINKS = {};
+
+/**
+ * Makes one element actually navigate to url when clicked. A real `<a>`
+ * tag (a button, the brand link) just gets a real href, same as any
+ * ordinary link, so the browser's own affordances (new tab, status bar
+ * preview, ctrl-click) work normally; inside the visual editor,
+ * wireClickToEdit()'s own click handler already preventDefaults before
+ * this ever fires (see wireTextField()), so a linked button never
+ * navigates away mid-edit with no extra handling needed here. Anything
+ * else (a card, an image, a plain text field, none of which have a
+ * navigable href of their own) gets a click listener that navigates
+ * instead, gated on !isEditMode() so clicking it in the visual editor
+ * still selects/edits normally rather than leaving the page. Guarded by
+ * a JS property, not a dataset attribute: cloneNode() (see
+ * duplicateElement()) copies attributes but never properties or
+ * listeners, so a freshly duplicated element always gets its own real
+ * listener re-wired here rather than trusting a copied flag that would
+ * otherwise look "already wired" with no actual listener behind it.
+ * @param el the element
+ * @param url the link target, or "" to remove it
+ */
+function applyOneLink(el, url) {
+  if (el.tagName === "A") {
+    if (url) el.href = url; else el.removeAttribute("href");
+    return;
+  }
+  if (!el._hrLinkWired) {
+    el._hrLinkWired = true;
+    el.addEventListener("click", function () {
+      if (isEditMode()) return;
+      if (el._hrLinkUrl) window.location.href = el._hrLinkUrl;
+    });
+  }
+  el._hrLinkUrl = url || "";
+  el.style.cursor = url ? "pointer" : "";
+}
+
+/**
+ * Rebuilds LINKS from a saved content.links map and applies every entry to
+ * its element (see applyOneLink()), same load-time pattern as
+ * setFixedElements()/setLockedElements().
+ * @param links content.links, {id: url string}
+ */
+function setLinks(links) {
+  LINKS = links ? Object.assign({}, links) : {};
+  document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
+    var url = LINKS[elId(el)];
+    if (url) applyOneLink(el, url);
+  });
+}
+
+/**
+ * Sets (or clears, with url "") the link on one element from the
+ * right-click menu's link editor: updates the live element, LINKS, the
+ * preview snapshot, the edit-mode highlight, and pushes an undo entry.
+ * @param id the element's data-edit-id or data-resize-id
+ * @param url the link target, or "" to remove it
+ */
+function setElementLink(id, url) {
+  var before = LINKS[id] || "";
+  var after = url || "";
+  if (before === after) return;
+  var el = styleMenuElById(id);
+  if (el) applyOneLink(el, after);
+  if (after) LINKS[id] = after; else delete LINKS[id];
+  saveEditedLink(id, after);
+  applyLinkHighlight();
+  EDIT_UNDO.push({ type: "link", id: id, before: before, after: after });
+  EDIT_REDO.length = 0;
 }
 
 /**
@@ -2383,9 +2458,9 @@ function freezeFreeElement(el) {
  * style, undo) needs zero special-casing for anything created here. A
  * "button" is a single tagged `<a>` (data-edit-id right on it, no separate
  * inner textbox), same "the button IS the textbox" rule every other CTA on
- * the site follows; its href stays "#" (dead, like the login page's own
- * "Sign up" link) with the entered link only stashed on the dataset for
- * now, real navigation is a later step. An "image" with a `d.url` is a real
+ * the site follows; the link entered when adding it becomes a real href
+ * via the same right-click "Add link" mechanism every other element uses
+ * (see LINKS/applyOneLink(), addCustomElement()). An "image" with a `d.url` is a real
  * uploaded photo (see uploadEditorFile()/renderCtxMenuImagePicker()), a plain
  * `<img>` with the site's usual object-fit: cover so its box dictates the
  * crop rather than stretching the pixels; one saved before real uploads
@@ -2410,10 +2485,12 @@ function buildCustomElement(d) {
     el = document.createElement("a");
     el.className = "btn";
     el.href = "#";
-    el.addEventListener("click", function (e) { if (!el.isContentEditable) e.preventDefault(); });
     el.setAttribute("data-edit-id", d.id);
     el.textContent = "Button";
-    if (d.href) el.dataset.pendingHref = d.href;
+    /* a real href now (see LINKS/applyOneLink()): wireClickToEdit()'s own
+       click handler already preventDefaults before this ever fires while
+       the visual editor's open (see wireTextField()), so it's never a
+       dead "#" link outside the editor the way it used to be */
   } else if (d.kind === "box") {
     el = document.createElement("div");
     el.setAttribute("data-resize-id", d.id);
@@ -2634,7 +2711,7 @@ function copyDuplicateOverrides(pairs) {
   try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
   var snap;
   try { snap = raw ? JSON.parse(raw) : {}; } catch (e) { snap = {}; }
-  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "radius", "border"];
+  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "radius", "border", "links"];
   pairs.forEach(function (p) {
     plainMaps.forEach(function (m) {
       if (snap[m] && snap[m][p.old] !== undefined) {
@@ -2705,6 +2782,15 @@ function duplicateElement(sourceEl) {
   saveDuplicateEntry(sourceId, suffix);
   built.pairs.forEach(function (p) {
     if (p.el.hasAttribute("data-edit-id")) wireTextField(p.el);
+    /* cloneNode() copies el.href/attributes but never JS listeners, so a
+       cloned linked element (see LINKS/applyOneLink()) needs its own
+       click listener re-wired here even though copyDuplicateOverrides()
+       already copied the url itself into the snapshot */
+    var linkUrl = LINKS[p.old];
+    if (linkUrl) {
+      LINKS[p.new] = linkUrl;
+      applyOneLink(p.el, linkUrl);
+    }
   });
   var rootNewId = sourceId + suffix;
   LAYER_ORDER.push(rootNewId);
@@ -2808,7 +2894,6 @@ function addCustomElement(kind, x, y, extra) {
   var uid = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   var d = { id: (kind === "icon" ? "icon.custom." : "custom." + kind + ".") + uid, kind: kind, left: Math.round(x), top: Math.round(y) };
   if (kind === "icon") { d.icon = extra.icon; d.url = extra.url; }
-  if (kind === "button") d.href = extra.href || "";
   if (kind === "image" || kind === "video") d.url = extra.url;
   var el = buildCustomElement(d);
   freezeFreeElement(el);
@@ -2820,6 +2905,16 @@ function addCustomElement(kind, x, y, extra) {
   applyLayerOrder(LAYER_ORDER);
   saveLayerOrder(LAYER_ORDER);
   if (kind === "text" || kind === "button") wireTextField(el);
+  /* a button's own initial link (see LINKS/applyOneLink()) is part of its
+     creation, not a separately undoable step: undoing the "add" below
+     just hides the button, href and all, so redoing brings the same link
+     straight back with no extra bookkeeping needed here */
+  if (kind === "button" && extra.href) {
+    applyOneLink(el, extra.href);
+    LINKS[d.id] = extra.href;
+    saveEditedLink(d.id, extra.href);
+    applyLinkHighlight();
+  }
   /* undoing an add just hides the new element again (setElementHidden(),
      same "before" state a delete leaves behind), rather than actually
      unbuilding it: the element and its content.custom_elements entry both
@@ -2875,6 +2970,9 @@ function renderCtxMenuRoot() {
     toggleHtml =
       '<div class="ctx-title">This element</div>' +
       (isSpecial ? "" : '<button type="button" data-dup="1">Duplicate</button>') +
+      '<button type="button" data-link-edit="1">' +
+      (LINKS[CTX_TARGET_ID] ? "Edit link" : "Add link") +
+      '</button>' +
       '<button type="button" data-lock-toggle="1">' +
       (isLocked(CTX_TARGET_ID) ? "Unlock element" : "Lock element") +
       '</button>' +
@@ -2901,6 +2999,10 @@ function renderCtxMenuRoot() {
       hideCtxMenu();
     });
   }
+  var linkEditBtn = CTX_MENU.querySelector("[data-link-edit]");
+  if (linkEditBtn) {
+    linkEditBtn.addEventListener("click", function () { renderCtxMenuLinkEditor(); });
+  }
   var lockBtn = CTX_MENU.querySelector("[data-lock-toggle]");
   if (lockBtn) {
     lockBtn.addEventListener("click", function () {
@@ -2919,6 +3021,38 @@ function renderCtxMenuRoot() {
       hideCtxMenu();
     });
   }
+}
+
+/**
+ * Swaps the menu into its link-editor sub-view (the right-click menu's
+ * "Add link"/"Edit link"), for whatever element CTX_TARGET_ID/CTX_TARGET_EL
+ * currently point at. Works the same for every element kind: a real `<a>`
+ * (a button, the brand link) just gets a real href (see applyOneLink()),
+ * anything else gets a click listener that navigates outside the editor.
+ * A "Remove link" button only shows once one's actually set, same
+ * pattern as the style popover's color/fill reset buttons.
+ */
+function renderCtxMenuLinkEditor() {
+  var id = CTX_TARGET_ID;
+  var current = LINKS[id] || "";
+  CTX_MENU.innerHTML =
+    '<div class="ctx-title">Element link</div>' +
+    '<input type="url" class="ctx-link-input" placeholder="https://...">' +
+    '<button type="button" class="ctx-link-save">Save</button>' +
+    (current ? '<button type="button" class="ctx-link-remove">Remove link</button>' : "");
+  var input = CTX_MENU.querySelector(".ctx-link-input");
+  input.value = current;
+  input.focus();
+  function save() {
+    setElementLink(id, input.value.trim());
+    hideCtxMenu();
+  }
+  CTX_MENU.querySelector(".ctx-link-save").addEventListener("click", save);
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); save(); }
+  });
+  var rm = CTX_MENU.querySelector(".ctx-link-remove");
+  if (rm) rm.addEventListener("click", function () { setElementLink(id, ""); hideCtxMenu(); });
 }
 
 /**
@@ -3037,13 +3171,16 @@ function fetchSvgMarkup(url) {
 }
 
 /**
- * Swaps the menu into its "Add button" sub-view: a link field for later
- * (see buildCustomElement()'s doc comment), not a live one yet.
+ * Swaps the menu into its "Add button" sub-view: a link field, wired to a
+ * real href the moment the button's created (see addCustomElement()),
+ * same right-click "Add link" mechanism every other element uses. Left
+ * blank, the button just gets no link yet, editable later the same way
+ * any element's link is (right-click > Add link).
  */
 function renderCtxMenuButtonLink() {
   CTX_MENU.innerHTML =
     '<div class="ctx-title">Add button</div>' +
-    '<input type="url" class="ctx-link-input" placeholder="Link (not active yet)">' +
+    '<input type="url" class="ctx-link-input" placeholder="Link (optional)">' +
     '<button type="button" class="ctx-link-add">Add</button>';
   var input = CTX_MENU.querySelector(".ctx-link-input");
   input.focus();
@@ -3443,6 +3580,7 @@ function buildTextToolbar() {
     '<button type="button" class="tt-bold" title="Bold"><b>B</b></button>' +
     '<button type="button" class="tt-italic" title="Italic"><i>I</i></button>' +
     '<button type="button" class="tt-underline" title="Underline"><u>U</u></button>' +
+    '<input type="color" class="tt-color" title="Text color (selection)">' +
     '<span class="tt-sep"></span>' +
     '<button type="button" class="tt-align" data-align="left" title="Align left">' + ALIGN_ICONS.left + '</button>' +
     '<button type="button" class="tt-align" data-align="center" title="Align center">' + ALIGN_ICONS.center + '</button>' +
@@ -3482,6 +3620,21 @@ function buildTextToolbar() {
       document.execCommand(pair[1]);
       updateTextToolbarState();
     });
+  });
+
+  /* a native <input type=color> can't have its mousedown swallowed without
+     breaking the picker itself, same reason the font <select> doesn't
+     either (see below): it needs to actually take focus to open. The
+     field's own blur handler already treats any focus landing inside
+     TEXT_TOOLBAR as "don't end the edit", so no extra plumbing is needed
+     to keep the edit alive while the picker's open. */
+  var colorInput = TEXT_TOOLBAR.querySelector(".tt-color");
+  colorInput.addEventListener("mousedown", function (e) { e.stopPropagation(); });
+  colorInput.addEventListener("input", function () {
+    document.execCommand("foreColor", false, colorInput.value);
+  });
+  colorInput.addEventListener("change", function () {
+    if (TEXT_TOOLBAR_EL) TEXT_TOOLBAR_EL.focus();
   });
 
   TEXT_TOOLBAR.querySelectorAll(".tt-align").forEach(function (btn) {
@@ -3656,6 +3809,9 @@ function updateTextToolbarState() {
   TEXT_TOOLBAR.querySelectorAll(".tt-align").forEach(function (btn) {
     btn.classList.toggle("active", TEXT_TOOLBAR_EL.style.textAlign === btn.getAttribute("data-align"));
   });
+  var curColor = "";
+  try { curColor = document.queryCommandValue("foreColor"); } catch (e) {}
+  TEXT_TOOLBAR.querySelector(".tt-color").value = rgbToHex(curColor) || "#000000";
 }
 
 /**
@@ -3946,6 +4102,15 @@ function applyHistoryAction(action, side) {
       STYLE_MENU.querySelector(".sm-color").value = currentColorValue(colorEl);
       STYLE_COLOR_BEFORE = val || "";
     }
+    return;
+  }
+  if (action.type === "link") {
+    var linkEl = styleMenuElById(action.id);
+    if (!linkEl) return;
+    applyOneLink(linkEl, val || "");
+    if (val) LINKS[action.id] = val; else delete LINKS[action.id];
+    saveEditedLink(action.id, val || "");
+    applyLinkHighlight();
     return;
   }
   if (action.type === "fill") {
@@ -4267,6 +4432,23 @@ function saveEditedBorder(id, w, color) {
 }
 
 /**
+ * Persists a right-click "Add link"/"Edit link" change into the preview
+ * snapshot, the same draft everything else here uses.
+ * @param id the element's data-edit-id or data-resize-id
+ * @param url the link target, or "" to clear it
+ */
+function saveEditedLink(id, url) {
+  var raw;
+  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  if (!snapshot.links || typeof snapshot.links !== "object") snapshot.links = {};
+  if (!url) delete snapshot.links[id];
+  else snapshot.links[id] = url;
+  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
  * Persists the shared drop-shadow toggle (see BOX_SHADOW_VALUE) into the
  * preview snapshot as a flat list of ids, the same shape content.locked/
  * content.fixed_elements already use for a per-id boolean flag.
@@ -4417,6 +4599,7 @@ document.addEventListener("DOMContentLoaded", function () {
       applyHiddenOverrides(data.hidden);
       setFixedElements(data.fixed_elements);
       setLockedElements(data.locked);
+      setLinks(data.links);
       applyLayerOrder(data.layers);
       applyFixedHighlight();
       applyLinkHighlight();

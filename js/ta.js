@@ -120,7 +120,10 @@ function seed() {
     border: {},
     /* ids with the shared drop-shadow (style popover's Shadow checkbox)
        turned on, flat list, same shape as fixed_elements/locked */
-    shadow: []
+    shadow: [],
+    /* right-click "Add link"/"Edit link" targets, keyed by data-edit-id/
+       data-resize-id, a url string, see applyOneLink() in js/main.js */
+    links: {}
   };
 }
 
@@ -258,6 +261,7 @@ function normalizeState() {
   if (!STATE.radius || typeof STATE.radius !== "object") STATE.radius = {};
   if (!STATE.border || typeof STATE.border !== "object") STATE.border = {};
   if (!Array.isArray(STATE.shadow)) STATE.shadow = [];
+  if (!STATE.links || typeof STATE.links !== "object") STATE.links = {};
   /* footer contact line used to be its own field, edited from a dedicated
      input in this section; now it's click-to-edit like the rest of the
      landing page copy, so fold any already-saved value in once and stop

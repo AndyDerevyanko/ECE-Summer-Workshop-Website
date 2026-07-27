@@ -1549,6 +1549,52 @@ body.edit-mode .apply-bob { animation: none; }
   flex-shrink: 0;
 }
 
+/* datetime element controls in the style popover (buildStyleMenu()): its
+   "Format string"/"Target" labels run longer than a color swatch row's, and
+   its font/format/pattern/target fields fill the rest of the row */
+.ctx-menu .sm-dt-row label { width: 84px; white-space: nowrap; }
+.ctx-menu .sm-dt-font,
+.ctx-menu .sm-dt-format,
+.ctx-menu .sm-dt-pattern,
+.ctx-menu .sm-dt-target {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-body);
+  font-size: 12px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+}
+/* the small A-/A+/align buttons override .ctx-menu button's full-row look */
+.ctx-menu .sm-dt-row button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  justify-content: center;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  font-size: 12px;
+  line-height: 1;
+}
+.ctx-menu .sm-dt-row button.active { background: var(--accent); color: #fff; }
+.ctx-menu .sm-dt-align svg { width: 15px; height: 15px; display: block; }
+
+/* a datetime custom element (buildCustomElement()'s "datetime" branch): a
+   plain text element, styled like the site's countdown digits by default
+   but fully restyleable (font/size/color/align) via the style popover.
+   white-space: pre keeps the runs of spaces a strftime pattern like
+   "%D    %H    %M    %S" uses to space its columns. */
+.dt-el {
+  font-family: var(--font-mono);
+  font-size: 2.4rem;
+  color: var(--accent);
+  white-space: pre;
+  line-height: 1.2;
+}
+
 /* frozen slot an element leaves behind when its first resize detaches it
    from flow (detachFromFlow() in js/main.js) */
 .free-wrap { position: relative; }

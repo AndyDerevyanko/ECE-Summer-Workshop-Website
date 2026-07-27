@@ -317,6 +317,143 @@ function startCountdown(target) {
   setInterval(tick, 1000);
 }
 
+/* month/weekday names for the strftime formatter below. site is english
+   only, so these are hardcoded rather than pulled from Intl (keeps the
+   formatter predictable and locale-independent). */
+var DT_MONTHS = ["January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December"];
+var DT_MONTHS_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+var DT_DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+var DT_DAYS_ABBR = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/* default strftime pattern per datetime format, used when a datetime
+   element has no custom pattern of its own (see datetimeText()). */
+var DT_DEFAULT_PATTERNS = {
+  countdown: "%D    %H    %M    %S",
+  datetime: "%b %-d, %Y, %-I:%M %p",
+  date: "%b %-d, %Y",
+  time: "%-I:%M %p"
+};
+
+/**
+ * A small strftime for the static datetime formats (date/time/datetime),
+ * enough tokens to cover the common cases without pulling in a date
+ * library (vanilla JS only, see CLAUDE.md). "%-x" is the non-zero-padded
+ * variant of "%x", "%%" is a literal percent, an unknown token is left as
+ * written so a typo is visible rather than silently dropped.
+ * @param date the Date to format
+ * @param pattern the strftime pattern string
+ * @return the formatted string
+ */
+function strftimeFormat(date, pattern) {
+  var pad = function (n) { return (n < 10 ? "0" : "") + n; };
+  var h24 = date.getHours();
+  var h12 = h24 % 12 || 12;
+  var map = {
+    "Y": date.getFullYear(), "y": pad(date.getFullYear() % 100),
+    "m": pad(date.getMonth() + 1), "-m": date.getMonth() + 1,
+    "B": DT_MONTHS[date.getMonth()], "b": DT_MONTHS_ABBR[date.getMonth()],
+    "d": pad(date.getDate()), "-d": date.getDate(),
+    "A": DT_DAYS[date.getDay()], "a": DT_DAYS_ABBR[date.getDay()],
+    "H": pad(h24), "-H": h24, "I": pad(h12), "-I": h12,
+    "M": pad(date.getMinutes()), "S": pad(date.getSeconds()),
+    "p": h24 < 12 ? "AM" : "PM", "P": h24 < 12 ? "am" : "pm"
+  };
+  return pattern.replace(/%(-?[A-Za-z%])/g, function (whole, tok) {
+    if (tok === "%") return "%";
+    return map[tok] !== undefined ? String(map[tok]) : whole;
+  });
+}
+
+/**
+ * The countdown counterpart to strftimeFormat(): tokens are the remaining
+ * duration (not a wall clock), %D total days, %H/%M/%S the hour/minute/
+ * second remainders (zero-padded), %T total hours, "%-x" the non-padded
+ * variant of each. A negative (already-past) diff clamps to zero.
+ * @param diffMs milliseconds remaining until the target
+ * @param pattern the pattern string
+ * @return the formatted countdown string
+ */
+function countdownFormat(diffMs, pattern) {
+  if (diffMs < 0) diffMs = 0;
+  var pad = function (n) { return (n < 10 ? "0" : "") + n; };
+  var totalDays = Math.floor(diffMs / 86400000);
+  var totalHours = Math.floor(diffMs / 3600000);
+  var h = Math.floor((diffMs % 86400000) / 3600000);
+  var m = Math.floor((diffMs % 3600000) / 60000);
+  var s = Math.floor((diffMs % 60000) / 1000);
+  var map = {
+    "D": totalDays, "-D": totalDays, "T": totalHours, "-T": totalHours,
+    "H": pad(h), "-H": h, "M": pad(m), "-M": m, "S": pad(s), "-S": s
+  };
+  return pattern.replace(/%(-?[A-Za-z%])/g, function (whole, tok) {
+    if (tok === "%") return "%";
+    return map[tok] !== undefined ? String(map[tok]) : whole;
+  });
+}
+
+/**
+ * Produces one datetime custom element's displayed string from its own
+ * {target, format, strftime} data. A blank/absent strftime falls back to
+ * that format's default pattern (DT_DEFAULT_PATTERNS). Countdown counts
+ * toward the target from nowMs; every other format renders the target
+ * timestamp itself (a fixed value, never ticks).
+ * @param d the element's custom_elements entry
+ * @param nowMs current time in ms (only used by countdown)
+ * @return the string to display, "" if the target doesn't parse
+ */
+function datetimeText(d, nowMs) {
+  var format = d.format || "countdown";
+  var pattern = (d.strftime && d.strftime.trim()) ? d.strftime : (DT_DEFAULT_PATTERNS[format] || DT_DEFAULT_PATTERNS.countdown);
+  var target = new Date(d.target || Date.now());
+  if (isNaN(target.getTime())) return "";
+  if (format === "countdown") return countdownFormat(target.getTime() - (nowMs || Date.now()), pattern);
+  return strftimeFormat(target, pattern);
+}
+
+/**
+ * Whether a datetime format needs a live ticking interval: only countdown
+ * changes second to second, the static date/time formats render the fixed
+ * target once and never move.
+ * @param format the datetime element's format
+ * @return true if it should tick
+ */
+function datetimeIsLive(format) {
+  return (format || "countdown") === "countdown";
+}
+
+/**
+ * Formats a Date as the local "YYYY-MM-DDTHH:mm" string a
+ * `<input type="datetime-local">` expects for its value, in the visitor's
+ * own local time (not UTC, unlike toISOString()).
+ * @param d the Date
+ * @return the datetime-local input value
+ */
+function toDatetimeLocalValue(d) {
+  var pad = function (n) { return (n < 10 ? "0" : "") + n; };
+  return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) +
+    "T" + pad(d.getHours()) + ":" + pad(d.getMinutes());
+}
+
+/**
+ * (Re)paints one datetime element's text from its own data and, for a live
+ * (countdown) format, (re)starts its per-element ticking interval, clearing
+ * any previous one first so calling this again (eg after a format/pattern
+ * change in the style popover) never leaks a timer. The element is a plain
+ * text element (styleable like any text field, see .dt-el / colorTarget()),
+ * not the hero countdown's boxed clock: the standalone "Date/time" element
+ * is deliberately just the reformattable time text, the "Countdown timer"
+ * object is what composes it with a box and labels.
+ * @param el the datetime element (data-datetime already set)
+ * @param d its custom_elements entry ({target, format, strftime})
+ */
+function renderDatetimeContent(el, d) {
+  if (el._dtInterval) { clearInterval(el._dtInterval); el._dtInterval = null; }
+  var paint = function () { el.textContent = datetimeText(d, Date.now()); };
+  paint();
+  if (datetimeIsLive(d.format)) el._dtInterval = setInterval(paint, 1000);
+}
+
 /**
  * Strips a link's href and swallows its clicks, so it can't navigate the
  * preview iframe away to a page a real visitor there shouldn't reach.
@@ -687,8 +824,10 @@ function applySizeOverrides(sizes) {
  */
 function applyFontSizeOverrides(sizes) {
   sizes = sizes || {};
-  document.querySelectorAll("[data-edit-id]").forEach(function (el) {
-    var id = el.getAttribute("data-edit-id");
+  /* RESIZABLE_SEL, not just [data-edit-id]: a datetime element (data-resize-id)
+     is styleable like text too, see colorTarget()/the style popover */
+  document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
+    var id = elId(el);
     if (sizes[id]) el.style.fontSize = sizes[id];
   });
 }
@@ -703,8 +842,10 @@ function applyFontSizeOverrides(sizes) {
  */
 function applyTextStyleOverrides(styles) {
   styles = styles || {};
-  document.querySelectorAll("[data-edit-id]").forEach(function (el) {
-    var s = styles[el.getAttribute("data-edit-id")];
+  /* RESIZABLE_SEL, not just [data-edit-id]: a datetime element is styleable
+     like text too, see applyFontSizeOverrides() */
+  document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
+    var s = styles[elId(el)];
     if (!s) return;
     if (s.fontFamily) {
       /* a ta-uploaded font (s.fontUrl set) needs its @font-face declared
@@ -1575,6 +1716,10 @@ function isButtonEl(el) {
  */
 function colorTarget(el) {
   if (elKind(el) === "icon") return "icon";
+  /* a datetime element is text-like (its color paints el.style.color, its
+     digits/date text), even though it carries data-resize-id not
+     data-edit-id (its content is generated, see buildCustomElement()) */
+  if (el.hasAttribute("data-datetime")) return "text";
   if (el.hasAttribute("data-edit-id") && !isButtonEl(el)) return "text";
   return "bg";
 }
@@ -1858,6 +2003,10 @@ var STYLE_FILL_BEFORE = "";
 var STYLE_TINT_BEFORE = "";
 var STYLE_RADIUS_BEFORE = "0";
 var STYLE_BORDER_BEFORE = { w: 0, color: "#000000" };
+/* a datetime element's {target, format, strftime} right before the current
+   popover-session edit, so format/pattern/target changes push one undo
+   step each against the value they started from (see buildStyleMenu()) */
+var STYLE_DT_BEFORE = null;
 
 /* fixed, tasteful drop-shadow value every shadow-enabled box shares, one
    flat on/off toggle rather than a configurable blur/spread picker, same
@@ -1904,6 +2053,40 @@ function buildStyleMenu() {
       '<label>Shadow</label>' +
       '<input type="checkbox" class="sm-shadow">' +
     '</div>' +
+    '<div class="sm-row sm-dt-row sm-dt-font-row">' +
+      '<label>Font</label>' +
+      '<select class="sm-dt-font">' +
+        TEXT_FONTS.map(function (f) { return '<option value="' + f.value + '">' + f.label + '</option>'; }).join("") +
+      '</select>' +
+    '</div>' +
+    '<div class="sm-row sm-dt-row sm-dt-size-row">' +
+      '<label>Size</label>' +
+      '<button type="button" class="sm-dt-fs-dn">A-</button>' +
+      '<button type="button" class="sm-dt-fs-up">A+</button>' +
+    '</div>' +
+    '<div class="sm-row sm-dt-row sm-dt-align-row">' +
+      '<label>Align</label>' +
+      '<button type="button" class="sm-dt-align" data-align="left" title="Align left">' + ALIGN_ICONS.left + '</button>' +
+      '<button type="button" class="sm-dt-align" data-align="center" title="Align center">' + ALIGN_ICONS.center + '</button>' +
+      '<button type="button" class="sm-dt-align" data-align="right" title="Align right">' + ALIGN_ICONS.right + '</button>' +
+    '</div>' +
+    '<div class="sm-row sm-dt-row sm-dt-format-row">' +
+      '<label>Format</label>' +
+      '<select class="sm-dt-format">' +
+        '<option value="countdown">Countdown</option>' +
+        '<option value="datetime">Date &amp; time</option>' +
+        '<option value="date">Date only</option>' +
+        '<option value="time">Time only</option>' +
+      '</select>' +
+    '</div>' +
+    '<div class="sm-row sm-dt-row sm-dt-pattern-row">' +
+      '<label>Format string</label>' +
+      '<input type="text" class="sm-dt-pattern" placeholder="strftime, blank = default">' +
+    '</div>' +
+    '<div class="sm-row sm-dt-row sm-dt-target-row">' +
+      '<label>Target</label>' +
+      '<input type="datetime-local" class="sm-dt-target">' +
+    '</div>' +
     '<div class="sm-row">' +
       '<label>Opacity</label>' +
       '<input type="range" class="sm-opacity" min="10" max="100" step="1">' +
@@ -1927,9 +2110,16 @@ function buildStyleMenu() {
   var shadowInput = STYLE_MENU.querySelector(".sm-shadow");
   var opacityInput = STYLE_MENU.querySelector(".sm-opacity");
   var opacityVal = STYLE_MENU.querySelector(".sm-opacity-val");
+  var dtFont = STYLE_MENU.querySelector(".sm-dt-font");
+  var dtFormat = STYLE_MENU.querySelector(".sm-dt-format");
+  var dtPattern = STYLE_MENU.querySelector(".sm-dt-pattern");
+  var dtTarget = STYLE_MENU.querySelector(".sm-dt-target");
 
-  [colorInput, colorReset, textColorInput, textColorReset, fillInput, fillReset, tintInput, tintReset, radiusInput, borderW, borderColor, shadowInput, opacityInput].forEach(function (el) {
+  [colorInput, colorReset, textColorInput, textColorReset, fillInput, fillReset, tintInput, tintReset, radiusInput, borderW, borderColor, shadowInput, opacityInput, dtFont, dtFormat, dtPattern, dtTarget].forEach(function (el) {
     el.addEventListener("mousedown", function (e) { e.stopPropagation(); });
+  });
+  STYLE_MENU.querySelectorAll(".sm-dt-fs-dn, .sm-dt-fs-up, .sm-dt-align").forEach(function (btn) {
+    btn.addEventListener("mousedown", function (e) { e.stopPropagation(); });
   });
 
   colorInput.addEventListener("input", function () {
@@ -2141,6 +2331,85 @@ function buildStyleMenu() {
     }
     STYLE_OPACITY_BEFORE = after;
   });
+
+  /* font/size/align act on a datetime element exactly the way they act on a
+     text field (same save*() maps, keyed by the element's own id), just
+     driven from the popover here instead of the click-to-edit toolbar,
+     since a datetime element isn't a click-to-edit field (its text is
+     generated). */
+  dtFont.addEventListener("change", function () {
+    var el = styleMenuEl();
+    if (!el) return;
+    var before = el.style.fontFamily || "";
+    el.style.fontFamily = dtFont.value;
+    saveFontFamily(STYLE_MENU_ID, dtFont.value, "");
+    EDIT_UNDO.push({ type: "fontfamily", id: STYLE_MENU_ID, before: { family: before, url: "" }, after: { family: dtFont.value, url: "" } });
+    EDIT_REDO.length = 0;
+  });
+
+  STYLE_MENU.querySelectorAll(".sm-dt-fs-dn, .sm-dt-fs-up").forEach(function (btn) {
+    var dir = btn.classList.contains("sm-dt-fs-dn") ? -2 : 2;
+    btn.addEventListener("click", function () {
+      var el = styleMenuEl();
+      if (!el) return;
+      var before = el.style.fontSize || "";
+      var cur = parseFloat(getComputedStyle(el).fontSize) || 16;
+      var after = Math.max(8, Math.min(160, Math.round(cur + dir))) + "px";
+      el.style.fontSize = after;
+      saveFontSize(STYLE_MENU_ID, after);
+      EDIT_UNDO.push({ type: "fontsize", id: STYLE_MENU_ID, before: before, after: after });
+      EDIT_REDO.length = 0;
+      positionRing();
+    });
+  });
+
+  STYLE_MENU.querySelectorAll(".sm-dt-align").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var el = styleMenuEl();
+      if (!el) return;
+      var align = btn.getAttribute("data-align");
+      var before = el.style.textAlign || "";
+      var next = before === align ? "" : align;
+      el.style.textAlign = next;
+      saveTextStyle(STYLE_MENU_ID, "align", next);
+      EDIT_UNDO.push({ type: "align", id: STYLE_MENU_ID, before: before, after: next });
+      EDIT_REDO.length = 0;
+      STYLE_MENU.querySelectorAll(".sm-dt-align").forEach(function (b) {
+        b.classList.toggle("active", el.style.textAlign === b.getAttribute("data-align"));
+      });
+    });
+  });
+
+  /* applies the popover's current format/pattern/target to the datetime
+     element and repaints it, no undo (see commitDatetimeUndo() for that). */
+  function applyDatetimeLive() {
+    var el = styleMenuEl();
+    var d = customElementById(STYLE_MENU_ID);
+    if (!el || !d) return;
+    d.format = dtFormat.value;
+    d.strftime = dtPattern.value;
+    if (dtTarget.value) d.target = new Date(dtTarget.value).toISOString();
+    dtPattern.placeholder = DT_DEFAULT_PATTERNS[d.format] || "";
+    renderDatetimeContent(el, d);
+    saveCustomElements(CUSTOM_ELEMENTS);
+  }
+  /* pushes one undo step for the whole format/pattern/target gesture, from
+     whatever the datetime config was when the popover last settled. */
+  function commitDatetimeUndo() {
+    var d = customElementById(STYLE_MENU_ID);
+    if (!d || !STYLE_DT_BEFORE) return;
+    var after = { target: d.target, format: d.format, strftime: d.strftime || "" };
+    var b = STYLE_DT_BEFORE;
+    if (b.target !== after.target || b.format !== after.format || (b.strftime || "") !== after.strftime) {
+      EDIT_UNDO.push({ type: "datetime", id: STYLE_MENU_ID, before: b, after: after });
+      EDIT_REDO.length = 0;
+    }
+    STYLE_DT_BEFORE = after;
+  }
+  dtFormat.addEventListener("change", function () { applyDatetimeLive(); commitDatetimeUndo(); });
+  dtTarget.addEventListener("change", function () { applyDatetimeLive(); commitDatetimeUndo(); });
+  dtPattern.addEventListener("input", applyDatetimeLive);
+  dtPattern.addEventListener("change", commitDatetimeUndo);
 }
 
 /**
@@ -2317,6 +2586,7 @@ function toggleStyleMenu(anchorEl) {
   var kind = elKind(el);
   var isImg = kind === "img";
   var isIcon = kind === "icon";
+  var isDatetime = el.hasAttribute("data-datetime");
   var isText = colorTarget(el) === "text";
   var isBtn = isButtonEl(el);
   STYLE_MENU.querySelector(".sm-color-row").style.display = isImg ? "none" : "";
@@ -2325,10 +2595,15 @@ function toggleStyleMenu(anchorEl) {
      below, so it's worth spelling out which one this now is */
   STYLE_MENU.querySelector(".sm-color-label").textContent = isBtn ? "Background" : "Color";
   STYLE_MENU.querySelector(".sm-textcolor-row").style.display = isBtn ? "" : "none";
-  STYLE_MENU.querySelector(".sm-fill-row").style.display = isText ? "" : "none";
+  /* a datetime element paints its own text color via the Color row, so its
+     Fill row (a text field's background) would just be clutter; hide it */
+  STYLE_MENU.querySelector(".sm-fill-row").style.display = (isText && !isDatetime) ? "" : "none";
   STYLE_MENU.querySelector(".sm-tint-row").style.display = isImg ? "" : "none";
-  var shapeDisplay = isIcon ? "none" : "";
+  /* rounding/border/shadow on the bare digits text make no more sense than
+     on an icon, so hide the shape group for a datetime element too */
+  var shapeDisplay = (isIcon || isDatetime) ? "none" : "";
   STYLE_MENU.querySelectorAll(".sm-shape-row").forEach(function (row) { row.style.display = shapeDisplay; });
+  STYLE_MENU.querySelectorAll(".sm-dt-row").forEach(function (row) { row.style.display = isDatetime ? "" : "none"; });
 
   var colorInput = STYLE_MENU.querySelector(".sm-color");
   var textColorInput = STYLE_MENU.querySelector(".sm-textcolor");
@@ -2361,7 +2636,21 @@ function toggleStyleMenu(anchorEl) {
     STYLE_TINT_BEFORE = tintInput.value === "#ffffff" ? "" : tintInput.value;
   }
 
-  if (!isIcon) {
+  if (isDatetime) {
+    var dtd = customElementById(STYLE_MENU_ID) || {};
+    var fmt = dtd.format || "countdown";
+    STYLE_MENU.querySelector(".sm-dt-font").value = el.style.fontFamily || "";
+    STYLE_MENU.querySelector(".sm-dt-format").value = fmt;
+    STYLE_MENU.querySelector(".sm-dt-pattern").value = dtd.strftime || "";
+    STYLE_MENU.querySelector(".sm-dt-pattern").placeholder = DT_DEFAULT_PATTERNS[fmt] || "";
+    STYLE_MENU.querySelector(".sm-dt-target").value = toDatetimeLocalValue(new Date(dtd.target || Date.now()));
+    STYLE_MENU.querySelectorAll(".sm-dt-align").forEach(function (b) {
+      b.classList.toggle("active", el.style.textAlign === b.getAttribute("data-align"));
+    });
+    STYLE_DT_BEFORE = { target: dtd.target, format: fmt, strftime: dtd.strftime || "" };
+  }
+
+  if (!isIcon && !isDatetime) {
     var rad = currentRadiusValue(el);
     radiusInput.value = rad;
     radiusVal.textContent = rad + "px";
@@ -3085,12 +3374,15 @@ function freezeFreeElement(el) {
  * existed (no `d.url`) still falls back to the site's flat `.ph` placeholder
  * box (see the Media bullets in CLAUDE.md). A "video" is a real uploaded
  * clip (same upload flow as an image), a plain looping muted autoplay
- * `<video>`, same object-fit: cover. An icon (the catch-all last branch)
+ * `<video>`, same object-fit: cover. A "datetime" is a live countdown or a
+ * formatted static date/time (see renderDatetimeContent()), driven by its
+ * own `d.target`/`d.format` rather than a click-to-edit text field. An icon
+ * (the catch-all last branch)
  * with a `d.url` is a ta-uploaded icon (see fetchCustomAssets()) rendered as
  * a plain `<img>` rather than parsed svg markup; `elKind()` already treats
  * any "icon."-prefixed id as icon kind (locked aspect ratio) regardless of
  * tag, so this needs no special-casing anywhere else.
- * @param d {id, kind, left, top, w, h, icon, href, url}
+ * @param d {id, kind, left, top, w, h, icon, href, url, target, format}
  * @return the built, attached element
  */
 function buildCustomElement(d) {
@@ -3141,6 +3433,17 @@ function buildCustomElement(d) {
     el.style.objectFit = "cover";
     el.style.width = "320px";
     el.style.height = "200px";
+  } else if (d.kind === "datetime") {
+    /* a plain, styleable text element whose content is generated from its
+       own target/format/strftime (renderDatetimeContent()), live-ticking
+       for countdown. data-datetime marks it so colorTarget()/the style
+       popover treat it as text (font/size/color/align all apply) without it
+       being a click-to-edit field (its text is generated, not typed). */
+    el = document.createElement("div");
+    el.className = "dt-el";
+    el.setAttribute("data-resize-id", d.id);
+    el.setAttribute("data-datetime", "1");
+    renderDatetimeContent(el, d);
   } else if (d.icon) {
     /* built-in or ta-uploaded icon: always real inline <svg> markup, never
        an <img>, so a future color-restyle tool can just set fill/stroke via
@@ -3491,6 +3794,21 @@ function uploadEditorFile(file) {
 }
 
 /**
+ * Looks up a placed custom element's own data entry (eg a datetime
+ * element's target/format) by id, for the right-click "Edit date/time"
+ * flow. Unlike elByAnyId() (finds the live DOM node), this finds the plain
+ * data object CUSTOM_ELEMENTS holds for it.
+ * @param id the element's id
+ * @return the CUSTOM_ELEMENTS entry, or null if none match
+ */
+function customElementById(id) {
+  for (var i = 0; i < CUSTOM_ELEMENTS.length; i++) {
+    if (CUSTOM_ELEMENTS[i].id === id) return CUSTOM_ELEMENTS[i];
+  }
+  return null;
+}
+
+/**
  * Adds one new element via the visual editor's right-click "Add element"
  * menu (see wireAddElementMenu()): built through buildCustomElement(), the
  * exact same construction that recreates it on every future load, then
@@ -3499,12 +3817,14 @@ function uploadEditorFile(file) {
  * everything else the editor creates. Always lands on the very top of the
  * stacking order (see moveLayer()), matching what a ta would expect from
  * something they just placed.
- * @param kind "text", "button", "box", "image", "video", or "icon"
+ * @param kind "text", "button", "box", "image", "video", "icon", or "datetime"
  * @param x left, document px (where the menu was opened)
  * @param y top, document px
  * @param extra {icon, url} for kind "icon" (a built-in's svg markup, or an
  *   uploaded one's url), {href} for kind "button", {url} for kind "image"/
- *   "video" (the uploaded file's url, see uploadEditorFile())
+ *   "video" (the uploaded file's url, see uploadEditorFile()); "datetime"
+ *   takes sensible defaults (countdown, 30 days out) and is configured from
+ *   the style popover afterward (see buildStyleMenu())
  * @return the new element
  */
 function addCustomElement(kind, x, y, extra) {
@@ -3513,6 +3833,11 @@ function addCustomElement(kind, x, y, extra) {
   var d = { id: (kind === "icon" ? "icon.custom." : "custom." + kind + ".") + uid, kind: kind, left: Math.round(x), top: Math.round(y) };
   if (kind === "icon") { d.icon = extra.icon; d.url = extra.url; }
   if (kind === "image" || kind === "video") d.url = extra.url;
+  if (kind === "datetime") {
+    d.target = extra.target || new Date(Date.now() + 30 * 86400000).toISOString();
+    d.format = extra.format || "countdown";
+    d.strftime = extra.strftime || "";
+  }
   var el = buildCustomElement(d);
   freezeFreeElement(el);
   d.w = parseFloat(el.dataset.natW);
@@ -3710,21 +4035,26 @@ function buildCtxMenu() {
  * Renders the menu's root list: an optional "This element" section first
  * (only when the menu was opened by right-clicking an existing tagged
  * element, see CTX_TARGET_ID) with Duplicate, Lock/Unlock, and Promote/
- * Remove from navbar, then the 6 things that can be added. Duplicate is
+ * Remove from navbar, then the 8 things that can be added. Duplicate is
  * left out for the countdown box/info tiles (ids starting "countdown."/
- * "logistics.") and anything containing #heroCountdown/#logisticsGrid
- * (eg the whole logistics section): those render their content from their
- * own structured content fields (content.logistics, the countdown's text
- * overrides) via getElementById(), not static template markup a generic
- * clone can carry over, so a duplicate of one would come out empty (or
- * carry dead, un-restorable copies of their nested ids) the moment it's
- * reconstructed on a reload rather than just visually copied in the
- * moment, see duplicateElement()'s doc comment.
+ * "logistics."), anything containing #heroCountdown/#logisticsGrid (eg the
+ * whole logistics section), and any placed "datetime" custom element: all
+ * three render their content from their own structured data
+ * (content.logistics, the countdown's text overrides, a datetime element's
+ * own target/format/strftime) via getElementById()/renderDatetimeContent()
+ * rather than static template markup a generic clone can carry over, so a
+ * duplicate of one would come out empty (or frozen, un-ticking) the moment
+ * it's reconstructed on a reload rather than just visually copied in the
+ * moment, see duplicateElement()'s doc comment. A datetime element's own
+ * format/pattern/target/style are all edited from the style popover (see
+ * buildStyleMenu()), not here.
  */
 function renderCtxMenuRoot() {
   var toggleHtml = "";
   if (CTX_TARGET_ID) {
-    var isSpecial = CTX_TARGET_ID.indexOf("logistics.") === 0 || CTX_TARGET_ID.indexOf("countdown.") === 0 ||
+    var targetData = customElementById(CTX_TARGET_ID);
+    var isDatetime = targetData && targetData.kind === "datetime";
+    var isSpecial = isDatetime || CTX_TARGET_ID.indexOf("logistics.") === 0 || CTX_TARGET_ID.indexOf("countdown.") === 0 ||
       (CTX_TARGET_EL && CTX_TARGET_EL.querySelector && CTX_TARGET_EL.querySelector("#heroCountdown, #logisticsGrid"));
     toggleHtml =
       '<div class="ctx-title">This element</div>' +
@@ -3753,6 +4083,7 @@ function renderCtxMenuRoot() {
     '<button type="button" data-add="video">Video</button>' +
     '<button type="button" data-add="icon">Icon</button>' +
     '<button type="button" data-add="button">Button</button>' +
+    '<button type="button" data-add="datetime">Date/time</button>' +
     '<button type="button" data-add="object">Object...</button>';
   CTX_MENU.querySelectorAll("button[data-add]").forEach(function (btn) {
     btn.addEventListener("click", function () { handleCtxAdd(btn.getAttribute("data-add")); });
@@ -4072,10 +4403,10 @@ function renderCtxMenuObjectPicker() {
 }
 
 /**
- * Handles a click on one of the root menu's 7 options: textbox/box add
- * immediately and close the menu, icon/button/image/video/object swap to a
- * picker/link/file sub-view first.
- * @param kind "text", "box", "image", "video", "icon", "button", or "object"
+ * Handles a click on one of the root menu's 8 options: textbox/box add
+ * immediately and close the menu, icon/button/image/video/datetime/object
+ * swap to a picker/link/file sub-view first.
+ * @param kind "text", "box", "image", "video", "icon", "button", "datetime", or "object"
  */
 function handleCtxAdd(kind) {
   if (kind === "icon") { renderCtxMenuIconPicker(); return; }
@@ -4083,6 +4414,9 @@ function handleCtxAdd(kind) {
   if (kind === "image") { renderCtxMenuImagePicker(); return; }
   if (kind === "video") { renderCtxMenuVideoPicker(); return; }
   if (kind === "object") { renderCtxMenuObjectPicker(); return; }
+  /* datetime adds immediately with sensible defaults (countdown, 30 days
+     out, see addCustomElement()); its format/pattern/target are all set
+     afterward from the style popover, no add-time sub-view needed */
   addCustomElement(kind, CTX_POS.x, CTX_POS.y);
   hideCtxMenu();
 }
@@ -4901,6 +5235,9 @@ function redoEdit() {
  *    whole stack is stored on both sides, see moveLayerExtreme())
  *  - "fixed": no before/after value either, toggleFixed(id) is its own
  *    inverse so either side just calls it again
+ *  - "datetime": {target, format, strftime} (a placed datetime custom
+ *    element's edited target/display format/pattern, see buildStyleMenu()'s
+ *    commitDatetimeUndo())
  * @param action the stack entry
  * @param side "before" or "after", which side of the action to restore
  */
@@ -4974,19 +5311,26 @@ function applyHistoryAction(action, side) {
     return;
   }
   if (action.type === "fontsize") {
-    var fsEl = document.querySelector('[data-edit-id="' + action.id + '"]');
+    /* elByAnyId, not just [data-edit-id]: a datetime element (data-resize-id)
+       is font-size/align/font-styleable too, driven from the style popover */
+    var fsEl = elByAnyId(action.id);
     if (!fsEl) return;
     fsEl.style.fontSize = val || "";
     saveFontSize(action.id, val || "");
     return;
   }
   if (action.type === "align" || action.type === "letterspacing") {
-    var styleEl = document.querySelector('[data-edit-id="' + action.id + '"]');
+    var styleEl = elByAnyId(action.id);
     if (!styleEl) return;
     if (action.type === "align") {
       styleEl.style.textAlign = val;
       saveTextStyle(action.id, "align", val);
       if (TEXT_TOOLBAR_EL === styleEl) updateTextToolbarState();
+      if (STYLE_MENU_ID === action.id && STYLE_MENU && STYLE_MENU.classList.contains("show")) {
+        STYLE_MENU.querySelectorAll(".sm-dt-align").forEach(function (b) {
+          b.classList.toggle("active", styleEl.style.textAlign === b.getAttribute("data-align"));
+        });
+      }
     } else {
       styleEl.style.letterSpacing = val;
       saveTextStyle(action.id, "letterSpacing", val);
@@ -4994,7 +5338,7 @@ function applyHistoryAction(action, side) {
     return;
   }
   if (action.type === "fontfamily") {
-    var fontEl = document.querySelector('[data-edit-id="' + action.id + '"]');
+    var fontEl = elByAnyId(action.id);
     if (!fontEl) return;
     if (val.url) ensureFontFace(val.family, val.url);
     fontEl.style.fontFamily = val.family;
@@ -5002,6 +5346,9 @@ function applyHistoryAction(action, side) {
     if (TEXT_TOOLBAR_EL === fontEl) {
       TEXT_TOOLBAR.querySelector(".tt-font").value = val.family;
       updateFontDeleteButton();
+    }
+    if (STYLE_MENU_ID === action.id && STYLE_MENU && STYLE_MENU.classList.contains("show")) {
+      STYLE_MENU.querySelector(".sm-dt-font").value = val.family;
     }
     return;
   }
@@ -5044,6 +5391,25 @@ function applyHistoryAction(action, side) {
     if (STYLE_MENU_ID === action.id) {
       STYLE_MENU.querySelector(".sm-textcolor").value = currentTextColorValue(textColorEl);
       STYLE_TEXTCOLOR_BEFORE = val || "";
+    }
+    return;
+  }
+  if (action.type === "datetime") {
+    var dtD = customElementById(action.id);
+    if (!dtD) return;
+    dtD.target = val.target;
+    dtD.format = val.format;
+    dtD.strftime = val.strftime || "";
+    var dtEl = elByAnyId(action.id);
+    if (dtEl) renderDatetimeContent(dtEl, dtD);
+    saveCustomElements(CUSTOM_ELEMENTS);
+    /* keep the popover's own controls in sync if it's open on this element */
+    if (STYLE_MENU_ID === action.id && STYLE_MENU && STYLE_MENU.classList.contains("show")) {
+      STYLE_MENU.querySelector(".sm-dt-format").value = dtD.format || "countdown";
+      STYLE_MENU.querySelector(".sm-dt-pattern").value = dtD.strftime || "";
+      STYLE_MENU.querySelector(".sm-dt-pattern").placeholder = DT_DEFAULT_PATTERNS[dtD.format || "countdown"] || "";
+      STYLE_MENU.querySelector(".sm-dt-target").value = toDatetimeLocalValue(new Date(dtD.target || Date.now()));
+      STYLE_DT_BEFORE = { target: dtD.target, format: dtD.format, strftime: dtD.strftime || "" };
     }
     return;
   }

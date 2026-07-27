@@ -4,6 +4,7 @@ content table holds the TA-editable site content (day panels, extras, timer)."""
 import json
 import sqlite3
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app.security import generate_token, hash_password, verify_password
@@ -268,44 +269,44 @@ DEFAULT_OBJECTS = [
     {
         "name": "Countdown timer",
         "data": {
-            # matches the real tentative countdown box (.countdown.cd-tba):
-            # a half-transparent surface card (color-mix, same as the css
-            # itself), the real calendar icon, an uppercase mono accent
-            # label, and a bold --font-head announcement line, not just
-            # floating text over whatever background sits behind it.
+            # a composite of individually-editable parts, not one monolith:
+            # a surface card, a "Counting down" eyebrow, the live datetime
+            # element (kind "datetime", the actual ticking digits, see
+            # buildCustomElement()'s "datetime" branch + renderDatetimeContent()
+            # in js/main.js), and a separate DAYS/HRS/MIN/SEC label line, all
+            # grouped so they move as one but each stays independently
+            # editable (font, color, text, the datetime's own format/pattern
+            # via the style popover). the datetime part's target is filled in
+            # at seed time (see _seed_default_objects()), 30 days out from
+            # whenever the db is first created, since a hardcoded date here
+            # would eventually sit in the past.
             "custom_elements": [
-                {"id": "seed.cd.box", "kind": "box", "left": 0, "top": 0, "w": 320, "h": 120},
+                {"id": "seed.cd.box", "kind": "box", "left": 0, "top": 0, "w": 400, "h": 162},
+                {"id": "seed.cd.eyebrow", "kind": "text", "left": 28, "top": 20, "w": 160, "h": 24},
                 {
-                    "id": "seed.cd.icon", "kind": "icon", "left": 30, "top": 38, "w": 44, "h": 44,
-                    "icon": (
-                        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" '
-                        'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
-                        '<rect x="3" y="5" width="18" height="16" rx="2" /><path d="M3 9h18M8 3v4M16 3v4" /></svg>'
-                    ),
+                    "id": "seed.cd.dt", "kind": "datetime", "left": 28, "top": 52,
+                    "w": 344, "h": 52, "format": "countdown", "strftime": "", "target": None,
                 },
-                {"id": "seed.cd.label", "kind": "text", "left": 94, "top": 26, "w": 150, "h": 26},
-                {"id": "seed.cd.text", "kind": "text", "left": 94, "top": 54, "w": 210, "h": 42},
+                {"id": "seed.cd.labels", "kind": "text", "left": 30, "top": 118, "w": 344, "h": 22},
             ],
             "text": {
-                "seed.cd.label": "DATE AND TIME",
-                "seed.cd.text": "<b>To be announced</b>",
+                "seed.cd.eyebrow": "Counting down",
+                "seed.cd.labels": "DAYS      HRS      MIN      SEC",
             },
-            # measured against the real classes: --font-mono .75rem
-            # letter-spacing 2px "DATE AND TIME" is 117.4x19.2 (.cd-label,
-            # uppercase typed directly since there's no text-transform
-            # override in this system), --font-head 1.45rem "To be
-            # announced" is 179.7x37.1 (.cd-tba-txt).
-            "font_sizes": {"seed.cd.label": ".75rem", "seed.cd.text": "1.45rem"},
+            "font_sizes": {
+                "seed.cd.eyebrow": ".75rem", "seed.cd.dt": "2rem", "seed.cd.labels": ".72rem",
+            },
             "text_styles": {
-                "seed.cd.label": {"fontFamily": "var(--font-mono)", "letterSpacing": "2px"},
-                "seed.cd.text": {"fontFamily": "var(--font-head)"},
+                "seed.cd.eyebrow": {"fontFamily": "var(--font-mono)", "letterSpacing": "2px"},
+                "seed.cd.labels": {"fontFamily": "var(--font-mono)", "letterSpacing": "3px"},
             },
             "colors": {
-                "seed.cd.icon": "var(--accent)", "seed.cd.label": "var(--accent)",
                 "seed.cd.box": "color-mix(in srgb, var(--surface) 75%, transparent)",
+                "seed.cd.eyebrow": "var(--accent)", "seed.cd.dt": "var(--accent)",
+                "seed.cd.labels": "var(--muted)",
             },
             "radius": {"seed.cd.box": 14},
-            "groups": [["seed.cd.box", "seed.cd.icon", "seed.cd.label", "seed.cd.text"]],
+            "groups": [["seed.cd.box", "seed.cd.eyebrow", "seed.cd.dt", "seed.cd.labels"]],
         },
     },
     {
@@ -731,10 +732,22 @@ def _seed_default_objects(conn):
     conn.commit()
     if cur.rowcount == 0:
         return
+    # "Countdown timer"'s datetime part carries no fixed target in
+    # DEFAULT_OBJECTS itself (a hardcoded date would eventually sit in the
+    # past); fill in 30 days out from right now, the same ballpark the ta
+    # portal's own hero countdown starts from, at the moment this actually
+    # seeds rather than at module-import time.
+    default_target = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
     for obj in DEFAULT_OBJECTS:
+        data = obj["data"]
+        if obj["name"] == "Countdown timer":
+            data = json.loads(json.dumps(data))  # deep copy, don't mutate the shared module-level default
+            for part in data["custom_elements"]:
+                if part.get("kind") == "datetime":
+                    part["target"] = default_target
         conn.execute(
             "INSERT INTO objects (owner, name, data) VALUES (?, ?, ?)",
-            ("system", obj["name"], json.dumps(obj["data"])),
+            ("system", obj["name"], json.dumps(data)),
         )
     conn.commit()
 

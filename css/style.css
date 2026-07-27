@@ -1505,7 +1505,17 @@ body.edit-mode .apply-bob { animation: none; }
   width: 50px;
   flex-shrink: 0;
 }
+/* "Background" (the Color row's own label on a button, see toggleStyleMenu())
+   and "Text color" both run longer than every other row's label, so this one
+   row needs a bit more room and no wrap, unlike the fixed 50px every other
+   short one-word label fits fine in */
+.ctx-menu .sm-color-row label,
+.ctx-menu .sm-textcolor-row label {
+  width: 74px;
+  white-space: nowrap;
+}
 .ctx-menu .sm-color,
+.ctx-menu .sm-textcolor,
 .ctx-menu .sm-fill {
   width: 32px;
   height: 26px;
@@ -1516,6 +1526,7 @@ body.edit-mode .apply-bob { animation: none; }
   cursor: pointer;
 }
 .ctx-menu .sm-color-reset,
+.ctx-menu .sm-textcolor-reset,
 .ctx-menu .sm-fill-reset {
   width: 22px;
   height: 22px;
@@ -1527,6 +1538,7 @@ body.edit-mode .apply-bob { animation: none; }
   flex-shrink: 0;
 }
 .ctx-menu .sm-color-reset:hover,
+.ctx-menu .sm-textcolor-reset:hover,
 .ctx-menu .sm-fill-reset:hover { background: var(--accent); color: #fff; }
 .ctx-menu .sm-opacity { flex: 1; }
 .ctx-menu .sm-opacity-val {

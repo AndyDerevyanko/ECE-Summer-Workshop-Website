@@ -212,6 +212,11 @@ DEFAULT_CONTENT = {
     # gets a real href; anything else gets a navigate-on-click listener,
     # see applyOneLink() in js/main.js.
     "links": {},
+    # visual editor style popover's Text color row, buttons only, keyed by
+    # data-edit-id. a button's own Color row already means its background
+    # (see colorTarget() in js/main.js), this is the separate control for
+    # its label.
+    "text_color": {},
 }
 
 # starter "objects" library entries (see the objects table below): reusable
@@ -229,78 +234,157 @@ DEFAULT_OBJECTS = [
     {
         "name": "Logistics tile",
         "data": {
+            # matches the real .card.stat tiles (css/style.css): surface
+            # background, --font-mono accent-colored big number, muted label,
+            # both centered, same as the dashboard/landing page's own tiles,
+            # not just a generic box+text guess.
             "custom_elements": [
-                {"id": "seed.tile.box", "kind": "box", "left": 0, "top": 0, "w": 170, "h": 110},
-                {"id": "seed.tile.big", "kind": "text", "left": 24, "top": 24, "w": 122, "h": 34},
-                {"id": "seed.tile.lbl", "kind": "text", "left": 24, "top": 64, "w": 122, "h": 20},
+                {"id": "seed.tile.box", "kind": "box", "left": 0, "top": 0, "w": 200, "h": 140},
+                {"id": "seed.tile.big", "kind": "text", "left": 30, "top": 28, "w": 140, "h": 50},
+                {"id": "seed.tile.lbl", "kind": "text", "left": 20, "top": 86, "w": 160, "h": 26},
             ],
             "text": {
                 "seed.tile.big": "2 weeks",
                 "seed.tile.lbl": "Tentative start date",
             },
-            "font_sizes": {"seed.tile.big": "26px"},
-            "text_styles": {"seed.tile.big": {"fontFamily": "var(--font-head)"}},
-            "colors": {"seed.tile.lbl": "var(--muted)"},
-            "radius": {"seed.tile.box": 10},
+            # measured against the real classes: --font-mono 1.9rem "2 weeks"
+            # is 124.7x48.6 (.stat .big), default .9rem "Tentative start
+            # date" is 131.1x23 (.stat .lbl). too-short boxes here used to
+            # bisect the text with the always-on dashed outline or wrap a
+            # line straight past the tile's own bottom edge.
+            "font_sizes": {"seed.tile.big": "1.9rem", "seed.tile.lbl": ".9rem"},
+            "text_styles": {
+                "seed.tile.big": {"fontFamily": "var(--font-mono)", "align": "center"},
+                "seed.tile.lbl": {"align": "center"},
+            },
+            "colors": {
+                "seed.tile.big": "var(--accent)", "seed.tile.lbl": "var(--muted)",
+                "seed.tile.box": "var(--surface)",
+            },
+            "radius": {"seed.tile.box": 14},
             "groups": [["seed.tile.box", "seed.tile.big", "seed.tile.lbl"]],
         },
     },
     {
         "name": "Countdown timer",
         "data": {
+            # matches the real tentative countdown box (.countdown.cd-tba):
+            # a half-transparent surface card (color-mix, same as the css
+            # itself), the real calendar icon, an uppercase mono accent
+            # label, and a bold --font-head announcement line, not just
+            # floating text over whatever background sits behind it.
             "custom_elements": [
+                {"id": "seed.cd.box", "kind": "box", "left": 0, "top": 0, "w": 320, "h": 120},
                 {
-                    "id": "seed.cd.icon", "kind": "icon", "left": 0, "top": 6, "w": 26, "h": 26,
+                    "id": "seed.cd.icon", "kind": "icon", "left": 30, "top": 38, "w": 44, "h": 44,
                     "icon": (
                         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" '
                         'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
                         '<rect x="3" y="5" width="18" height="16" rx="2" /><path d="M3 9h18M8 3v4M16 3v4" /></svg>'
                     ),
                 },
-                {"id": "seed.cd.label", "kind": "text", "left": 40, "top": 0, "w": 160, "h": 18},
-                {"id": "seed.cd.text", "kind": "text", "left": 40, "top": 20, "w": 200, "h": 26},
+                {"id": "seed.cd.label", "kind": "text", "left": 94, "top": 26, "w": 150, "h": 26},
+                {"id": "seed.cd.text", "kind": "text", "left": 94, "top": 54, "w": 210, "h": 42},
             ],
             "text": {
-                "seed.cd.label": "Date and time",
-                "seed.cd.text": "To be announced",
+                "seed.cd.label": "DATE AND TIME",
+                "seed.cd.text": "<b>To be announced</b>",
             },
-            "font_sizes": {"seed.cd.text": "18px"},
-            "colors": {"seed.cd.label": "var(--accent)"},
-            "groups": [["seed.cd.icon", "seed.cd.label", "seed.cd.text"]],
+            # measured against the real classes: --font-mono .75rem
+            # letter-spacing 2px "DATE AND TIME" is 117.4x19.2 (.cd-label,
+            # uppercase typed directly since there's no text-transform
+            # override in this system), --font-head 1.45rem "To be
+            # announced" is 179.7x37.1 (.cd-tba-txt).
+            "font_sizes": {"seed.cd.label": ".75rem", "seed.cd.text": "1.45rem"},
+            "text_styles": {
+                "seed.cd.label": {"fontFamily": "var(--font-mono)", "letterSpacing": "2px"},
+                "seed.cd.text": {"fontFamily": "var(--font-head)"},
+            },
+            "colors": {
+                "seed.cd.icon": "var(--accent)", "seed.cd.label": "var(--accent)",
+                "seed.cd.box": "color-mix(in srgb, var(--surface) 75%, transparent)",
+            },
+            "radius": {"seed.cd.box": 14},
+            "groups": [["seed.cd.box", "seed.cd.icon", "seed.cd.label", "seed.cd.text"]],
         },
     },
     {
         "name": "Navbar",
         "data": {
+            # a real replica of the site's own nav (templates/index.html),
+            # not a 2-link placeholder: the actual logo file, the actual
+            # wordmark, all 6 real nav links (About/Gallery/What you'll
+            # learn/Schedule/Prizes/Apply Now) in the real muted color, a
+            # decorative theme-toggle icon, and the real "Access portal"
+            # teal button, all at the real nav's own font sizes.
             "custom_elements": [
-                {"id": "seed.nav.bar", "kind": "box", "left": 0, "top": 0, "w": 900, "h": 64},
-                {"id": "seed.nav.brand", "kind": "text", "left": 24, "top": 20, "w": 160, "h": 24},
-                {"id": "seed.nav.link1", "kind": "text", "left": 420, "top": 22, "w": 60, "h": 20},
-                {"id": "seed.nav.link2", "kind": "text", "left": 500, "top": 22, "w": 60, "h": 20},
-                {"id": "seed.nav.btn", "kind": "button", "left": 760, "top": 14, "w": 110, "h": 36},
+                {"id": "seed.nav.bar", "kind": "box", "left": 0, "top": 0, "w": 1300, "h": 64},
+                {"id": "seed.nav.logo", "kind": "image", "left": 24, "top": 10, "w": 44, "h": 44, "url": "assets/logo.png"},
+                {"id": "seed.nav.brand", "kind": "text", "left": 77, "top": 19, "w": 150, "h": 30},
+                {"id": "seed.nav.about", "kind": "text", "left": 243, "top": 20, "w": 60, "h": 26},
+                {"id": "seed.nav.gallery", "kind": "text", "left": 328, "top": 20, "w": 65, "h": 26},
+                {"id": "seed.nav.learn", "kind": "text", "left": 418, "top": 20, "w": 140, "h": 26},
+                {"id": "seed.nav.schedule", "kind": "text", "left": 583, "top": 20, "w": 85, "h": 26},
+                {"id": "seed.nav.prizes", "kind": "text", "left": 693, "top": 20, "w": 60, "h": 26},
+                {"id": "seed.nav.apply", "kind": "text", "left": 778, "top": 20, "w": 95, "h": 26},
+                {
+                    "id": "seed.nav.theme", "kind": "icon", "left": 1080, "top": 20, "w": 24, "h": 24,
+                    "icon": (
+                        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" '
+                        'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4" />'
+                        '<path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></svg>'
+                    ),
+                },
+                {"id": "seed.nav.portal", "kind": "button", "left": 1136, "top": 7, "w": 140, "h": 50},
             ],
             "text": {
-                "seed.nav.brand": "Brand",
-                "seed.nav.link1": "Home",
-                "seed.nav.link2": "About",
-                "seed.nav.btn": "Apply Now",
+                "seed.nav.brand": "ECE Workshops",
+                "seed.nav.about": "About",
+                "seed.nav.gallery": "Gallery",
+                "seed.nav.learn": "What you'll learn",
+                "seed.nav.schedule": "Schedule",
+                "seed.nav.prizes": "Prizes",
+                "seed.nav.apply": "Apply Now",
+                "seed.nav.portal": "Access portal",
             },
+            # measured against the real classes: --font-head 700 1.05rem
+            # "ECE Workshops" is 128.9x26.9 (.brand), .92rem nav links are
+            # ~24px tall (.nav-links a, widest "What you'll learn" 116.7
+            # wide), a real .btn-ghost "Access portal" is 135x49.5.
+            "font_sizes": {"seed.nav.brand": "1.05rem"},
             "text_styles": {"seed.nav.brand": {"fontFamily": "var(--font-head)"}},
-            "groups": [["seed.nav.bar", "seed.nav.brand", "seed.nav.link1", "seed.nav.link2", "seed.nav.btn"]],
+            "colors": {
+                "seed.nav.about": "var(--muted)", "seed.nav.gallery": "var(--muted)",
+                "seed.nav.learn": "var(--muted)", "seed.nav.schedule": "var(--muted)",
+                "seed.nav.prizes": "var(--muted)", "seed.nav.apply": "var(--muted)",
+                "seed.nav.theme": "var(--text)", "seed.nav.portal": "var(--teal)",
+            },
+            # the real .btn-accent2 "Access portal" button pairs its teal
+            # background with dark navy text (#06121a), not the plain
+            # button's default light text; text_color is the style
+            # popover's separate Text color control for exactly this.
+            "text_color": {"seed.nav.portal": "#06121a"},
+            "groups": [[
+                "seed.nav.bar", "seed.nav.logo", "seed.nav.brand", "seed.nav.about", "seed.nav.gallery",
+                "seed.nav.learn", "seed.nav.schedule", "seed.nav.prizes", "seed.nav.apply",
+                "seed.nav.theme", "seed.nav.portal",
+            ]],
         },
     },
     {
         "name": "Heading + subheading",
         "data": {
             "custom_elements": [
-                {"id": "seed.head.eyebrow", "kind": "text", "left": 0, "top": 0, "w": 200, "h": 18},
-                {"id": "seed.head.title", "kind": "text", "left": 0, "top": 22, "w": 320, "h": 40},
+                {"id": "seed.head.eyebrow", "kind": "text", "left": 0, "top": 0, "w": 110, "h": 26},
+                {"id": "seed.head.title", "kind": "text", "left": 0, "top": 32, "w": 220, "h": 60},
             ],
             "text": {
                 "seed.head.eyebrow": "Eyebrow",
                 "seed.head.title": "Heading",
             },
-            "font_sizes": {"seed.head.title": "30px"},
+            # 13px "EYEBROW" is 71x20.8, 34px --font-head "Heading" is
+            # 129.2x54.4, same reasoning as the tile/countdown/navbar above.
+            "font_sizes": {"seed.head.eyebrow": "13px", "seed.head.title": "34px"},
             "text_styles": {
                 "seed.head.eyebrow": {"fontFamily": "var(--font-body)", "letterSpacing": "1px"},
                 "seed.head.title": {"fontFamily": "var(--font-head)"},

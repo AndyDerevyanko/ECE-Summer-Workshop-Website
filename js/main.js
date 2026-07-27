@@ -1548,19 +1548,34 @@ function hideLayerMenu() {
 }
 
 /**
+ * Whether el is a custom Button element (right-click "Add element" >
+ * Button, or the template's own CTA links): a single tagged `<a class=
+ * "btn">`, its text box IS the button, same rule every other CTA on the
+ * site follows. Its own helper (rather than inlining the check) since both
+ * colorTarget() and the style popover's Text color row (see buildStyleMenu())
+ * need the exact same test.
+ * @param el the element
+ * @return true if el is a button
+ */
+function isButtonEl(el) {
+  return el.tagName === "A" && el.classList.contains("btn");
+}
+
+/**
  * Which css property a color override actually lands on, for a given
  * element: an icon (svg, currentColor stroke/fill throughout this
  * codebase's icon set) gets its foreground color; a plain click-to-edit
  * text field gets its font color; everything else (cards, sections, nav,
  * footer, buttons, the countdown box) gets its background color, since
- * that's the only visible surface a resize-id container has.
+ * that's the only visible surface a resize-id container has. A button's
+ * own text color is a separate control, see the Text color bullet in
+ * CLAUDE.md / applyTextColorOverrides().
  * @param el the element
  * @return "icon", "text", or "bg"
  */
 function colorTarget(el) {
   if (elKind(el) === "icon") return "icon";
-  var isButton = el.tagName === "A" && el.classList.contains("btn");
-  if (el.hasAttribute("data-edit-id") && !isButton) return "text";
+  if (el.hasAttribute("data-edit-id") && !isButtonEl(el)) return "text";
   return "bg";
 }
 
@@ -1717,6 +1732,26 @@ function applyFillOverrides(fill) {
 }
 
 /**
+ * Applies saved button text-color overrides (the style popover's Text
+ * color row, buttons only) on top of the page's own default `.btn` text
+ * color. Runs on every load, live site included, same as
+ * applyColorOverrides()/applyFillOverrides(). A button's own Color row
+ * already controls its background (see colorTarget()), this is the
+ * separate control for its label, since css has no single property that's
+ * "whichever of background/text makes sense for this element".
+ * @param colors content.text_color, {id: css color string}
+ */
+function applyTextColorOverrides(colors) {
+  colors = colors || {};
+  document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
+    if (!isButtonEl(el)) return;
+    var v = colors[elId(el)];
+    if (!v) return;
+    el.style.color = v;
+  });
+}
+
+/**
  * Paints (or removes) a color tint over an image/video. An object-fit:
  * cover element has no visible background-color of its own to paint over
  * (see colorTarget()'s doc comment on why the plain Color row is hidden for
@@ -1818,6 +1853,7 @@ var STYLE_MENU_ID = null;
    undo step for the whole gesture instead of one per intermediate "input" */
 var STYLE_COLOR_BEFORE = "";
 var STYLE_OPACITY_BEFORE = "";
+var STYLE_TEXTCOLOR_BEFORE = "";
 var STYLE_FILL_BEFORE = "";
 var STYLE_TINT_BEFORE = "";
 var STYLE_RADIUS_BEFORE = "0";
@@ -1834,9 +1870,14 @@ function buildStyleMenu() {
   STYLE_MENU.className = "ctx-menu style-menu";
   STYLE_MENU.innerHTML =
     '<div class="sm-row sm-color-row">' +
-      '<label>Color</label>' +
+      '<label class="sm-color-label">Color</label>' +
       '<input type="color" class="sm-color">' +
       '<button type="button" class="sm-color-reset" title="Reset to default">×</button>' +
+    '</div>' +
+    '<div class="sm-row sm-textcolor-row">' +
+      '<label>Text color</label>' +
+      '<input type="color" class="sm-textcolor">' +
+      '<button type="button" class="sm-textcolor-reset" title="Reset to default">×</button>' +
     '</div>' +
     '<div class="sm-row sm-fill-row">' +
       '<label>Fill</label>' +
@@ -1872,6 +1913,8 @@ function buildStyleMenu() {
 
   var colorInput = STYLE_MENU.querySelector(".sm-color");
   var colorReset = STYLE_MENU.querySelector(".sm-color-reset");
+  var textColorInput = STYLE_MENU.querySelector(".sm-textcolor");
+  var textColorReset = STYLE_MENU.querySelector(".sm-textcolor-reset");
   var fillInput = STYLE_MENU.querySelector(".sm-fill");
   var fillReset = STYLE_MENU.querySelector(".sm-fill-reset");
   var tintInput = STYLE_MENU.querySelector(".sm-tint");
@@ -1885,7 +1928,7 @@ function buildStyleMenu() {
   var opacityInput = STYLE_MENU.querySelector(".sm-opacity");
   var opacityVal = STYLE_MENU.querySelector(".sm-opacity-val");
 
-  [colorInput, colorReset, fillInput, fillReset, tintInput, tintReset, radiusInput, borderW, borderColor, shadowInput, opacityInput].forEach(function (el) {
+  [colorInput, colorReset, textColorInput, textColorReset, fillInput, fillReset, tintInput, tintReset, radiusInput, borderW, borderColor, shadowInput, opacityInput].forEach(function (el) {
     el.addEventListener("mousedown", function (e) { e.stopPropagation(); });
   });
 
@@ -1920,6 +1963,39 @@ function buildStyleMenu() {
       EDIT_REDO.length = 0;
     }
     STYLE_COLOR_BEFORE = "";
+  });
+
+  textColorInput.addEventListener("input", function () {
+    if (!STYLE_MENU_ID) return;
+    var el = styleMenuEl();
+    if (!el) return;
+    el.style.color = textColorInput.value;
+    saveEditedTextColor(STYLE_MENU_ID, textColorInput.value);
+  });
+  textColorInput.addEventListener("change", function () {
+    if (!STYLE_MENU_ID) return;
+    var after = textColorInput.value;
+    if (after !== STYLE_TEXTCOLOR_BEFORE) {
+      EDIT_UNDO.push({ type: "textcolor", id: STYLE_MENU_ID, before: STYLE_TEXTCOLOR_BEFORE, after: after });
+      EDIT_REDO.length = 0;
+    }
+    STYLE_TEXTCOLOR_BEFORE = after;
+  });
+
+  textColorReset.addEventListener("click", function () {
+    if (!STYLE_MENU_ID) return;
+    var el = styleMenuEl();
+    if (!el) return;
+    var before = STYLE_TEXTCOLOR_BEFORE;
+    el.style.color = "";
+    saveEditedTextColor(STYLE_MENU_ID, "");
+    var after = currentTextColorValue(el);
+    textColorInput.value = after;
+    if (before !== "") {
+      EDIT_UNDO.push({ type: "textcolor", id: STYLE_MENU_ID, before: before, after: "" });
+      EDIT_REDO.length = 0;
+    }
+    STYLE_TEXTCOLOR_BEFORE = "";
   });
 
   fillInput.addEventListener("input", function () {
@@ -2153,6 +2229,18 @@ function currentFillValue(el) {
 }
 
 /**
+ * Reads a button's current text color (see the style popover's Text color
+ * row, buttons only) as a hex string, "#ffffff" if it's unparseable (an
+ * <input type=color> has no real "unset" state of its own, same convention
+ * as currentFillValue()).
+ * @param el the button element
+ * @return a "#rrggbb" string
+ */
+function currentTextColorValue(el) {
+  return rgbToHex(getComputedStyle(el).color) || "#ffffff";
+}
+
+/**
  * Reads an image/video's current tint color (see setElementTint()) as a hex
  * string, "#ffffff" if it has none (an <input type=color> has no real
  * "unset" state of its own, same convention as currentFillValue()).
@@ -2230,13 +2318,20 @@ function toggleStyleMenu(anchorEl) {
   var isImg = kind === "img";
   var isIcon = kind === "icon";
   var isText = colorTarget(el) === "text";
+  var isBtn = isButtonEl(el);
   STYLE_MENU.querySelector(".sm-color-row").style.display = isImg ? "none" : "";
+  /* for every other bg-target element "Color" is the only surface control
+     there is, but a button also gets its own separate Text color row right
+     below, so it's worth spelling out which one this now is */
+  STYLE_MENU.querySelector(".sm-color-label").textContent = isBtn ? "Background" : "Color";
+  STYLE_MENU.querySelector(".sm-textcolor-row").style.display = isBtn ? "" : "none";
   STYLE_MENU.querySelector(".sm-fill-row").style.display = isText ? "" : "none";
   STYLE_MENU.querySelector(".sm-tint-row").style.display = isImg ? "" : "none";
   var shapeDisplay = isIcon ? "none" : "";
   STYLE_MENU.querySelectorAll(".sm-shape-row").forEach(function (row) { row.style.display = shapeDisplay; });
 
   var colorInput = STYLE_MENU.querySelector(".sm-color");
+  var textColorInput = STYLE_MENU.querySelector(".sm-textcolor");
   var fillInput = STYLE_MENU.querySelector(".sm-fill");
   var tintInput = STYLE_MENU.querySelector(".sm-tint");
   var radiusInput = STYLE_MENU.querySelector(".sm-radius");
@@ -2254,6 +2349,11 @@ function toggleStyleMenu(anchorEl) {
   if (isText) {
     fillInput.value = currentFillValue(el);
     STYLE_FILL_BEFORE = fillInput.value;
+  }
+
+  if (isBtn) {
+    textColorInput.value = currentTextColorValue(el);
+    STYLE_TEXTCOLOR_BEFORE = textColorInput.value;
   }
 
   if (isImg) {
@@ -3229,7 +3329,7 @@ function copyDuplicateOverrides(pairs) {
   try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   var snap;
   try { snap = raw ? JSON.parse(raw) : {}; } catch (e) { snap = {}; }
-  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "radius", "border", "links"];
+  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "radius", "border", "links", "text_color"];
   pairs.forEach(function (p) {
     plainMaps.forEach(function (m) {
       if (snap[m] && snap[m][p.old] !== undefined) {
@@ -3488,7 +3588,7 @@ function placeObject(objData, x, y) {
   });
   snap.custom_elements = (snap.custom_elements || []).concat(newParts);
 
-  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "radius", "border", "links"];
+  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "radius", "border", "links", "text_color"];
   plainMaps.forEach(function (m) {
     if (!objData[m]) return;
     snap[m] = snap[m] || {};
@@ -3525,12 +3625,24 @@ function placeObject(objData, x, y) {
      placing a saved object rather than pasting loose parts */
   if (allNewIds.length > 1) snap.groups.push(allNewIds);
 
-  snap.layers = snap.layers || [];
-  if (Array.isArray(objData.layers)) {
-    objData.layers.forEach(function (oldId) { if (idMap[oldId]) snap.layers.push(idMap[oldId]); });
-  } else {
-    snap.layers = snap.layers.concat(allNewIds);
-  }
+  /* land the whole placed object above everything already on the canvas:
+     applyLayerOrder() appends any id MISSING from content.layers, in dom
+     order, straight after whatever IS explicitly listed there, so a
+     "layers" array holding only the new ids (the naive concat this used to
+     do) would leave every pre-existing element, never having been
+     explicitly listed itself, appended AFTER them instead, on top of the
+     object just placed, exactly backwards. Resolving the current full
+     effective order first (explicit list + domOrderIds() fallback, the
+     same resolution applyLayerOrder() itself does) before appending the
+     new ids is what actually guarantees they land last. */
+  var fullOrder = (snap.layers || []).slice();
+  var haveLayer = {};
+  fullOrder.forEach(function (id) { haveLayer[id] = true; });
+  domOrderIds().forEach(function (id) { if (!haveLayer[id]) { fullOrder.push(id); haveLayer[id] = true; } });
+  var newOrder = Array.isArray(objData.layers) ?
+    objData.layers.map(function (oldId) { return idMap[oldId]; }).filter(Boolean) : allNewIds.slice();
+  allNewIds.forEach(function (id) { if (newOrder.indexOf(id) === -1) newOrder.push(id); });
+  snap.layers = fullOrder.concat(newOrder);
 
   try { localStorage.setItem(snapshotKey(), JSON.stringify(snap)); } catch (e) {}
 
@@ -3551,6 +3663,7 @@ function placeObject(objData, x, y) {
   applyPositionOverrides(snap.positions);
   applyColorOverrides(snap.colors);
   applyFillOverrides(snap.fill);
+  applyTextColorOverrides(snap.text_color);
   applyTintOverrides(snap.tint);
   applyRadiusOverrides(snap.radius);
   applyBorderOverrides(snap.border);
@@ -4923,6 +5036,17 @@ function applyHistoryAction(action, side) {
     }
     return;
   }
+  if (action.type === "textcolor") {
+    var textColorEl = styleMenuElById(action.id);
+    if (!textColorEl) return;
+    textColorEl.style.color = val || "";
+    saveEditedTextColor(action.id, val || "");
+    if (STYLE_MENU_ID === action.id) {
+      STYLE_MENU.querySelector(".sm-textcolor").value = currentTextColorValue(textColorEl);
+      STYLE_TEXTCOLOR_BEFORE = val || "";
+    }
+    return;
+  }
   if (action.type === "tint") {
     var tintEl = styleMenuElById(action.id);
     if (!tintEl) return;
@@ -5209,6 +5333,25 @@ function saveEditedFill(id, value) {
 }
 
 /**
+ * Persists a button's text-color change from the style popover's Text
+ * color control into the preview snapshot, the same draft everything else
+ * here uses. Separate map from content.colors since a button's "Color" row
+ * already means its background (see colorTarget()); this is its label.
+ * @param id the button's data-edit-id
+ * @param value a css color string, or "" to clear back to the default
+ */
+function saveEditedTextColor(id, value) {
+  var raw;
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  if (!snapshot.text_color || typeof snapshot.text_color !== "object") snapshot.text_color = {};
+  if (!value) delete snapshot.text_color[id];
+  else snapshot.text_color[id] = value;
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
  * Persists an image/video tint change from the style popover's Tint
  * control into the preview snapshot, the same draft everything else here
  * uses.
@@ -5362,6 +5505,7 @@ function initObjectCanvas() {
     applyPositionOverrides(data.positions);
     applyColorOverrides(data.colors);
     applyFillOverrides(data.fill);
+    applyTextColorOverrides(data.text_color);
     applyTintOverrides(data.tint);
     applyRadiusOverrides(data.radius);
     applyBorderOverrides(data.border);
@@ -5475,6 +5619,7 @@ document.addEventListener("DOMContentLoaded", function () {
       applyPositionOverrides(data.positions);
       applyColorOverrides(data.colors);
       applyFillOverrides(data.fill);
+      applyTextColorOverrides(data.text_color);
       applyTintOverrides(data.tint);
       applyRadiusOverrides(data.radius);
       applyBorderOverrides(data.border);

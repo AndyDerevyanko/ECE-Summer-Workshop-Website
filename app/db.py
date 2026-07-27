@@ -269,44 +269,50 @@ DEFAULT_OBJECTS = [
     {
         "name": "Countdown timer",
         "data": {
-            # a composite of individually-editable parts, not one monolith:
-            # a surface card, a "Counting down" eyebrow, the live datetime
-            # element (kind "datetime", the actual ticking digits, see
-            # buildCustomElement()'s "datetime" branch + renderDatetimeContent()
-            # in js/main.js), and a separate DAYS/HRS/MIN/SEC label line, all
-            # grouped so they move as one but each stays independently
-            # editable (font, color, text, the datetime's own format/pattern
-            # via the style popover). the datetime part's target is filled in
-            # at seed time (see _seed_default_objects()), 30 days out from
+            # a composite of individually-editable parts, not one monolith,
+            # but the countdown itself is ONE datetime element (kind
+            # "datetime", format "countdown"), not split into a piece per
+            # unit, its own strftime pattern (left blank here, falls back to
+            # DT_DEFAULT_PATTERNS.countdown in js/main.js) prints all 4 units
+            # in one ticking string. Alongside it: a surface card, a
+            # "COUNTING DOWN" eyebrow, and one "DAYS   HRS   MIN   SEC"
+            # label row underneath, all grouped so they move as one but
+            # each stays independently editable (font, size, color, align,
+            # and, for the datetime part, its own format/pattern via the
+            # style popover). The datetime part's target is filled in at
+            # seed time (see _seed_default_objects()), 30 days out from
             # whenever the db is first created, since a hardcoded date here
             # would eventually sit in the past.
             "custom_elements": [
-                {"id": "seed.cd.box", "kind": "box", "left": 0, "top": 0, "w": 400, "h": 162},
-                {"id": "seed.cd.eyebrow", "kind": "text", "left": 28, "top": 20, "w": 160, "h": 24},
-                {
-                    "id": "seed.cd.dt", "kind": "datetime", "left": 28, "top": 52,
-                    "w": 344, "h": 52, "format": "countdown", "strftime": "", "target": None,
-                },
-                {"id": "seed.cd.labels", "kind": "text", "left": 30, "top": 118, "w": 344, "h": 22},
+                {"id": "seed.cd.box", "kind": "box", "left": 0, "top": 0, "w": 440, "h": 156},
+                {"id": "seed.cd.eyebrow", "kind": "text", "left": 24, "top": 18, "w": 250, "h": 20},
+                {"id": "seed.cd.dt", "kind": "datetime", "left": 24, "top": 50, "w": 392, "h": 48, "format": "countdown", "strftime": "", "target": None},
+                {"id": "seed.cd.lbl", "kind": "text", "left": 24, "top": 104, "w": 392, "h": 20},
             ],
             "text": {
-                "seed.cd.eyebrow": "Counting down",
-                "seed.cd.labels": "DAYS      HRS      MIN      SEC",
+                "seed.cd.eyebrow": "COUNTING DOWN",
+                "seed.cd.lbl": "DAYS   HRS   MIN   SEC",
             },
             "font_sizes": {
-                "seed.cd.eyebrow": ".75rem", "seed.cd.dt": "2rem", "seed.cd.labels": ".72rem",
+                "seed.cd.eyebrow": ".75rem",
+                "seed.cd.dt": "2rem",
+                "seed.cd.lbl": ".7rem",
             },
             "text_styles": {
                 "seed.cd.eyebrow": {"fontFamily": "var(--font-mono)", "letterSpacing": "2px"},
-                "seed.cd.labels": {"fontFamily": "var(--font-mono)", "letterSpacing": "3px"},
+                "seed.cd.dt": {"fontFamily": "var(--font-mono)", "align": "center", "letterSpacing": "4px"},
+                "seed.cd.lbl": {"fontFamily": "var(--font-mono)", "align": "center", "letterSpacing": "1px"},
             },
             "colors": {
                 "seed.cd.box": "color-mix(in srgb, var(--surface) 75%, transparent)",
-                "seed.cd.eyebrow": "var(--accent)", "seed.cd.dt": "var(--accent)",
-                "seed.cd.labels": "var(--muted)",
+                "seed.cd.eyebrow": "var(--accent)",
+                "seed.cd.dt": "var(--accent)",
+                "seed.cd.lbl": "var(--muted)",
             },
             "radius": {"seed.cd.box": 14},
-            "groups": [["seed.cd.box", "seed.cd.eyebrow", "seed.cd.dt", "seed.cd.labels"]],
+            "groups": [[
+                "seed.cd.box", "seed.cd.eyebrow", "seed.cd.dt", "seed.cd.lbl",
+            ]],
         },
     },
     {

@@ -329,7 +329,7 @@ var DT_DAYS_ABBR = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 /* default strftime pattern per datetime format, used when a datetime
    element has no custom pattern of its own (see datetimeText()). */
 var DT_DEFAULT_PATTERNS = {
-  countdown: "%D    %H    %M    %S",
+  countdown: "%D  %H  %M  %S",
   datetime: "%b %-d, %Y, %-I:%M %p",
   date: "%b %-d, %Y",
   time: "%-I:%M %p"

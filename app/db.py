@@ -291,7 +291,14 @@ DEFAULT_OBJECTS = [
             ],
             "text": {
                 "seed.cd.eyebrow": "COUNTING DOWN",
-                "seed.cd.lbl": "DAYS   HRS   MIN   SEC",
+                # wide gaps (not the datetime element's own 2-space ones):
+                # the label renders much smaller than the digits (.7rem vs
+                # 2rem) so it needs proportionally wider spaces to land each
+                # word's center under its matching digit group, see the
+                # white-space: pre rule for [data-edit-id^="seed.cd.lbl"]
+                # in css/style.css, without which this collapses to single
+                # spaces and the words bunch up with no alignment at all.
+                "seed.cd.lbl": "DAYS" + " " * 9 + "HRS" + " " * 9 + "MIN" + " " * 9 + "SEC",
             },
             "font_sizes": {
                 "seed.cd.eyebrow": ".75rem",

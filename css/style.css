@@ -1595,6 +1595,15 @@ body.edit-mode .apply-bob { animation: none; }
   line-height: 1.2;
 }
 
+/* the seeded "Countdown timer" object's unit-label row (DAYS  HRS  MIN  SEC)
+   uses runs of spaces to line its words up under the datetime element's own
+   digit groups, same trick as .dt-el above; a plain [data-edit-id] field is
+   white-space: normal (collapses those runs to one space), which broke the
+   alignment entirely, so this one needs the same treatment. Matched on a
+   prefix since a placed copy's id gets a random suffix (see uniqueDupSuffix()
+   in js/main.js). */
+[data-edit-id^="seed.cd.lbl"] { white-space: pre; }
+
 /* frozen slot an element leaves behind when its first resize detaches it
    from flow (detachFromFlow() in js/main.js) */
 .free-wrap { position: relative; }

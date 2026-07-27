@@ -1523,17 +1523,19 @@ function detachFromFlow(el) {
 }
 
 /* the visual editor's one selection ring: a floating frame that follows
-   whatever tracked element the mouse is over, carrying 8 resize handles
+   whichever tracked element was last clicked, carrying 8 resize handles
    (all four corners + all four edges, so any direction works) and one
    move handle. one shared ring instead of per-element grips, so a
    hundred-odd tagged elements never show overlapping handles at once and
    nested elements (an icon in a card in a section) stay individually
-   grabbable: whichever one the cursor is actually over owns the ring. */
+   grabbable. Selection is click-based and sticky: it stays on whatever was
+   clicked regardless of where the mouse moves afterward (so an element
+   just dragged behind another stays selected and can still be grabbed by
+   its own move handle, which floats above everything), and only changes
+   when a different tracked element is clicked or empty space clears it. */
 var RING = null;
 var RING_EL = null;
 var RING_DRAGGING = false;
-/* pending hover-intent switch, see wireResizable()'s mouseover listener */
-var RING_HOVER_TIMER = null;
 /* the ring's one layer-order button, so the popover can anchor under it */
 var LAYER_BTN = null;
 /* the ring's one style (color/opacity) button, so the popover can anchor under it */
@@ -4500,65 +4502,26 @@ function wireAddElementMenu() {
 var JUST_DRAGGED = false;
 
 /**
- * Sets up the visual editor's shared selection ring: hovering any tagged
+ * Sets up the visual editor's shared selection ring: clicking any tagged
  * element (text field, image, icon, card, nav, section, footer, button,
  * day row, tile, anything carrying a data-edit-id or data-resize-id)
- * attaches the ring to it. Buttons are single tagged elements, so their
- * text box IS the button itself; every other text field is its own box,
- * fully independent of whatever container it sits in. Moving doesn't need
- * the handle: dragging anywhere on the element itself moves it too, with
- * a small threshold so a plain click still clicks (and still opens a text
- * edit). Only called in the ta portal's Visual editor tab alongside
- * wireClickToEdit().
+ * attaches the ring to it, and the ring stays there (sticky selection)
+ * until a different tracked element is clicked or empty space clears it,
+ * regardless of what the mouse hovers over in between. This matters once
+ * an element ends up behind another one (moved there, or just naturally
+ * stacked that way): a plain click-drag on its own body can only ever
+ * reach whichever element is topmost at that pixel, but the ring's own
+ * move handle floats above everything, so a selected-but-covered element
+ * can still be dragged by it as long as it hasn't been deselected. Buttons
+ * are single tagged elements, so their text box IS the button itself;
+ * every other text field is its own box, fully independent of whatever
+ * container it sits in. Moving doesn't need the handle: dragging anywhere
+ * on the element itself moves it too, with a small threshold so a plain
+ * click still clicks (and still opens a text edit). Only called in the ta
+ * portal's Visual editor tab alongside wireClickToEdit().
  */
 function wireResizable() {
   buildRing();
-  document.addEventListener("mouseover", function (e) {
-    if (RING_DRAGGING) return;
-    if (RING.contains(e.target)) {
-      /* back on the ring's own frame/handles: whatever switch-away might
-         still be pending from a moment ago (see below) is moot now, cancel
-         it so it can't fire later and yank the ring out from under a click
-         that's about to land right here */
-      clearTimeout(RING_HOVER_TIMER);
-      return;
-    }
-    var t = e.target.closest ? e.target.closest(RESIZABLE_SEL) : null;
-    if (!t || t === RING_EL) {
-      /* back on the currently selected element itself: same cancellation,
-         see the pending-timer note below for why this matters just as much
-         as the RING.contains(e.target) case above */
-      clearTimeout(RING_HOVER_TIMER);
-      return;
-    }
-    /* hover-intent delay, not an immediate switch: the ring's own handles
-       (.lyh/.sth/.delh, all tucked into a corner of the CURRENTLY selected
-       element) often sit some real screen distance from wherever the mouse
-       was a moment ago (eg the ta just clicked an "Add element" menu item,
-       or is coming back from a popover), and the straight-line mouse path
-       to reach them can cross other tracked elements (a nested icon, a
-       neighbouring card) along the way. Each one fired mouseover and
-       reassigned RING_EL/repositioned the ring instantly, so by the time the
-       click on a handle actually landed it was often acting on whatever was
-       last grazed in transit, not the element the ring visibly showed a
-       moment before ("bring forward" etc quietly doing nothing to the right
-       thing, or the wrong thing, was this bug). Only committing the switch
-       after the cursor actually rests on the new element for a beat (same
-       "hover intent" trick every dropdown-menu library uses) means a quick
-       transit across other elements never reassigns anything, only an
-       actual, sustained hover over something new does.
-       Crucially, this ONLY works because the two early returns above also
-       clear a PENDING timer: without them, briefly grazing element B on the
-       way to element A's own handle (still schedules "switch to B" 120ms
-       out), then arriving back at A/A's ring before those 120ms elapse,
-       used to still let the stale "switch to B" fire later out of nowhere,
-       right as a click was landing on what looked like A's handle. */
-    clearTimeout(RING_HOVER_TIMER);
-    RING_HOVER_TIMER = setTimeout(function () {
-      RING_EL = t;
-      positionRing();
-    }, 120);
-  });
   window.addEventListener("scroll", positionRing, true);
   window.addEventListener("resize", positionRing);
 
@@ -4567,7 +4530,21 @@ function wireResizable() {
     if (e.button !== 0) return;
     if (RING.contains(e.target)) return;
     var el = e.target.closest ? e.target.closest(RESIZABLE_SEL) : null;
-    if (!el) return;
+    if (!el) {
+      /* clicked away from every tracked element: clear the sticky selection,
+         unless the click actually landed in one of the selected element's
+         own floating popovers (layer/style menus, the right-click add-
+         element menu, the rich text toolbar) - those aren't part of the
+         page content but still count as "still using the selection" */
+      if ((!LAYER_MENU || !LAYER_MENU.contains(e.target)) &&
+          (!STYLE_MENU || !STYLE_MENU.contains(e.target)) &&
+          (!CTX_MENU || !CTX_MENU.contains(e.target)) &&
+          (!TEXT_TOOLBAR || !TEXT_TOOLBAR.contains(e.target))) {
+        RING_EL = null;
+        RING.style.display = "none";
+      }
+      return;
+    }
     /* mid-edit: leave the mouse to text selection/caret placement */
     if (el.isContentEditable) return;
     /* shift-click toggles group-selection instead of starting a drag (see
@@ -4575,6 +4552,14 @@ function wireResizable() {
        already does the same thing, this covers everything else (images,
        icons, boxes, sections) that only ever goes through THIS handler */
     if (e.shiftKey) { e.preventDefault(); e.stopPropagation(); toggleSelected(elId(el)); return; }
+
+    /* a click always selects the element it landed on, and that selection
+       sticks regardless of what the mouse hovers over afterward (see
+       wireResizable()'s doc comment): this is what lets an element that
+       ends up behind another still be grabbed by its own move handle */
+    RING_EL = el;
+    positionRing();
+
     /* locked: don't even start tracking a possible drag, see isLocked() */
     if (isLocked(elId(el))) return;
 

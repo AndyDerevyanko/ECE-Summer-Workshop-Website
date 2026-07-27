@@ -1186,38 +1186,6 @@ function renderHomeImages() {
   });
 }
 
-/**
- * Renders the "Deleted elements" list: one row per id in STATE.hidden
- * (js/main.js's deleteElement(), synced in from the Visual editor's
- * localStorage snapshot the same way sizes/positions are), each with a
- * Restore button. A deleted element is display:none in the iframe, so once
- * it's applied and reloaded there's no way to hover it back into the
- * selection ring, this list is the only way back short of undoing within
- * the same editor session.
- */
-function renderDeletedList() {
-  var list = document.getElementById("deletedList");
-  if (!list) return;
-  if (!STATE.hidden.length) {
-    list.innerHTML = '<p class="muted" style="margin:0">Nothing deleted.</p>';
-    return;
-  }
-  list.className = "res-list";
-  list.innerHTML = STATE.hidden.map(function (id, i) {
-    return '<div class="res-row" data-idx="' + i + '">' +
-      '<span class="rname">' + id + '</span>' +
-      '<button class="btn btn-ghost deleted-restore" type="button">Restore</button>' +
-    '</div>';
-  }).join("");
-  list.querySelectorAll(".deleted-restore").forEach(function (btn) {
-    btn.addEventListener("click", function () {
-      var idx = parseInt(btn.closest(".res-row").getAttribute("data-idx"), 10);
-      STATE.hidden.splice(idx, 1);
-      renderDeletedList();
-    });
-  });
-}
-
 /** Pushes STATE into the landing page controls' input values. */
 function syncLanding() {
   var radios = document.querySelectorAll('input[name="cdMode"]');
@@ -1242,7 +1210,6 @@ function renderAll() {
   renderLogistics();
   renderGallery();
   renderHomeImages();
-  renderDeletedList();
   syncLanding();
   renderPreview();
 }

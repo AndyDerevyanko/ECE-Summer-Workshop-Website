@@ -214,6 +214,103 @@ DEFAULT_CONTENT = {
     "links": {},
 }
 
+# starter "objects" library entries (see the objects table below): reusable
+# element bundles a ta can drop onto the page from the visual editor's
+# right-click "Add element" > "Object" picker (see placeObject() in
+# js/main.js). Each is authored from scratch as its own small
+# custom_elements bundle (same shape content.custom_elements already uses),
+# not derived from anything already tagged on index.html, so seeding this
+# can never change how the real page's own elements are tagged/grouped.
+# the seeded "Navbar" bundle in particular carries no fixed_elements entry
+# at all (placeObject() never copies one across anyway, it isn't one of the
+# maps it remaps), so a placed copy is a normal, freely-movable group, never
+# auto-promoted the way the real live nav is.
+DEFAULT_OBJECTS = [
+    {
+        "name": "Logistics tile",
+        "data": {
+            "custom_elements": [
+                {"id": "seed.tile.box", "kind": "box", "left": 0, "top": 0, "w": 170, "h": 110},
+                {"id": "seed.tile.big", "kind": "text", "left": 24, "top": 24, "w": 122, "h": 34},
+                {"id": "seed.tile.lbl", "kind": "text", "left": 24, "top": 64, "w": 122, "h": 20},
+            ],
+            "text": {
+                "seed.tile.big": "2 weeks",
+                "seed.tile.lbl": "Tentative start date",
+            },
+            "font_sizes": {"seed.tile.big": "26px"},
+            "text_styles": {"seed.tile.big": {"fontFamily": "var(--font-head)"}},
+            "colors": {"seed.tile.lbl": "var(--muted)"},
+            "radius": {"seed.tile.box": 10},
+            "groups": [["seed.tile.box", "seed.tile.big", "seed.tile.lbl"]],
+        },
+    },
+    {
+        "name": "Countdown timer",
+        "data": {
+            "custom_elements": [
+                {
+                    "id": "seed.cd.icon", "kind": "icon", "left": 0, "top": 6, "w": 26, "h": 26,
+                    "icon": (
+                        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" '
+                        'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+                        '<rect x="3" y="5" width="18" height="16" rx="2" /><path d="M3 9h18M8 3v4M16 3v4" /></svg>'
+                    ),
+                },
+                {"id": "seed.cd.label", "kind": "text", "left": 40, "top": 0, "w": 160, "h": 18},
+                {"id": "seed.cd.text", "kind": "text", "left": 40, "top": 20, "w": 200, "h": 26},
+            ],
+            "text": {
+                "seed.cd.label": "Date and time",
+                "seed.cd.text": "To be announced",
+            },
+            "font_sizes": {"seed.cd.text": "18px"},
+            "colors": {"seed.cd.label": "var(--accent)"},
+            "groups": [["seed.cd.icon", "seed.cd.label", "seed.cd.text"]],
+        },
+    },
+    {
+        "name": "Navbar",
+        "data": {
+            "custom_elements": [
+                {"id": "seed.nav.bar", "kind": "box", "left": 0, "top": 0, "w": 900, "h": 64},
+                {"id": "seed.nav.brand", "kind": "text", "left": 24, "top": 20, "w": 160, "h": 24},
+                {"id": "seed.nav.link1", "kind": "text", "left": 420, "top": 22, "w": 60, "h": 20},
+                {"id": "seed.nav.link2", "kind": "text", "left": 500, "top": 22, "w": 60, "h": 20},
+                {"id": "seed.nav.btn", "kind": "button", "left": 760, "top": 14, "w": 110, "h": 36},
+            ],
+            "text": {
+                "seed.nav.brand": "Brand",
+                "seed.nav.link1": "Home",
+                "seed.nav.link2": "About",
+                "seed.nav.btn": "Apply Now",
+            },
+            "text_styles": {"seed.nav.brand": {"fontFamily": "var(--font-head)"}},
+            "groups": [["seed.nav.bar", "seed.nav.brand", "seed.nav.link1", "seed.nav.link2", "seed.nav.btn"]],
+        },
+    },
+    {
+        "name": "Heading + subheading",
+        "data": {
+            "custom_elements": [
+                {"id": "seed.head.eyebrow", "kind": "text", "left": 0, "top": 0, "w": 200, "h": 18},
+                {"id": "seed.head.title", "kind": "text", "left": 0, "top": 22, "w": 320, "h": 40},
+            ],
+            "text": {
+                "seed.head.eyebrow": "Eyebrow",
+                "seed.head.title": "Heading",
+            },
+            "font_sizes": {"seed.head.title": "30px"},
+            "text_styles": {
+                "seed.head.eyebrow": {"fontFamily": "var(--font-body)", "letterSpacing": "1px"},
+                "seed.head.title": {"fontFamily": "var(--font-head)"},
+            },
+            "colors": {"seed.head.eyebrow": "var(--accent)"},
+            "groups": [["seed.head.eyebrow", "seed.head.title"]],
+        },
+    },
+]
+
 
 def get_db():
     """opens a new connection to the sqlite database.
@@ -332,11 +429,27 @@ def init_db():
         )
         """
     )
+    # shared reusable-object library (see DEFAULT_OBJECTS above and
+    # placeObject() in js/main.js): visible to every ta right away, same
+    # "shared the moment it's added" model as custom_assets, but stores a
+    # whole bundle (custom_elements + per-id override maps) as json instead
+    # of a single uploaded file's url.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS objects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner TEXT NOT NULL,
+            name TEXT NOT NULL,
+            data TEXT NOT NULL
+        )
+        """
+    )
     conn.commit()
     _seed_users(conn)
     _backfill_plain(conn)
     _seed_content(conn)
     _seed_default_profile(conn)
+    _seed_default_objects(conn)
     conn.close()
 
 
@@ -521,6 +634,27 @@ def _seed_default_profile(conn):
     conn.commit()
 
 
+def _seed_default_objects(conn):
+    """inserts the starter Objects library (DEFAULT_OBJECTS) exactly once,
+    ever, same one-time meta-flag trick as _seed_default_profile(): a ta who
+    deletes every seeded object shouldn't see them reappear on the server's
+    next restart.
+    @param conn an open db connection
+    """
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO meta (key, value) VALUES ('default_objects_seeded', '1')"
+    )
+    conn.commit()
+    if cur.rowcount == 0:
+        return
+    for obj in DEFAULT_OBJECTS:
+        conn.execute(
+            "INSERT INTO objects (owner, name, data) VALUES (?, ?, ?)",
+            ("system", obj["name"], json.dumps(obj["data"])),
+        )
+    conn.commit()
+
+
 def get_content():
     """reads the live ta-editable content blob.
     @return the content dict, with any keys missing from an older save filled in from DEFAULT_CONTENT
@@ -698,5 +832,79 @@ def delete_custom_asset(asset_id):
     """
     conn = get_db()
     conn.execute("DELETE FROM custom_assets WHERE id = ?", (asset_id,))
+    conn.commit()
+    conn.close()
+
+
+def list_objects():
+    """lists every saved object in the shared reusable-objects library.
+    @return a list of {id, owner, name, data} rows
+    """
+    conn = get_db()
+    rows = conn.execute("SELECT id, owner, name, data FROM objects ORDER BY id").fetchall()
+    conn.close()
+    return [
+        {"id": r["id"], "owner": r["owner"], "name": r["name"], "data": json.loads(r["data"])}
+        for r in rows
+    ]
+
+
+def get_object(object_id):
+    """looks up one saved object.
+    @param object_id the object's id
+    @return the object row, or none if it doesn't exist
+    """
+    conn = get_db()
+    row = conn.execute(
+        "SELECT id, owner, name, data FROM objects WHERE id = ?", (object_id,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {"id": row["id"], "owner": row["owner"], "name": row["name"], "data": json.loads(row["data"])}
+
+
+def create_object(owner, name, data):
+    """saves a new object to the shared library.
+    @param owner the ta creating it
+    @param name display name
+    @param data the object's bundle (custom_elements + per-id override maps,
+        same shape a chunk of content would use, see placeObject() in js/main.js)
+    @return the new object's id
+    """
+    conn = get_db()
+    cur = conn.execute(
+        "INSERT INTO objects (owner, name, data) VALUES (?, ?, ?)",
+        (owner, name, json.dumps(data)),
+    )
+    conn.commit()
+    conn.close()
+    return cur.lastrowid
+
+
+def update_object(object_id, name=None, data=None):
+    """partially updates an object; omitted fields are left unchanged. any ta
+    can update an object's name/data, it's a shared team library, not
+    per-owner content, only deleting is owner-restricted (see
+    api_delete_object() in app/main.py, same rule a custom asset uses).
+    @param object_id the object to update
+    @param name new display name, if renaming
+    @param data new bundle, if saving edits
+    """
+    conn = get_db()
+    if name is not None:
+        conn.execute("UPDATE objects SET name = ? WHERE id = ?", (name, object_id))
+    if data is not None:
+        conn.execute("UPDATE objects SET data = ? WHERE id = ?", (json.dumps(data), object_id))
+    conn.commit()
+    conn.close()
+
+
+def delete_object(object_id):
+    """deletes an object from the shared library.
+    @param object_id the object to delete
+    """
+    conn = get_db()
+    conn.execute("DELETE FROM objects WHERE id = ?", (object_id,))
     conn.commit()
     conn.close()

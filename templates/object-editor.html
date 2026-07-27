@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Object editor · ECE Workshops</title>
+
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("theme");
+        if (t) document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css?v=3" />
+</head>
+<body class="mono obj-editor-page">
+
+  <!-- shown if you're not logged in with a ta key -->
+  <div class="gate" id="objGate" style="display:none">
+    <h2>Staff only</h2>
+    <p class="muted">Log in with a staff key to build reusable objects.</p>
+    <a class="btn btn-primary" href="login.html">Go to login</a>
+  </div>
+
+  <!-- deliberately not a <nav>: this is portal chrome for the mini editor,
+       not a site nav, the object canvas underneath it never gets one -->
+  <div class="obj-toolbar" id="objApp" style="display:none" oncontextmenu="event.stopPropagation()">
+    <a href="instructor.html#objects" class="btn btn-ghost obj-back">Objects</a>
+    <input type="text" id="objName" class="obj-name-input" placeholder="Object name" maxlength="60">
+    <button class="btn btn-ghost" id="objUndo" type="button" disabled>Undo</button>
+    <button class="btn btn-ghost" id="objRedo" type="button" disabled>Redo</button>
+    <button class="btn btn-primary" id="objSave" type="button">Save object</button>
+    <button class="btn btn-ghost" id="objNew" type="button">New object</button>
+    <button class="btn btn-ghost" id="objDelete" type="button" style="display:none">Delete</button>
+    <span class="form-msg" id="objMsg"></span>
+  </div>
+
+  <div class="obj-canvas-hint" id="objCanvasHint">
+    Right-click anywhere below to add an element. Everything placed here is saved as one object.
+  </div>
+
+  <script src="js/idle.js?v=3"></script>
+  <script src="js/main.js?v=3"></script>
+  <script src="js/object-editor.js?v=3"></script>
+</body>
+</html>

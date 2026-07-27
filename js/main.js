@@ -95,6 +95,72 @@ function isPreviewMode() {
   return /[?&]preview=1(&|$)/.test(window.location.search);
 }
 
+/**
+ * Checks whether this page is the reusable-object mini editor's blank
+ * canvas (templates/object-editor.html), rather than a real page or a page
+ * preview. Same click-to-edit/resize/color/group/etc engine as the Visual
+ * editor tab, just aimed at building one reusable bundle instead of editing
+ * the live page, see initObjectCanvas()/snapshotKey().
+ * @return true if ?object=1 is set
+ */
+function isObjectMode() {
+  return /[?&]object=1(&|$)/.test(window.location.search);
+}
+
+/**
+ * The localStorage key every save*()/apply*Overrides() draft in this file
+ * reads and writes: the shared "preview_content" snapshot on a real page/
+ * preview (see js/ta.js's writePreviewSnapshot()), or the object mini
+ * editor's own "object_content" scene when isObjectMode(). This one switch
+ * is what lets the entire visual editor engine (resize, move, color, tint,
+ * group, layers, undo, all of it) work unmodified against a blank object
+ * canvas, exactly the same code path, just a different piece of storage.
+ * @return the localStorage key to use
+ */
+function snapshotKey() {
+  return isObjectMode() ? "object_content" : "preview_content";
+}
+
+/* every object saved to the shared reusable-objects library (a ta-only
+   resource, GET/POST/DELETE /api/objects in app/main.py, entirely separate
+   from content/preview_content), fetched fresh whenever the visual editor's
+   right-click "Add element" menu might need it (see fetchObjectsLibrary()/
+   placeObject()/renderCtxMenuObjectPicker()). */
+var OBJECTS_LIBRARY = [];
+
+/**
+ * Fetches the shared reusable-objects library (ta-only, needs the bearer
+ * token, same convention assetFetch() already uses for icons/videos/fonts
+ * since this file never loads js/ta.js's own authedFetch()). Resolves to []
+ * on any failure (not logged in, network error) rather than rejecting, so a
+ * real visitor's page load (which never calls this) or a stale/expired
+ * session just sees an empty picker instead of breaking anything.
+ * @return a promise resolving to the objects list
+ */
+function fetchObjectsLibrary() {
+  return assetFetch("/api/objects")
+    .then(function (res) { return res.ok ? res.json() : []; })
+    .catch(function () { return []; });
+}
+
+/**
+ * Loads whatever's in the object mini editor's own canvas (a blank scene
+ * until something's placed in it, see templates/object-editor.html), plus
+ * the shared objects library (see fetchObjectsLibrary(), so a saved object
+ * is placeable inside another object too). Mirrors fetchContent()'s "read
+ * the shared draft, mojibake-repair it" shape, but the scene itself is
+ * never the server's /api/content, an object canvas has no page of its own
+ * to fall back to.
+ * @return a promise resolving to the canvas's current content-shaped scene
+ */
+function fetchObjectContent() {
+  var raw;
+  try { raw = localStorage.getItem("object_content"); } catch (e) { raw = null; }
+  var scene;
+  try { scene = raw ? repairMojibakeDeep(JSON.parse(raw)) : {}; } catch (e) { scene = {}; }
+  return fetchObjectsLibrary().then(function (list) { OBJECTS_LIBRARY = list; return scene; });
+}
+
 /* windows-1252's 0x80-0x9f block, the only range where it disagrees with
    latin-1 (euro sign, smart quotes, en/em dash, etc). used by
    repairMojibake() to reverse text that got typed as utf-8 then saved
@@ -183,7 +249,7 @@ function repairMojibakeDeep(val) {
 function fetchContent() {
   if (isPreviewMode()) {
     try {
-      var raw = localStorage.getItem("preview_content");
+      var raw = localStorage.getItem(snapshotKey());
       if (raw) return Promise.resolve(repairMojibakeDeep(JSON.parse(raw)));
     } catch (e) {}
   }
@@ -844,11 +910,11 @@ function toggleFixed(id) {
  */
 function saveFixedElements(ids) {
   var raw;
-  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   var snapshot;
   try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
   snapshot.fixed_elements = ids;
-  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
 }
 
 /* ids locked against being moved (right-click "Lock element"/"Unlock
@@ -901,11 +967,11 @@ function toggleLocked(id) {
  */
 function saveLockedElements(ids) {
   var raw;
-  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   var snapshot;
   try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
   snapshot.locked = ids;
-  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
 }
 
 /**
@@ -1201,11 +1267,11 @@ function pushLayerExtremeUndo(id, toTop) {
  */
 function saveLayerOrder(order) {
   var raw;
-  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   var snapshot;
   try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
   snapshot.layers = order;
-  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
 }
 
 /* undo/redo for every visual editor action, a plain stack of commits: see
@@ -2618,11 +2684,11 @@ function dissolveGroup(id) {
  */
 function saveGroups(groups) {
   var raw;
-  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   var snapshot;
   try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
   snapshot.groups = groups;
-  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
 }
 
 /**
@@ -3029,11 +3095,11 @@ function renderCustomElements(list) {
  */
 function saveCustomElements(list) {
   var raw;
-  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   var snapshot;
   try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
   snapshot.custom_elements = list;
-  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
 }
 
 /**
@@ -3160,7 +3226,7 @@ function insertDuplicateClone(sourceEl, built) {
  */
 function copyDuplicateOverrides(pairs) {
   var raw;
-  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   var snap;
   try { snap = raw ? JSON.parse(raw) : {}; } catch (e) { snap = {}; }
   var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "radius", "border", "links"];
@@ -3179,7 +3245,7 @@ function copyDuplicateOverrides(pairs) {
       snap.shadow.push(p.new);
     }
   });
-  try { localStorage.setItem("preview_content", JSON.stringify(snap)); } catch (e) {}
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snap)); } catch (e) {}
 }
 
 /**
@@ -3194,12 +3260,12 @@ function copyDuplicateOverrides(pairs) {
  */
 function saveDuplicateEntry(sourceId, suffix) {
   var raw;
-  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   var snap;
   try { snap = raw ? JSON.parse(raw) : {}; } catch (e) { snap = {}; }
   if (!Array.isArray(snap.duplicates)) snap.duplicates = [];
   snap.duplicates.push({ sourceId: sourceId, suffix: suffix });
-  try { localStorage.setItem("preview_content", JSON.stringify(snap)); } catch (e) {}
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snap)); } catch (e) {}
 }
 
 /**
@@ -3377,6 +3443,134 @@ function addCustomElement(kind, x, y, extra) {
   return el;
 }
 
+/**
+ * Drops a saved object (see the right-click "Add element" > "Object"
+ * picker, renderCtxMenuObjectPicker()) onto the canvas at (x, y): every part
+ * in objData.custom_elements is rebuilt (buildCustomElement(), same
+ * construction renderCustomElements() already uses on every load) under a
+ * freshly suffixed id (uniqueDupSuffix(), same collision-free scheme
+ * duplicateElement() uses to rename a whole subtree at once), offset so the
+ * object's own bounding box lands with its top-left at (x, y) regardless of
+ * where its parts happened to sit in the object's own mini editor canvas.
+ * Every per-id override map the object bundle carries (sizes, positions,
+ * colors, ..., even its own internal groupings/stacking order from the
+ * mini editor) is remapped onto the new ids and merged into the live
+ * snapshot, the same "copy old id's overrides onto the new id" trick
+ * copyDuplicateOverrides() already uses for a plain duplicate, just sourced
+ * from a separate bundle instead of the same document. Every part not
+ * already tied together by one of those internal groupings still ends up
+ * in one new all-parts group regardless, so the placed object always moves
+ * as a single rigid unit, the whole point of placing one.
+ * @param objData the object's stored bundle (an object row's "data")
+ * @param x left, document px (where the menu was opened)
+ * @param y top, document px
+ */
+function placeObject(objData, x, y) {
+  var parts = (objData.parts || objData.custom_elements || []).slice();
+  if (!parts.length) return;
+  var minLeft = Math.min.apply(null, parts.map(function (p) { return p.left || 0; }));
+  var minTop = Math.min.apply(null, parts.map(function (p) { return p.top || 0; }));
+  var dx = x - minLeft, dy = y - minTop;
+  var suffix = uniqueDupSuffix();
+  var idMap = {};
+  parts.forEach(function (p) { idMap[p.id] = p.id + suffix; });
+
+  var raw, snap;
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
+  try { snap = raw ? JSON.parse(raw) : {}; } catch (e) { snap = {}; }
+
+  var newParts = parts.map(function (p) {
+    var np = Object.assign({}, p);
+    np.id = idMap[p.id];
+    np.left = Math.round((p.left || 0) + dx);
+    np.top = Math.round((p.top || 0) + dy);
+    return np;
+  });
+  snap.custom_elements = (snap.custom_elements || []).concat(newParts);
+
+  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "radius", "border", "links"];
+  plainMaps.forEach(function (m) {
+    if (!objData[m]) return;
+    snap[m] = snap[m] || {};
+    Object.keys(objData[m]).forEach(function (oldId) {
+      if (idMap[oldId]) snap[m][idMap[oldId]] = objData[m][oldId];
+    });
+  });
+  if (objData.text_styles) {
+    snap.text_styles = snap.text_styles || {};
+    Object.keys(objData.text_styles).forEach(function (oldId) {
+      if (idMap[oldId]) snap.text_styles[idMap[oldId]] = Object.assign({}, objData.text_styles[oldId]);
+    });
+  }
+  ["shadow", "locked"].forEach(function (m) {
+    if (!Array.isArray(objData[m])) return;
+    snap[m] = snap[m] || [];
+    objData[m].forEach(function (oldId) {
+      if (idMap[oldId] && snap[m].indexOf(idMap[oldId]) === -1) snap[m].push(idMap[oldId]);
+    });
+  });
+
+  /* internal groupings made while building the object (eg its own icon
+     grouped with its own label) are preserved, remapped onto the new ids */
+  snap.groups = snap.groups || [];
+  if (Array.isArray(objData.groups)) {
+    objData.groups.forEach(function (g) {
+      var mapped = g.map(function (oldId) { return idMap[oldId]; }).filter(Boolean);
+      if (mapped.length > 1) snap.groups.push(mapped);
+    });
+  }
+  var allNewIds = newParts.map(function (p) { return p.id; });
+  /* every part still moves together as one rigid unit regardless of
+     whatever finer-grained groupings above, that's the whole point of
+     placing a saved object rather than pasting loose parts */
+  if (allNewIds.length > 1) snap.groups.push(allNewIds);
+
+  snap.layers = snap.layers || [];
+  if (Array.isArray(objData.layers)) {
+    objData.layers.forEach(function (oldId) { if (idMap[oldId]) snap.layers.push(idMap[oldId]); });
+  } else {
+    snap.layers = snap.layers.concat(allNewIds);
+  }
+
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snap)); } catch (e) {}
+
+  /* only the newly-placed parts need building, everything already on the
+     canvas stays exactly as it is: renderCustomElements() rebuilds its
+     WHOLE list from scratch, calling it again here would duplicate every
+     element already placed earlier this session */
+  newParts.forEach(function (p) {
+    var el = buildCustomElement(p);
+    if (p.kind === "text" || p.kind === "button") wireTextField(el);
+  });
+  CUSTOM_ELEMENTS = CUSTOM_ELEMENTS.concat(newParts);
+
+  applyTextOverrides(snap.text || {});
+  applySizeOverrides(snap.sizes);
+  applyFontSizeOverrides(snap.font_sizes);
+  applyTextStyleOverrides(snap.text_styles);
+  applyPositionOverrides(snap.positions);
+  applyColorOverrides(snap.colors);
+  applyFillOverrides(snap.fill);
+  applyTintOverrides(snap.tint);
+  applyRadiusOverrides(snap.radius);
+  applyBorderOverrides(snap.border);
+  applyShadowOverrides(snap.shadow);
+  applyOpacityOverrides(snap.opacity);
+  setLockedElements(snap.locked);
+  setLinks(snap.links);
+  applyGroups(snap.groups);
+  applyLayerOrder(snap.layers);
+  applyFixedHighlight();
+  applyLinkHighlight();
+  applyLockHighlight();
+
+  /* mirrors addCustomElement()'s own "add" entry: undo just hides every new
+     part again, redo unhides them, the elements and their custom_elements
+     entries stay around either way */
+  EDIT_UNDO.push({ type: "addmulti", ids: allNewIds });
+  EDIT_REDO.length = 0;
+}
+
 /* the one floating right-click "Add element" menu, same singleton pattern
    as the ring/text toolbar */
 var CTX_MENU = null;
@@ -3445,7 +3639,8 @@ function renderCtxMenuRoot() {
     '<button type="button" data-add="image">Image</button>' +
     '<button type="button" data-add="video">Video</button>' +
     '<button type="button" data-add="icon">Icon</button>' +
-    '<button type="button" data-add="button">Button</button>';
+    '<button type="button" data-add="button">Button</button>' +
+    '<button type="button" data-add="object">Object...</button>';
   CTX_MENU.querySelectorAll("button[data-add]").forEach(function (btn) {
     btn.addEventListener("click", function () { handleCtxAdd(btn.getAttribute("data-add")); });
   });
@@ -3734,16 +3929,47 @@ function renderCtxMenuVideoPicker() {
 }
 
 /**
- * Handles a click on one of the root menu's 6 options: textbox/box add
- * immediately and close the menu, icon/button/image/video swap to a
+ * Swaps the menu into its "Add object" sub-view: every object saved to the
+ * shared reusable-objects library (OBJECTS_LIBRARY, fetched fresh on every
+ * page load, see fetchContent()/fetchObjectContent()), each rebuilt (see
+ * placeObject()) as a group of freshly-idd elements at the point the menu
+ * was opened. Built the same page in both the real Visual editor and the
+ * object mini editor itself, so an object can be built up out of other,
+ * already-saved objects too.
+ */
+function renderCtxMenuObjectPicker() {
+  CTX_MENU.innerHTML =
+    '<div class="ctx-title">Place an object</div>' +
+    '<div class="ctx-objects"></div>';
+  var wrap = CTX_MENU.querySelector(".ctx-objects");
+  if (!OBJECTS_LIBRARY.length) {
+    wrap.innerHTML = '<div class="ctx-file-msg">No saved objects yet. Build one in the object editor.</div>';
+    return;
+  }
+  OBJECTS_LIBRARY.forEach(function (obj) {
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = obj.name || "Object";
+    btn.addEventListener("click", function () {
+      placeObject(obj.data || {}, CTX_POS.x, CTX_POS.y);
+      hideCtxMenu();
+    });
+    wrap.appendChild(btn);
+  });
+}
+
+/**
+ * Handles a click on one of the root menu's 7 options: textbox/box add
+ * immediately and close the menu, icon/button/image/video/object swap to a
  * picker/link/file sub-view first.
- * @param kind "text", "box", "image", "video", "icon", or "button"
+ * @param kind "text", "box", "image", "video", "icon", "button", or "object"
  */
 function handleCtxAdd(kind) {
   if (kind === "icon") { renderCtxMenuIconPicker(); return; }
   if (kind === "button") { renderCtxMenuButtonLink(); return; }
   if (kind === "image") { renderCtxMenuImagePicker(); return; }
   if (kind === "video") { renderCtxMenuVideoPicker(); return; }
+  if (kind === "object") { renderCtxMenuObjectPicker(); return; }
   addCustomElement(kind, CTX_POS.x, CTX_POS.y);
   hideCtxMenu();
 }
@@ -4579,6 +4805,10 @@ function applyHistoryAction(action, side) {
     action.ids.forEach(function (id) { setElementHidden(id, side === "after"); });
     return;
   }
+  if (action.type === "addmulti") {
+    action.ids.forEach(function (id) { setElementHidden(id, side === "before"); });
+    return;
+  }
   if (action.type === "group") {
     if (side === "after") createGroup(action.ids); else dissolveGroup(action.ids[0]);
     return;
@@ -4773,7 +5003,7 @@ function applyHistoryAction(action, side) {
  */
 function saveEditedField(id, html, defaultHtml) {
   var raw;
-  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   var snapshot;
   try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
 
@@ -4792,7 +5022,7 @@ function saveEditedField(id, html, defaultHtml) {
     else snapshot.text[id] = html;
   }
 
-  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
 }
 
 /**
@@ -4806,13 +5036,13 @@ function saveEditedField(id, html, defaultHtml) {
  */
 function saveEditedSize(id, size) {
   var raw;
-  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   var snapshot;
   try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
   if (!snapshot.sizes || typeof snapshot.sizes !== "object") snapshot.sizes = {};
   if (size == null) delete snapshot.sizes[id];
   else snapshot.sizes[id] = size;
-  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
 }
 
 /**
@@ -4823,12 +5053,12 @@ function saveEditedSize(id, size) {
  */
 function saveFontSize(id, px) {
   var raw;
-  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   var snapshot;
   try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
   if (!snapshot.font_sizes || typeof snapshot.font_sizes !== "object") snapshot.font_sizes = {};
   snapshot.font_sizes[id] = px;
-  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
 }
 
 /**
@@ -4844,7 +5074,7 @@ function saveFontSize(id, px) {
  */
 function saveTextStyle(id, prop, value) {
   var raw;
-  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   var snapshot;
   try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
   if (!snapshot.text_styles || typeof snapshot.text_styles !== "object") snapshot.text_styles = {};
@@ -4852,7 +5082,7 @@ function saveTextStyle(id, prop, value) {
   if (value) snapshot.text_styles[id][prop] = value;
   else delete snapshot.text_styles[id][prop];
   if (!Object.keys(snapshot.text_styles[id]).length) delete snapshot.text_styles[id];
-  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
 }
 
 /**
@@ -4870,7 +5100,7 @@ function saveTextStyle(id, prop, value) {
  */
 function saveFontFamily(id, family, url) {
   var raw;
-  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   var snapshot;
   try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
   if (!snapshot.text_styles || typeof snapshot.text_styles !== "object") snapshot.text_styles = {};
@@ -4884,7 +5114,7 @@ function saveFontFamily(id, family, url) {
     delete snapshot.text_styles[id].fontUrl;
   }
   if (!Object.keys(snapshot.text_styles[id]).length) delete snapshot.text_styles[id];
-  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
 }
 
 /**
@@ -4896,13 +5126,13 @@ function saveFontFamily(id, family, url) {
  */
 function saveEditedPosition(id, tx, ty) {
   var raw;
-  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   var snapshot;
   try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
   if (!snapshot.positions || typeof snapshot.positions !== "object") snapshot.positions = {};
   if (tx == null || ty == null) delete snapshot.positions[id];
   else snapshot.positions[id] = { tx: tx, ty: ty };
-  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
 }
 
 /**
@@ -4915,14 +5145,14 @@ function saveEditedPosition(id, tx, ty) {
  */
 function saveEditedVisibility(id, hidden) {
   var raw;
-  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   var snapshot;
   try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
   if (!Array.isArray(snapshot.hidden)) snapshot.hidden = [];
   var idx = snapshot.hidden.indexOf(id);
   if (hidden) { if (idx === -1) snapshot.hidden.push(id); }
   else if (idx !== -1) snapshot.hidden.splice(idx, 1);
-  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
 }
 
 /**
@@ -4933,13 +5163,13 @@ function saveEditedVisibility(id, hidden) {
  */
 function saveEditedColor(id, value) {
   var raw;
-  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   var snapshot;
   try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
   if (!snapshot.colors || typeof snapshot.colors !== "object") snapshot.colors = {};
   if (!value) delete snapshot.colors[id];
   else snapshot.colors[id] = value;
-  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
 }
 
 /**
@@ -4950,13 +5180,13 @@ function saveEditedColor(id, value) {
  */
 function saveEditedOpacity(id, value) {
   var raw;
-  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   var snapshot;
   try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
   if (!snapshot.opacity || typeof snapshot.opacity !== "object") snapshot.opacity = {};
   if (value === null || value === undefined || value >= 1) delete snapshot.opacity[id];
   else snapshot.opacity[id] = value;
-  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
 }
 
 /**
@@ -4969,13 +5199,13 @@ function saveEditedOpacity(id, value) {
  */
 function saveEditedFill(id, value) {
   var raw;
-  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   var snapshot;
   try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
   if (!snapshot.fill || typeof snapshot.fill !== "object") snapshot.fill = {};
   if (!value) delete snapshot.fill[id];
   else snapshot.fill[id] = value;
-  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
 }
 
 /**
@@ -4987,13 +5217,13 @@ function saveEditedFill(id, value) {
  */
 function saveEditedTint(id, value) {
   var raw;
-  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   var snapshot;
   try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
   if (!snapshot.tint || typeof snapshot.tint !== "object") snapshot.tint = {};
   if (!value) delete snapshot.tint[id];
   else snapshot.tint[id] = value;
-  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
 }
 
 /**
@@ -5003,13 +5233,13 @@ function saveEditedTint(id, value) {
  */
 function saveEditedRadius(id, px) {
   var raw;
-  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   var snapshot;
   try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
   if (!snapshot.radius || typeof snapshot.radius !== "object") snapshot.radius = {};
   if (!px) delete snapshot.radius[id];
   else snapshot.radius[id] = px;
-  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
 }
 
 /**
@@ -5020,13 +5250,13 @@ function saveEditedRadius(id, px) {
  */
 function saveEditedBorder(id, w, color) {
   var raw;
-  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   var snapshot;
   try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
   if (!snapshot.border || typeof snapshot.border !== "object") snapshot.border = {};
   if (!w) delete snapshot.border[id];
   else snapshot.border[id] = { w: w, color: color };
-  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
 }
 
 /**
@@ -5037,13 +5267,13 @@ function saveEditedBorder(id, w, color) {
  */
 function saveEditedLink(id, url) {
   var raw;
-  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   var snapshot;
   try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
   if (!snapshot.links || typeof snapshot.links !== "object") snapshot.links = {};
   if (!url) delete snapshot.links[id];
   else snapshot.links[id] = url;
-  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
 }
 
 /**
@@ -5055,14 +5285,14 @@ function saveEditedLink(id, url) {
  */
 function saveEditedShadow(id, on) {
   var raw;
-  try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   var snapshot;
   try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
   if (!Array.isArray(snapshot.shadow)) snapshot.shadow = [];
   var idx = snapshot.shadow.indexOf(id);
   if (on && idx === -1) snapshot.shadow.push(id);
   else if (!on && idx !== -1) snapshot.shadow.splice(idx, 1);
-  try { localStorage.setItem("preview_content", JSON.stringify(snapshot)); } catch (e) {}
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
 }
 
 /**
@@ -5109,7 +5339,62 @@ function updatePortalLink() {
   });
 }
 
+/**
+ * Boots the reusable-object mini editor's blank canvas
+ * (templates/object-editor.html, ?object=1&edit=1): no landing-page markup
+ * to render (no countdown/logistics/hero video/nav), so this skips straight
+ * to the same generic apply*Overrides()/wire*() pass fetchContent()'s
+ * success handler runs below for index.html, just against the object
+ * canvas's own "object_content" scene (see fetchObjectContent()/
+ * snapshotKey()) instead of the real page's content. Always wired up as if
+ * &edit=1 were set, unlike index.html's own gate on isPreviewMode() &&
+ * isEditMode(): an object canvas only ever exists to be edited, there's no
+ * "look-only" mode for it the way a page preview has.
+ */
+function initObjectCanvas() {
+  fetchObjectContent().then(function (data) {
+    renderCustomElements(data.custom_elements);
+    renderDuplicates(data.duplicates);
+    applyTextOverrides(data.text || {});
+    applySizeOverrides(data.sizes);
+    applyFontSizeOverrides(data.font_sizes);
+    applyTextStyleOverrides(data.text_styles);
+    applyPositionOverrides(data.positions);
+    applyColorOverrides(data.colors);
+    applyFillOverrides(data.fill);
+    applyTintOverrides(data.tint);
+    applyRadiusOverrides(data.radius);
+    applyBorderOverrides(data.border);
+    applyShadowOverrides(data.shadow);
+    applyOpacityOverrides(data.opacity);
+    applyHiddenOverrides(data.hidden);
+    setFixedElements(data.fixed_elements || []);
+    setLockedElements(data.locked);
+    setLinks(data.links);
+    applyGroups(data.groups);
+    applyLayerOrder(data.layers);
+    applyFixedHighlight();
+    applyLinkHighlight();
+    applyLockHighlight();
+    var hint = document.getElementById("objCanvasHint");
+    if (hint) hint.style.display = (data.custom_elements || []).length ? "none" : "";
+    wireResizable();
+    wireClickToEdit();
+    wireAddElementMenu();
+  });
+}
+
 document.addEventListener("DOMContentLoaded", function () {
+  /* the object mini editor (templates/object-editor.html, js/object-editor.js)
+     first has to resolve which saved object (if any) this session is
+     editing and stash its data into localStorage's "object_content" key
+     before the canvas can render it; that's an async server round trip
+     (GET /api/objects), so initObjectCanvas() isn't safe to call yet, it'd
+     race that fetch. object-editor.js calls it itself (a plain top-level
+     function declaration, already reachable as window.initObjectCanvas)
+     once that's settled, instead of this file auto-running it here. */
+  if (isObjectMode()) return;
+
   updatePortalLink();
 
   var slot = document.getElementById("heroCountdown");
@@ -5204,7 +5489,15 @@ document.addEventListener("DOMContentLoaded", function () {
       applyFixedHighlight();
       applyLinkHighlight();
       applyLockHighlight();
-      if (isPreviewMode() && isEditMode()) { wireResizable(); wireClickToEdit(); wireAddElementMenu(); }
+      if (isPreviewMode() && isEditMode()) {
+        wireResizable();
+        wireClickToEdit();
+        wireAddElementMenu();
+        /* fire-and-forget: only needed once a ta actually opens the
+           right-click menu's "Object..." picker, not before the editor can
+           be used at all */
+        fetchObjectsLibrary().then(function (list) { OBJECTS_LIBRARY = list; });
+      }
     })
     .catch(function () {
       slot.innerHTML = CD_TBA_HTML;

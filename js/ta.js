@@ -1704,6 +1704,80 @@ function renderProfiles() {
   });
 }
 
+/* the tab opened by openObjectEditor(), if still around, reused across
+   Edit/New clicks the same way previewWindow is reused for Preview */
+var objectEditorWindow = null;
+
+/**
+ * Opens the reusable-object mini editor, reusing an already-open tab from
+ * an earlier click instead of piling up new ones (same pattern
+ * openPreview() uses for previewWindow). Objects are their own shared
+ * library independent of STATE/profiles entirely (see /api/objects in
+ * app/main.py), so there's no snapshot to hand off here, the editor page
+ * loads its own data straight from the server.
+ * @param id the object to edit, or omit/null to start a brand new one
+ */
+function openObjectEditor(id) {
+  var url = id ? ("object-editor.html?object=1&id=" + id) : "object-editor.html?object=1";
+  if (objectEditorWindow && !objectEditorWindow.closed) {
+    objectEditorWindow.location.href = url;
+    objectEditorWindow.focus();
+  } else {
+    objectEditorWindow = window.open(url, "ta_object_editor");
+  }
+}
+
+/**
+ * Loads the shared reusable-objects library and renders it into
+ * #objectsList: a name plus Edit (opens object-editor.html on that object)
+ * and Delete (owner only, enforced server-side) per row.
+ */
+function fetchObjects() {
+  var wrap = document.getElementById("objectsList");
+  if (!wrap) return;
+  authedFetch("/api/objects")
+    .then(function (res) {
+      if (!res.ok) throw new Error("objects failed");
+      return res.json();
+    })
+    .then(function (list) {
+      if (!list.length) {
+        wrap.innerHTML = '<p class="muted"><strong>No saved objects yet.</strong> Build one in the object editor.</p>';
+        return;
+      }
+      wrap.innerHTML = "";
+      list.forEach(function (obj) {
+        var row = document.createElement("div");
+        row.className = "res-row";
+        row.innerHTML =
+          '<span class="rname">' + obj.name + '</span>' +
+          '<span class="prof-btns">' +
+          '<button class="btn btn-ghost obj-edit" type="button">Edit</button>' +
+          '<button class="btn btn-ghost obj-del" type="button">Delete</button>' +
+          '</span>';
+        row.querySelector(".obj-edit").addEventListener("click", function () { openObjectEditor(obj.id); });
+        row.querySelector(".obj-del").addEventListener("click", function () {
+          if (!confirm('Delete "' + obj.name + '"? This can\'t be undone.')) return;
+          authedFetch("/api/objects/" + obj.id, { method: "DELETE" })
+            .then(function (res) {
+              if (!res.ok) throw new Error("delete failed");
+              fetchObjects();
+              showMsg("Object deleted.", true);
+            })
+            .catch(function (err) {
+              if (err.message === "expired") return;
+              showMsg("Couldn't delete that object.", false);
+            });
+        });
+        wrap.appendChild(row);
+      });
+    })
+    .catch(function (err) {
+      if (err.message === "expired") return;
+      wrap.innerHTML = '<p class="muted"><strong>Couldn\'t load the objects library.</strong></p>';
+    });
+}
+
 /**
  * Apply = make what's on screen live for students. In profile mode it
  * also saves the profile first so the two can't drift apart. Works from
@@ -1810,6 +1884,11 @@ document.addEventListener("DOMContentLoaded", function () {
 
   if (!tryRestoreFromPreview()) loadLive();
   fetchProfiles();
+  fetchObjects();
+
+  document.getElementById("newObjectBtn").addEventListener("click", function () {
+    openObjectEditor();
+  });
 
   document.getElementById("profileBack").addEventListener("click", function () {
     backToLive();

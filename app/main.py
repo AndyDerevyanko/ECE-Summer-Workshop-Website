@@ -13,21 +13,26 @@ from pydantic import BaseModel
 from app.db import (
     UPLOAD_DIR,
     create_custom_asset,
+    create_object,
     create_profile,
     create_session,
     create_user,
     delete_custom_asset,
+    delete_object,
     delete_profile,
     delete_user,
     get_content,
     get_custom_asset,
+    get_object,
     get_profile,
     get_session,
     init_db,
     list_custom_assets,
+    list_objects,
     list_profiles,
     list_users,
     save_content,
+    update_object,
     update_profile,
     verify_login,
 )
@@ -306,6 +311,61 @@ def api_delete_asset(kind: str, asset_id: int, ta=Depends(require_ta)):
     return {"ok": True}
 
 
+@app.get("/api/objects")
+def api_list_objects(_ta=Depends(require_ta)):
+    """lists every saved object in the shared reusable-objects library
+    (the visual editor's right-click "Add element" > "Object" picker).
+    ta-only.
+    @return a list of {id, owner, name, data} rows
+    """
+    return list_objects()
+
+
+class NewObjectRequest(BaseModel):
+    name: str
+    data: dict[str, Any]
+
+
+@app.post("/api/objects")
+def api_create_object(payload: NewObjectRequest, ta=Depends(require_ta)):
+    """saves a new object to the shared library. ta-only.
+    @param payload {name, data}
+    @return {id} of the new object
+    """
+    object_id = create_object(ta["username"], payload.name.strip() or "Object", payload.data)
+    return {"id": object_id}
+
+
+@app.post("/api/objects/{object_id}")
+def api_update_object(object_id: int, payload: dict[str, Any], ta=Depends(require_ta)):
+    """partially updates an object: name and/or data. it's a shared team
+    library, not per-owner content, so any ta can edit either field, only
+    deleting is owner-restricted. ta-only.
+    @param object_id the object to update
+    @param payload any subset of {name, data}
+    """
+    obj = get_object(object_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="No such object.")
+    update_object(object_id, name=payload.get("name"), data=payload.get("data"))
+    return {"ok": True}
+
+
+@app.delete("/api/objects/{object_id}")
+def api_delete_object(object_id: int, ta=Depends(require_ta)):
+    """deletes an object. owner only, same rule as a ta-uploaded icon/font/
+    video. ta-only.
+    @param object_id the object to delete
+    """
+    obj = get_object(object_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="No such object.")
+    if obj["owner"] != ta["username"]:
+        raise HTTPException(status_code=403, detail="Only the ta who added it can remove it.")
+    delete_object(object_id)
+    return {"ok": True}
+
+
 @app.get("/")
 def root():
     """redirects the bare root url to the landing page."""
@@ -352,3 +412,9 @@ def page_preview(request: Request):
 def page_accounts(request: Request):
     """renders the ta-only account manager."""
     return templates.TemplateResponse(request, "accounts.html")
+
+
+@app.get("/object-editor.html")
+def page_object_editor(request: Request):
+    """renders the ta-only reusable-object mini editor (see js/object-editor.js)."""
+    return templates.TemplateResponse(request, "object-editor.html")

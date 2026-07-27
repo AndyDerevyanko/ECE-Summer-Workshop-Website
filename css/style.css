@@ -1541,11 +1541,58 @@ body.edit-mode .apply-bob { animation: none; }
    from flow (detachFromFlow() in js/main.js) */
 .free-wrap { position: relative; }
 
+/* a resized textbox has to actually confine its text: by default a single
+   word longer than the box's own width overflows straight past its edge
+   (overflow-wrap: normal only ever breaks between words), so a narrow
+   textbox visibly ignored its own bounds. breaking mid-word once it
+   doesn't fit is what makes the box's width a real limit. lives on every
+   click-to-edit field, not just a resized one, so it also applies live. */
+[data-edit-id] { overflow-wrap: break-word; }
+
 /* image/video tint overlay (setElementTint() in js/main.js): an object-fit:
    cover element has no background-color of its own to paint over, so a
    tint paints this same-size layer on top instead, blended in via
    mix-blend-mode rather than a flat opaque color */
 .tint-ov { position: absolute; inset: 0; pointer-events: none; mix-blend-mode: color; }
+
+/* reusable-object mini editor (templates/object-editor.html): a slim
+   toolbar, not a site <nav>, wrapping the exact same visual editor engine
+   as the Visual editor tab, just aimed at a blank canvas. */
+.obj-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 20000;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 20px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.obj-name-input {
+  flex: 0 1 240px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+}
+.obj-toolbar .form-msg { margin: 0; }
+
+/* sits behind whatever's been placed on the canvas, so it's only ever
+   visible on a blank one (see initObjectCanvas() in js/main.js, which hides
+   it the moment content.custom_elements isn't empty) */
+.obj-canvas-hint {
+  position: fixed;
+  top: 45%;
+  left: 0;
+  right: 0;
+  text-align: center;
+  color: var(--muted);
+  pointer-events: none;
+  z-index: 1;
+}
 
 /* floating text toolbar (font, A-/A+ size, bold/italic/underline, align,
    letter spacing), shown above a text field only while it's actively being

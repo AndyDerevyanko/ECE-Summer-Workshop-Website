@@ -1457,7 +1457,7 @@ function loadLive(okMsg) {
  * @return the display label
  */
 function profileLabel(p) {
-  if (p.is_default || p.mine) return p.name;
+  if (p.is_default || p.is_last_applied || p.mine) return p.name;
   if (/^Profile \d+$/.test(p.name)) return p.owner + "'s " + p.name;
   return p.owner + "'s \"" + p.name + "\" profile";
 }
@@ -1509,8 +1509,9 @@ function syncProfileBar() {
     txt.textContent = 'Editing "' + profileLabel(EDITING) + '". Students see none of this until you apply it.';
     apply.textContent = "Apply this profile";
     save.textContent = "Save profile";
-    save.disabled = !!EDITING.is_default;
-    save.title = EDITING.is_default ? "The Default profile can't be edited." : "";
+    save.disabled = !!(EDITING.is_default || EDITING.is_last_applied);
+    save.title = EDITING.is_default ? "The Default profile can't be edited."
+      : EDITING.is_last_applied ? "This profile updates automatically and can't be edited directly." : "";
   } else {
     txt.style.display = "none";
     back.style.display = "none";
@@ -1593,6 +1594,9 @@ function renderProfiles() {
     if (p.is_default) {
       html += '<span class="shared-flag" title="The site\'s original look out of the box. Can\'t be edited, but any staff member can delete it.">' +
         SHARE_SVG_CHIP + 'default, shared with everyone</span>';
+    } else if (p.is_last_applied) {
+      html += '<span class="shared-flag" title="Automatically updated to whatever was live right before the most recent Apply. A one-step-back recovery point if someone else\'s apply overwrites your changes. Can\'t be edited or deleted.">' +
+        SHARE_SVG_CHIP + 'auto-updated, shared with everyone</span>';
     } else if (p.shared) {
       html += '<span class="shared-flag" title="Every staff member can see and edit this profile">' + SHARE_SVG_CHIP + 'shared</span>' +
         '<button class="btn btn-ghost pr-unshare" type="button">Unshare</button>';
@@ -1696,12 +1700,17 @@ function openObjectEditor(id) {
 
 /**
  * Loads the shared reusable-objects library and renders it into
- * #objectsList: a name plus Edit (opens object-editor.html on that object)
- * and Delete (owner only, enforced server-side) per row.
+ * #objectsList: a name plus, same "visible/usable by every ta, but only
+ * its owner can change it" rule a ta-uploaded icon/font/video already
+ * follows (see the Icon library bullet in CLAUDE.md), Edit and Delete only
+ * show on a row for the ta who added it (both are owner-only server-side
+ * too, see api_update_object()/api_delete_object() in app/main.py, this
+ * just keeps a non-owner from seeing a button that would only ever 403).
  */
 function fetchObjects() {
   var wrap = document.getElementById("objectsList");
   if (!wrap) return;
+  var me = localStorage.getItem("session");
   authedFetch("/api/objects")
     .then(function (res) {
       if (!res.ok) throw new Error("objects failed");
@@ -1714,28 +1723,31 @@ function fetchObjects() {
       }
       wrap.innerHTML = "";
       list.forEach(function (obj) {
+        var mine = obj.owner === me;
         var row = document.createElement("div");
         row.className = "res-row";
         row.innerHTML =
           '<span class="rname">' + obj.name + '</span>' +
           '<span class="prof-btns">' +
-          '<button class="btn btn-ghost obj-edit" type="button">Edit</button>' +
-          '<button class="btn btn-ghost obj-del" type="button">Delete</button>' +
+          (mine ? '<button class="btn btn-ghost obj-edit" type="button">Edit</button>' : '') +
+          (mine ? '<button class="btn btn-ghost obj-del" type="button">Delete</button>' : '') +
           '</span>';
-        row.querySelector(".obj-edit").addEventListener("click", function () { openObjectEditor(obj.id); });
-        row.querySelector(".obj-del").addEventListener("click", function () {
-          if (!confirm('Delete "' + obj.name + '"? This can\'t be undone.')) return;
-          authedFetch("/api/objects/" + obj.id, { method: "DELETE" })
-            .then(function (res) {
-              if (!res.ok) throw new Error("delete failed");
-              fetchObjects();
-              showMsg("Object deleted.", true);
-            })
-            .catch(function (err) {
-              if (err.message === "expired") return;
-              showMsg("Couldn't delete that object.", false);
-            });
-        });
+        if (mine) {
+          row.querySelector(".obj-edit").addEventListener("click", function () { openObjectEditor(obj.id); });
+          row.querySelector(".obj-del").addEventListener("click", function () {
+            if (!confirm('Delete "' + obj.name + '"? This can\'t be undone.')) return;
+            authedFetch("/api/objects/" + obj.id, { method: "DELETE" })
+              .then(function (res) {
+                if (!res.ok) throw new Error("delete failed");
+                fetchObjects();
+                showMsg("Object deleted.", true);
+              })
+              .catch(function (err) {
+                if (err.message === "expired") return;
+                showMsg("Couldn't delete that object.", false);
+              });
+          });
+        }
         wrap.appendChild(row);
       });
     })
@@ -1768,11 +1780,13 @@ function applyContent() {
       else clearPreviewSnapshot();
       if (EDITING) {
         EDITING.data = JSON.parse(JSON.stringify(STATE));
-        /* the Default profile's own data never changes (see
-           _seed_default_profile() in app/db.py), and the server rejects
-           writes to it anyway; skip the resave so applying it doesn't
-           also trigger a doomed update_profile() and a confusing error */
-        if (!EDITING.is_default) updateProfile(EDITING.id, { data: STATE });
+        /* the Default profile's own data never changes, and the "Most
+           recently applied" profile's data is server-managed (overwritten
+           by snapshot_last_applied() on every apply, see app/db.py), never
+           by a direct edit; the server rejects writes to either anyway, so
+           skip the resave here rather than trigger a doomed updateProfile()
+           and a confusing error */
+        if (!EDITING.is_default && !EDITING.is_last_applied) updateProfile(EDITING.id, { data: STATE });
         showMsg("Profile applied. Students see it now.", true);
       } else {
         showMsg("Applied. Students see this now.", true);

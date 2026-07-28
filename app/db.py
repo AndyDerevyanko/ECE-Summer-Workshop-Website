@@ -488,13 +488,20 @@ def init_db():
             name TEXT NOT NULL,
             data TEXT NOT NULL,
             shared INTEGER NOT NULL DEFAULT 0,
-            is_default INTEGER NOT NULL DEFAULT 0
+            is_default INTEGER NOT NULL DEFAULT 0,
+            is_last_applied INTEGER NOT NULL DEFAULT 0
         )
         """
     )
     # guarded add for dbs created before is_default existed.
     try:
         conn.execute("ALTER TABLE profiles ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+    # guarded add for dbs created before is_last_applied existed (see
+    # _seed_last_applied_profile()).
+    try:
+        conn.execute("ALTER TABLE profiles ADD COLUMN is_last_applied INTEGER NOT NULL DEFAULT 0")
     except sqlite3.OperationalError:
         pass
     # tiny flag table so _seed_default_profile() only ever inserts once,
@@ -547,6 +554,7 @@ def init_db():
     _backfill_plain(conn)
     _seed_content(conn)
     _seed_default_profile(conn)
+    _seed_last_applied_profile(conn)
     _seed_default_objects(conn)
     conn.close()
 
@@ -756,6 +764,37 @@ def _seed_default_profile(conn):
     conn.commit()
 
 
+def _seed_last_applied_profile(conn):
+    """inserts a shared, permanent "Most recently applied" profile, exactly
+    once, ever (same meta-flag trick as _seed_default_profile(), and for the
+    same reason: this one is never supposed to come back once seeded,
+    unlike a profile a ta made themselves). Its `data` isn't meant to stay
+    at this seeded value: snapshot_last_applied() overwrites it every time
+    anyone applies changes (see api_save_content() in app/main.py), always
+    holding whatever was LIVE right before the most recent apply replaced
+    it. That's the actual point of it: two tas editing at the same time can
+    silently clobber each other (the last Apply always wins, there's no
+    merge), and without this there'd be no way to get back what was live a
+    moment before that happened. Unlike the Default profile, it can't be
+    deleted by anyone at all (see api_delete_profile() in app/main.py), a
+    ta deleting their own safety net would be a very easy way to lose it
+    for good.
+    @param conn an open db connection
+    """
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO meta (key, value) VALUES ('last_applied_profile_seeded', '1')"
+    )
+    conn.commit()
+    if cur.rowcount == 0:
+        return
+    conn.execute(
+        "INSERT INTO profiles (owner, name, data, shared, is_last_applied)"
+        " VALUES (?, ?, ?, 1, 1)",
+        ("system", "Most recently applied", json.dumps(DEFAULT_CONTENT)),
+    )
+    conn.commit()
+
+
 def _seed_default_objects(conn):
     """inserts the starter Objects library (DEFAULT_OBJECTS) exactly once,
     ever, same one-time meta-flag trick as _seed_default_profile(): a ta who
@@ -826,7 +865,7 @@ def list_profiles(username):
     """
     conn = get_db()
     rows = conn.execute(
-        "SELECT id, owner, name, data, shared, is_default FROM profiles"
+        "SELECT id, owner, name, data, shared, is_default, is_last_applied FROM profiles"
         " WHERE owner = ? OR shared = 1 ORDER BY id",
         (username,),
     ).fetchall()
@@ -838,6 +877,7 @@ def list_profiles(username):
             "name": r["name"],
             "shared": bool(r["shared"]),
             "is_default": bool(r["is_default"]),
+            "is_last_applied": bool(r["is_last_applied"]),
             "mine": r["owner"] == username,
             "data": json.loads(r["data"]),
         }
@@ -852,7 +892,7 @@ def get_profile(profile_id):
     """
     conn = get_db()
     row = conn.execute(
-        "SELECT id, owner, name, data, shared, is_default FROM profiles WHERE id = ?",
+        "SELECT id, owner, name, data, shared, is_default, is_last_applied FROM profiles WHERE id = ?",
         (profile_id,),
     ).fetchone()
     conn.close()
@@ -864,8 +904,26 @@ def get_profile(profile_id):
         "name": row["name"],
         "shared": bool(row["shared"]),
         "is_default": bool(row["is_default"]),
+        "is_last_applied": bool(row["is_last_applied"]),
         "data": json.loads(row["data"]),
     }
+
+
+def snapshot_last_applied(data):
+    """overwrites the "Most recently applied" profile's data (see
+    _seed_last_applied_profile()), called right before the live content
+    gets replaced by a new Apply (see api_save_content() in app/main.py),
+    so it always holds whatever was live a moment ago, not whatever just
+    went live.
+    @param data the outgoing (about to be replaced) live content dict
+    """
+    conn = get_db()
+    conn.execute(
+        "UPDATE profiles SET data = ? WHERE is_last_applied = 1",
+        (json.dumps(data),),
+    )
+    conn.commit()
+    conn.close()
 
 
 def create_profile(owner, name, data):

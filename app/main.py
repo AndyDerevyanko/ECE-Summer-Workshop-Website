@@ -33,6 +33,7 @@ from app.db import (
     list_users,
     save_content,
     set_user_password,
+    snapshot_last_applied,
     update_object,
     update_profile,
     verify_login,
@@ -124,9 +125,14 @@ def api_get_content():
 
 @app.post("/api/content")
 def api_save_content(payload: dict[str, Any], _ta=Depends(require_ta)):
-    """overwrites the live content blob. ta-only.
+    """overwrites the live content blob. ta-only. snapshots the OUTGOING
+    (about to be replaced) content into the "Most recently applied" profile
+    first (see snapshot_last_applied() in app/db.py), so if this apply
+    clobbers someone else's concurrent edit, whatever they had live a
+    moment ago is still one click away to recover.
     @param payload the full content dict to save
     """
+    snapshot_last_applied(get_content())
     save_content(payload)
     return {"ok": True}
 
@@ -153,9 +159,12 @@ def api_create_profile(payload: dict[str, Any], ta=Depends(require_ta)):
 @app.post("/api/profiles/{profile_id}")
 def api_update_profile(profile_id: int, payload: dict[str, Any], ta=Depends(require_ta)):
     """partially updates a profile: name/shared are owner-only, data needs
-    ownership or sharing. the seeded "Default" profile (is_default) rejects
-    every field, regardless of owner or shared, see _seed_default_profile()
-    in app/db.py.
+    ownership or sharing. the seeded "Default" profile (is_default) and the
+    seeded "Most recently applied" profile (is_last_applied) both reject
+    every field, regardless of owner or shared: Default's data never
+    changes (see _seed_default_profile()), and Most recently applied's data
+    is server-managed, overwritten automatically on every Apply (see
+    snapshot_last_applied()), never by a direct edit.
     @param profile_id the profile to update
     @param payload any subset of {name, data, shared}
     """
@@ -164,6 +173,8 @@ def api_update_profile(profile_id: int, payload: dict[str, Any], ta=Depends(requ
         raise HTTPException(status_code=404, detail="No such profile.")
     if prof["is_default"]:
         raise HTTPException(status_code=403, detail="The Default profile can't be edited.")
+    if prof["is_last_applied"]:
+        raise HTTPException(status_code=403, detail="This profile updates automatically and can't be edited directly.")
     is_owner = prof["owner"] == ta["username"]
     # anyone can save content into a shared profile, and anyone can take a
     # shared profile off the shared list, but only the owner can rename,
@@ -187,12 +198,17 @@ def api_update_profile(profile_id: int, payload: dict[str, Any], ta=Depends(requ
 def api_delete_profile(profile_id: int, ta=Depends(require_ta)):
     """deletes a profile. owner only, except the seeded "Default" profile
     (is_default), which any ta can delete, see _seed_default_profile() in
-    app/db.py.
+    app/db.py. The seeded "Most recently applied" profile (is_last_applied)
+    is the opposite special case: nobody can delete it, not even by an
+    owner bypass, since it's the active safety net for every ta, not a
+    discardable starter template.
     @param profile_id the profile to delete
     """
     prof = get_profile(profile_id)
     if not prof:
         raise HTTPException(status_code=404, detail="No such profile.")
+    if prof["is_last_applied"]:
+        raise HTTPException(status_code=403, detail="This profile can't be deleted.")
     if prof["owner"] != ta["username"] and not prof["is_default"]:
         raise HTTPException(status_code=403, detail="Only the owner can delete a profile.")
     delete_profile(profile_id)
@@ -358,15 +374,17 @@ def api_create_object(payload: NewObjectRequest, ta=Depends(require_ta)):
 
 @app.post("/api/objects/{object_id}")
 def api_update_object(object_id: int, payload: dict[str, Any], ta=Depends(require_ta)):
-    """partially updates an object: name and/or data. it's a shared team
-    library, not per-owner content, so any ta can edit either field, only
-    deleting is owner-restricted. ta-only.
+    """partially updates an object: name and/or data. owner only, same rule
+    as a ta-uploaded icon/font/video (visible/usable by every ta, but only
+    its owner can change it). ta-only.
     @param object_id the object to update
     @param payload any subset of {name, data}
     """
     obj = get_object(object_id)
     if not obj:
         raise HTTPException(status_code=404, detail="No such object.")
+    if obj["owner"] != ta["username"]:
+        raise HTTPException(status_code=403, detail="Only the ta who added it can edit it.")
     update_object(object_id, name=payload.get("name"), data=payload.get("data"))
     return {"ok": True}
 

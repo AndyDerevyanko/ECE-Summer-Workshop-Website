@@ -349,7 +349,7 @@ h1, h2, h3 {
   position: absolute;
   inset: 0;
   /* flat scrim, not a gradient, just enough to keep the overlaid text readable */
-  background: rgba(8, 11, 16, .58);
+  background: rgba(8, 11, 16, .85);
   /* see .hero-bg's own comment just above */
 }
 .hero.hero-media .eyebrow,

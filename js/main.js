@@ -128,6 +128,29 @@ function snapshotKey() {
    placeObject()/renderCtxMenuObjectPicker()). */
 var OBJECTS_LIBRARY = [];
 
+/* the object-editor.html tab opened from the right-click menu's own "New
+   object..." option, reused (not reopened) on repeat clicks, same
+   window.open(url, name) reuse pattern js/ta.js's openObjectEditor() uses
+   for the portal's "New object"/Edit buttons, and the same window NAME
+   ("ta_object_editor") so opening from either place reuses one tab rather
+   than juggling two. */
+var OBJECT_EDITOR_TAB = null;
+
+/**
+ * Opens the reusable-object mini editor in a new (or already-open, reused)
+ * tab, always starting a brand new, unsaved object; an existing one is only
+ * ever edited from instructor.html's own Objects list.
+ */
+function openNewObjectEditor() {
+  var url = "object-editor.html?object=1";
+  if (OBJECT_EDITOR_TAB && !OBJECT_EDITOR_TAB.closed) {
+    OBJECT_EDITOR_TAB.location.href = url;
+    OBJECT_EDITOR_TAB.focus();
+  } else {
+    OBJECT_EDITOR_TAB = window.open(url, "ta_object_editor");
+  }
+}
+
 /**
  * Fetches the shared reusable-objects library (ta-only, needs the bearer
  * token, same convention assetFetch() already uses for icons/videos/fonts
@@ -1282,21 +1305,26 @@ function setElementLink(id, url) {
  * bullets in CLAUDE.md): a CONTAINER can no longer be reordered as a whole
  * unit against unrelated content, only its individual leaf children can,
  * one at a time. `nav`'s own real stacking context (`.nav` in
- * css/style.css already carries a hardcoded `z-index: 50`) is untouched by
- * any of this, since that's a stylesheet rule, not an inline one this
- * function sets: nav (and everything FIXED_SET marks as living inside it)
- * still stays visually on top wholesale, exactly as before. Reconciles the
- * saved order with what's actually on the page first: any id missing from
- * it is appended in DOM order (see domOrderIds()), so a page that's never
- * had anything reordered still stacks exactly as if there were no layer
- * system at all. Fixed elements (FIXED_SET, see setFixedElements()) are
- * always stacked above every non-fixed one: split into two flat bands,
- * non-fixed first then fixed, each keeping its own relative order, so
- * within either band elements are still individually reorderable (see
- * moveLayer()) but no fixed element's z-index can ever fall below a
- * non-fixed one's. Runs on every load, live site included, same as
- * applyTextOverrides(). Forces position:relative on a still-static leaf
- * first, z-index has no effect otherwise.
+ * css/style.css also carries a hardcoded `z-index: 50`, kept as a sane
+ * default for a page with no js at all) is topped up dynamically by this
+ * function too, not left to that hardcoded value alone: nav is a FIXED
+ * container (see NAV_FIXED_IDS), so it gets stamped, same as a fixed leaf
+ * would, with a z-index one past the entire non-fixed band, guaranteed to
+ * clear it regardless of how many ordinary tracked leaves the page has
+ * grown to (an earlier version relied on the css `50` alone, which quietly
+ * stopped being enough once the page passed 50 tracked leaves, letting
+ * plain content start painting over the sticky nav while scrolling).
+ * Reconciles the saved order with what's actually on the page first: any id
+ * missing from it is appended in DOM order (see domOrderIds()), so a page
+ * that's never had anything reordered still stacks exactly as if there
+ * were no layer system at all. Fixed elements (FIXED_SET, see
+ * setFixedElements()) are always stacked above every non-fixed one: split
+ * into two flat bands, non-fixed first then fixed, each keeping its own
+ * relative order, so within either band elements are still individually
+ * reorderable (see moveLayer()) but no fixed element's z-index can ever
+ * fall below a non-fixed one's. Runs on every load, live site included,
+ * same as applyTextOverrides(). Forces position:relative on a still-static
+ * leaf first, z-index has no effect otherwise.
  * @param layers content.layers, ordered ids bottom to top
  */
 function applyLayerOrder(layers) {
@@ -1308,8 +1336,16 @@ function applyLayerOrder(layers) {
      rule below: an already-saved, already-customized order predates these
      two (they didn't used to be part of the ranking at all), so a plain
      append would land them in FRONT of everything already on the page,
-     exactly backwards for what's meant to be its own backdrop. */
-  Object.keys(HERO_MEDIA_IDS).forEach(function (id) {
+     exactly backwards for what's meant to be its own backdrop. Iterated in
+     REVERSE key order (video, scrim, so reversed: scrim, video) because
+     unshift() prepends, the opposite of domOrderIds()'s own push(): walking
+     the keys forward here would unshift video first then scrim second,
+     landing scrim BEHIND video (scrim would win the last unshift and end up
+     at index 0), invisibly hiding the scrim's own darkening under the
+     opaque video regardless of its opacity. Reversing first fixes the final
+     order to [video, scrim, ...], video truly backmost, scrim just above
+     it, matching domOrderIds()'s own video-then-scrim push order. */
+  Object.keys(HERO_MEDIA_IDS).reverse().forEach(function (id) {
     if (!have[id] && document.querySelector(HERO_MEDIA_IDS[id])) { order.unshift(id); have[id] = true; }
   });
   domOrderIds().forEach(function (id) {
@@ -1346,7 +1382,24 @@ function applyLayerOrder(layers) {
   var z = 1;
   nonFixed.concat(fixed).forEach(function (m) {
     if (!m.assignZ) {
-      m.el.style.zIndex = "";
+      /* a container never gets a numbered rank the way a leaf does (see the
+         doc comment above), but a FIXED one (nav itself, or any other
+         element right-click "Promote to navbar" was used on that happens
+         to wrap tracked children) still has to visually clear the whole
+         non-fixed band while scrolling, same guarantee a fixed LEAF already
+         gets. nav used to rely on css/style.css's own hardcoded
+         `.nav { z-index: 50 }` for this instead, which quietly stopped
+         being enough once the page's actual tracked-leaf count grew past
+         50 (each new section/custom element/duplicated card pushes
+         ordinary leaves' own js-assigned z-index higher), letting plain
+         page content start painting over the sticky nav on scroll. Stamping
+         it here instead, one past the highest z-index any non-fixed leaf
+         can have, makes it correct regardless of how large that count ever
+         grows, no magic number to outgrow again later. Nav's own children
+         (the fixed-band leaves) don't need this, they already sit inside
+         nav's own stacking context, safely confined there regardless of
+         nav's absolute z-index value. */
+      m.el.style.zIndex = isFixed(m.id) ? String(nonFixed.length + 1) : "";
       return;
     }
     if (getComputedStyle(m.el).position === "static") m.el.style.position = "relative";
@@ -4475,26 +4528,34 @@ function renderCtxMenuVideoPicker() {
  * placeObject()) as a group of freshly-idd elements at the point the menu
  * was opened. Built the same page in both the real Visual editor and the
  * object mini editor itself, so an object can be built up out of other,
- * already-saved objects too.
+ * already-saved objects too. A trailing "New object..." button opens a
+ * brand new object in its own tab (openNewObjectEditor()); saving it there
+ * refreshes OBJECTS_LIBRARY and this picker without a reload, see the
+ * "objects_updated" storage listener in wireAddElementMenu().
  */
 function renderCtxMenuObjectPicker() {
   CTX_MENU.innerHTML =
     '<div class="ctx-title">Place an object</div>' +
-    '<div class="ctx-objects"></div>';
+    '<div class="ctx-objects"></div>' +
+    '<button type="button" class="ctx-new-object">New object...</button>';
   var wrap = CTX_MENU.querySelector(".ctx-objects");
   if (!OBJECTS_LIBRARY.length) {
     wrap.innerHTML = '<div class="ctx-file-msg">No saved objects yet. Build one in the object editor.</div>';
-    return;
-  }
-  OBJECTS_LIBRARY.forEach(function (obj) {
-    var btn = document.createElement("button");
-    btn.type = "button";
-    btn.textContent = obj.name || "Object";
-    btn.addEventListener("click", function () {
-      placeObject(obj.data || {}, CTX_POS.x, CTX_POS.y);
-      hideCtxMenu();
+  } else {
+    OBJECTS_LIBRARY.forEach(function (obj) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = obj.name || "Object";
+      btn.addEventListener("click", function () {
+        placeObject(obj.data || {}, CTX_POS.x, CTX_POS.y);
+        hideCtxMenu();
+      });
+      wrap.appendChild(btn);
     });
-    wrap.appendChild(btn);
+  }
+  CTX_MENU.querySelector(".ctx-new-object").addEventListener("click", function () {
+    openNewObjectEditor();
+    hideCtxMenu();
   });
 }
 
@@ -4588,6 +4649,23 @@ function wireAddElementMenu() {
     if (LAYER_MENU && LAYER_MENU.classList.contains("show")) hideLayerMenu();
     if (STYLE_MENU && STYLE_MENU.classList.contains("show")) hideStyleMenu();
     if (SELECTED_IDS.length) clearSelection();
+  });
+  /* object-editor.js's saveObject() stamps this key after a successful save
+     (a plain value, its content doesn't matter, only the change itself
+     does); the "storage" event only ever fires in OTHER same-origin tabs,
+     never the one that made the write, which is exactly what's wanted here,
+     the object editor tab notifying this one. Re-fetches the library so a
+     freshly-saved object is placeable right away, and re-renders the
+     picker sub-view immediately too if it's what's currently showing,
+     rather than making the ta close and reopen the menu to see it. */
+  window.addEventListener("storage", function (e) {
+    if (e.key !== "objects_updated") return;
+    fetchObjectsLibrary().then(function (list) {
+      OBJECTS_LIBRARY = list;
+      if (CTX_MENU && CTX_MENU.classList.contains("show") && CTX_MENU.querySelector(".ctx-objects")) {
+        renderCtxMenuObjectPicker();
+      }
+    });
   });
 }
 

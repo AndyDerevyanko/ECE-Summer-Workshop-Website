@@ -104,6 +104,12 @@ function saveObject() {
       window.history.replaceState(null, "", "object-editor.html?object=1&id=" + CURRENT_ID);
       document.getElementById("objDelete").style.display = "";
     }
+    /* lets any other open tab (the Visual editor's right-click "Add
+       element" picker, or instructor.html's own Objects list) know a save
+       just happened, see the "storage" listener in js/main.js's
+       wireAddElementMenu(); the value itself is never read, only the
+       change fires the event, and only in OTHER tabs, never this one */
+    try { localStorage.setItem("objects_updated", String(Date.now())); } catch (e) {}
     showMsg("Saved.", true);
   }).catch(function () {
     showMsg("Couldn't save, try again.", false);

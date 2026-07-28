@@ -677,6 +677,30 @@ def create_user(username, password, role):
     return True
 
 
+def set_user_password(username, password):
+    """changes an existing account's password (a ta's own, or anyone
+    else's, both go through this same function, see api_change_password()).
+    @param username the account to update
+    @param password the new plaintext password
+    @return false if no such user
+    """
+    conn = get_db()
+    row = conn.execute("SELECT role FROM users WHERE username = ?", (username,)).fetchone()
+    if not row:
+        conn.close()
+        return False
+    password_hash, salt = hash_password(password)
+    # students keep a plain copy (ta-issued handout credentials), tas don't, same rule create_user() uses
+    plain = password if row["role"] == "student" else None
+    conn.execute(
+        "UPDATE users SET password_hash = ?, salt = ?, plain = ? WHERE username = ?",
+        (password_hash, salt, plain, username),
+    )
+    conn.commit()
+    conn.close()
+    return True
+
+
 def delete_user(username):
     """removes an account and any login tokens it had.
     @param username the account to remove

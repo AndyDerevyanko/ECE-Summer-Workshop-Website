@@ -32,6 +32,7 @@ from app.db import (
     list_profiles,
     list_users,
     save_content,
+    set_user_password,
     update_object,
     update_profile,
     verify_login,
@@ -243,6 +244,25 @@ def api_delete_user(username: str, ta=Depends(require_ta)):
     if username == ta["username"]:
         raise HTTPException(status_code=400, detail="You can't remove your own account.")
     if not delete_user(username):
+        raise HTTPException(status_code=404, detail="No such account.")
+    return {"ok": True}
+
+
+class PasswordChangeRequest(BaseModel):
+    password: str
+
+
+@app.post("/api/users/{username}/password")
+def api_change_password(username: str, payload: PasswordChangeRequest, _ta=Depends(require_ta)):
+    """changes an existing account's password. ta-only; unlike delete, a ta
+    changing their OWN password is allowed (their session token isn't
+    password-derived, so this doesn't log them out).
+    @param username the account to update
+    @param payload {password}
+    """
+    if not payload.password:
+        raise HTTPException(status_code=400, detail="A password is needed.")
+    if not set_user_password(username, payload.password):
         raise HTTPException(status_code=404, detail="No such account.")
     return {"ok": True}
 

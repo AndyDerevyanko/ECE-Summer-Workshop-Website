@@ -112,6 +112,64 @@ function removeUser(u) {
 }
 
 /**
+ * Sends a new password for an account to the server (both a ta's own and
+ * anyone else's go through this same call, see api_change_password()).
+ * @param u the user row {username, role, password}
+ * @param password the new plaintext password
+ * @param onDone called with (ok) once the request settles
+ */
+function changePassword(u, password, onDone) {
+  authedFetch("/api/users/" + encodeURIComponent(u.username) + "/password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password: password })
+  })
+    .then(function (res) {
+      if (!res.ok) throw new Error("change failed");
+      onDone(true);
+    })
+    .catch(function (err) {
+      if (err.message === "expired") return;
+      onDone(false);
+    });
+}
+
+/**
+ * Swaps a row's action area (Change password / Remove buttons) for an
+ * inline password field + Save/Cancel, and wires them up. Works the same
+ * for a ta's own row as for anyone else's, that's what lets a ta change
+ * their own password from this same list.
+ * @param u the user row {username, role, password}
+ * @param actions the row's action container to replace
+ */
+function openPasswordEditor(u, actions) {
+  actions.innerHTML =
+    '<input type="text" class="pw-edit-input" autocomplete="off" placeholder="New password">' +
+    '<button type="button" class="btn btn-primary pw-edit-save">Save</button>' +
+    '<button type="button" class="btn btn-ghost pw-edit-cancel">Cancel</button>';
+  var input = actions.querySelector(".pw-edit-input");
+  input.focus();
+  actions.querySelector(".pw-edit-cancel").addEventListener("click", renderUsers);
+  function save() {
+    var password = input.value;
+    if (!password) { showMsg("Enter a new password first.", false); return; }
+    changePassword(u, password, function (ok) {
+      if (ok) {
+        showMsg('Changed the password for "' + u.username + '".', true);
+        fetchUsers();
+      } else {
+        showMsg("Couldn't change that password. Check you're still logged in.", false);
+      }
+    });
+  }
+  actions.querySelector(".pw-edit-save").addEventListener("click", save);
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); save(); }
+    if (e.key === "Escape") { e.preventDefault(); renderUsers(); }
+  });
+}
+
+/**
  * Renders one role's account list (students or tas) into a container.
  * @param el the list container element
  * @param role "student" or "ta"
@@ -144,14 +202,28 @@ function renderList(el, role, emptyText) {
       meTag.className = "rmeta";
       meTag.textContent = "that's you";
       row.appendChild(meTag);
-    } else {
+    }
+    /* actions live in their own span so openPasswordEditor() can swap just
+       this part out for an inline field, leaving the name/password/"that's
+       you" tag above alone; every row gets Change password, including a
+       ta's own, that's what lets them change their own from here too */
+    var actions = document.createElement("span");
+    actions.className = "rmeta racts";
+    var pwBtn = document.createElement("button");
+    pwBtn.className = "btn btn-ghost";
+    pwBtn.type = "button";
+    pwBtn.textContent = "Change password";
+    pwBtn.addEventListener("click", function () { openPasswordEditor(u, actions); });
+    actions.appendChild(pwBtn);
+    if (u.username !== me) {
       var btn = document.createElement("button");
       btn.className = "btn btn-ghost";
       btn.type = "button";
       btn.textContent = "Remove";
       btn.addEventListener("click", function () { removeUser(u); });
-      row.appendChild(btn);
+      actions.appendChild(btn);
     }
+    row.appendChild(actions);
     el.appendChild(row);
   });
 }

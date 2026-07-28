@@ -983,17 +983,34 @@ function setHiddenVisual(el, hide) {
    re-deriving everything from content.layers again. */
 var LAYER_ORDER = [];
 
+/* the hero's own background video/scrim are deliberately not
+   data-edit-id/data-resize-id elements (no ring, no move/resize handles,
+   see CLAUDE.md's Media bullets), but a ta still needs "send to back" on
+   some OTHER element to be able to reach all the way behind them, not just
+   behind other tracked content, since visually they're as much a part of
+   "the page" as anything else. Two fixed synthetic ids, resolved by a
+   plain selector instead of a data attribute, let them take part in the
+   exact same flat z-index ranking as every real tracked leaf (see
+   applyLayerOrder()) without making them independently selectable/
+   resizable, which is still deliberately not offered for these two. */
+var HERO_MEDIA_IDS = { "media.hero.video": ".hero-bg", "media.hero.scrim": ".hero-scrim" };
+
 /**
  * Every currently-rendered tracked element's id, in DOM (paint) order,
  * deduplicated. Seeds a sane default stack for any id a saved content.layers
  * list doesn't know about yet (a fresh blob, or a template id added since
  * it was saved), so an untouched page's stacking still matches exactly what
- * it looked like before any layer system existed.
+ * it looked like before any layer system existed. The hero's background
+ * video/scrim (see HERO_MEDIA_IDS) are seeded first, ahead of everything
+ * else, matching the backdrop position they've always visually had.
  * @return array of ids, document order
  */
 function domOrderIds() {
   var seen = {};
   var ids = [];
+  Object.keys(HERO_MEDIA_IDS).forEach(function (id) {
+    if (document.querySelector(HERO_MEDIA_IDS[id])) { seen[id] = true; ids.push(id); }
+  });
   document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
     var id = elId(el);
     if (id && !seen[id]) { seen[id] = true; ids.push(id); }
@@ -1286,6 +1303,15 @@ function applyLayerOrder(layers) {
   var order = (layers || []).slice();
   var have = {};
   order.forEach(function (id) { have[id] = true; });
+  /* the hero media ids specifically default to the very back (see
+     HERO_MEDIA_IDS), never merged in via the generic "append to the end"
+     rule below: an already-saved, already-customized order predates these
+     two (they didn't used to be part of the ranking at all), so a plain
+     append would land them in FRONT of everything already on the page,
+     exactly backwards for what's meant to be its own backdrop. */
+  Object.keys(HERO_MEDIA_IDS).forEach(function (id) {
+    if (!have[id] && document.querySelector(HERO_MEDIA_IDS[id])) { order.unshift(id); have[id] = true; }
+  });
   domOrderIds().forEach(function (id) {
     if (!have[id]) { order.push(id); have[id] = true; }
   });
@@ -1303,6 +1329,14 @@ function applyLayerOrder(layers) {
     var id = elId(el);
     if (!id) return;
     members.push({ el: el, id: id, assignZ: !hasTrackedDescendants(el) });
+  });
+  /* the hero's background video/scrim (see HERO_MEDIA_IDS) join the same
+     flat ranking as any other leaf, always assignZ (neither ever wraps
+     tracked content), so "send to back" on some other element can outrank
+     them same as it would any other leaf. */
+  Object.keys(HERO_MEDIA_IDS).forEach(function (id) {
+    var el = document.querySelector(HERO_MEDIA_IDS[id]);
+    if (el) members.push({ el: el, id: id, assignZ: true });
   });
   var nonFixed = members.filter(function (m) { return !isFixed(m.id); });
   var fixed = members.filter(function (m) { return isFixed(m.id); });

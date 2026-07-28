@@ -336,7 +336,19 @@ h1, h2, h3 {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  z-index: 0;
+  /* negative, not 0/1 like these two used to be: a positive (or even
+     explicit 0) z-index here would make hero-bg/hero-scrim each form their
+     own real css stacking context, and so would the old ">.wrap { z-index:
+     2 }" override this used to need to paint above them, which silently
+     walled off every tracked element inside the hero (the countdown box,
+     both cta buttons, etc) from ever being reordered via the visual
+     editor's layer system against anything outside the hero, no matter
+     what z-index js/main.js's applyLayerOrder() gave them, since css only
+     ever compares z-index within the same stacking context. Negative
+     z-index here instead just paints below all of .hero's normal in-flow
+     content (which needs no position/z-index of its own at all now, see
+     the removed >.wrap rule below), same visual result, no hidden context. */
+  z-index: -2;
 }
 .hero.hero-media .hero-scrim {
   display: block;
@@ -344,9 +356,8 @@ h1, h2, h3 {
   inset: 0;
   /* flat scrim, not a gradient, just enough to keep the overlaid text readable */
   background: rgba(8, 11, 16, .58);
-  z-index: 1;
+  z-index: -1;
 }
-.hero.hero-media > .wrap { position: relative; z-index: 2; width: 100%; }
 .hero.hero-media .eyebrow,
 .hero.hero-media h1,
 .hero.hero-media p.lead {

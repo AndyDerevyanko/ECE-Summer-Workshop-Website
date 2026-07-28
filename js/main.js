@@ -1230,27 +1230,56 @@ function setElementLink(id, url) {
 
 /**
  * Applies an explicit stacking order to every tracked element: z-index is
- * just an id's rank within its own local stacking scope (bottom = 1), so
- * the layer menu (see moveLayer()/moveLayerExtreme()) is the only thing
- * that ever reorders elements, resizing or moving one no longer silently
- * bumps it above its neighbours. Scoped per nearest tracked ancestor (see
- * nearestTrackedAncestorId()), NOT one page-wide z-index: css only ever
- * compares z-index within the same stacking context, so an icon inside one
- * card and a button inside an unrelated section were never actually
- * competing for the same visual "front", a single global counter across
- * both just changed numbers with no visible effect. Reconciles the saved
- * order with what's actually on the page first: any id missing from it is
- * appended in DOM order (see domOrderIds()), so a page that's never had
- * anything reordered still stacks exactly as if there were no layer system
- * at all. Within each scope, fixed elements (FIXED_SET, see
- * setFixedElements()) are always stacked above every non-fixed one there:
- * the scope's members are split into two bands, non-fixed first then
- * fixed, each keeping its own relative order, so within either group
- * elements are still individually reorderable (see moveLayer()) but no
- * fixed element's z-index can ever fall below a non-fixed sibling's. Runs
- * on every load, live site included, same as applyTextOverrides(). Forces
- * position:relative on a still-static element first, z-index has no effect
- * otherwise.
+ * just an id's rank (bottom = 1), so the layer menu (see moveLayer()/
+ * moveLayerExtreme()) is the only thing that ever reorders elements,
+ * resizing or moving one no longer silently bumps it above its neighbours.
+ * Only ONE flat rank actually matters (split into two bands, fixed always
+ * above non-fixed, see below), not one scoped per container: two EARLIER
+ * versions of this both tried to scope z-index per container (per nearest
+ * tracked ancestor, then per outermost/top-level tracked ancestor) to work
+ * around css only ever comparing z-index within the same stacking context,
+ * and both were wrong in different ways. Scoping per nearest ancestor made
+ * almost every element its own group of one (a card, an icon's own
+ * countdown box), so "bring forward" was a no-op for nearly everything
+ * already on the page. Scoping per top-level ancestor (a whole section/
+ * nav/header) fixed cross-card reordering within one section, but couldn't
+ * reach across DIFFERENT sections, or past any container - tracked or not
+ * - that happens to carry its own real css stacking context (eg the hero's
+ * own `.hero-media > .wrap`, which needed `z-index: 2` to paint above its
+ * background video; see css/style.css, now fixed with negative z-index on
+ * the video/scrim instead so `.wrap` needs no stacking context of its own
+ * at all). The actual fix: a stacking context can ONLY be escaped by an
+ * element that doesn't create one in the first place, so instead of
+ * hunting down every container that might quietly wall its children off
+ * (an unbounded, easy-to-miss list), NO tracked container (has
+ * hasTrackedDescendants()) is ever given an explicit z-index anymore, at
+ * ANY nesting depth, top-level or not: it's left at `z-index: auto`, which
+ * never establishes a stacking context, so a container can't trap its own
+ * tracked children no matter how deep they're nested. Only an actual LEAF
+ * (icon, image, text, button, box, custom element, ...) ever competes for
+ * a real z-index, and every leaf on the entire page shares the exact same
+ * flat ranking, letting a leaf anywhere be sent in front of or behind any
+ * other leaf anywhere else, section, card, or custom element alike. The
+ * unavoidable trade (a real css constraint, not a bug, since this editor
+ * deliberately never reparents elements, see the Grouping/detachFromFlow
+ * bullets in CLAUDE.md): a CONTAINER can no longer be reordered as a whole
+ * unit against unrelated content, only its individual leaf children can,
+ * one at a time. `nav`'s own real stacking context (`.nav` in
+ * css/style.css already carries a hardcoded `z-index: 50`) is untouched by
+ * any of this, since that's a stylesheet rule, not an inline one this
+ * function sets: nav (and everything FIXED_SET marks as living inside it)
+ * still stays visually on top wholesale, exactly as before. Reconciles the
+ * saved order with what's actually on the page first: any id missing from
+ * it is appended in DOM order (see domOrderIds()), so a page that's never
+ * had anything reordered still stacks exactly as if there were no layer
+ * system at all. Fixed elements (FIXED_SET, see setFixedElements()) are
+ * always stacked above every non-fixed one: split into two flat bands,
+ * non-fixed first then fixed, each keeping its own relative order, so
+ * within either band elements are still individually reorderable (see
+ * moveLayer()) but no fixed element's z-index can ever fall below a
+ * non-fixed one's. Runs on every load, live site included, same as
+ * applyTextOverrides(). Forces position:relative on a still-static leaf
+ * first, z-index has no effect otherwise.
  * @param layers content.layers, ordered ids bottom to top
  */
 function applyLayerOrder(layers) {
@@ -1264,47 +1293,44 @@ function applyLayerOrder(layers) {
   var rank = {};
   order.forEach(function (id, i) { rank[id] = i; });
 
-  /* group every actual DOM element by its own stacking scope (its nearest
-     tracked ancestor, see nearestTrackedAncestorId()) rather than stamping
-     one page-wide z-index: z-index is only ever compared within the SAME
-     stacking context, so ranking an icon against an unrelated button three
-     sections away (which the old flat pass did) had no visual effect,
-     that's why "bring forward" so often did nothing. Grouped by DOM
-     element, not just id, since a mirrored id (eg the brand wordmark,
-     shared by the nav and footer) sits in two different scopes at once. */
-  var scopes = {};
+  /* one flat pass over every actual DOM element: a container (has tracked
+     descendants of its own) never gets an explicit z-index, see the doc
+     comment above. Iterated by DOM element, not just id, since a mirrored
+     id (eg the brand wordmark, shared by the nav and footer) can be two
+     different elements at once. */
+  var members = [];
   document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
     var id = elId(el);
     if (!id) return;
-    var scope = nearestTrackedAncestorId(el);
-    (scopes[scope] = scopes[scope] || []).push({ el: el, id: id });
+    members.push({ el: el, id: id, assignZ: !hasTrackedDescendants(el) });
   });
-  Object.keys(scopes).forEach(function (scope) {
-    var members = scopes[scope];
-    var nonFixed = members.filter(function (m) { return !isFixed(m.id); });
-    var fixed = members.filter(function (m) { return isFixed(m.id); });
-    var byRank = function (a, b) { return (rank[a.id] || 0) - (rank[b.id] || 0); };
-    nonFixed.sort(byRank);
-    fixed.sort(byRank);
-    var z = 1;
-    nonFixed.concat(fixed).forEach(function (m) {
-      if (getComputedStyle(m.el).position === "static") m.el.style.position = "relative";
-      m.el.style.zIndex = String(z);
-      /* a tint overlay (setElementTint()) is a plain untracked sibling div
-         appended right after its image inside the same free-wrap: without
-         its own z-index it stays at the implicit 0/auto, and ANY element
-         here with a real explicit z-index (which is every one of them,
-         including its own image) paints above z-index:auto regardless of
-         dom order, hiding the tint completely. Giving it the SAME z-index
-         as its image is enough, not a higher one: for two elements sharing
-         one z-index, plain dom order decides, and the overlay is already
-         the later sibling. */
-      if (m.el.parentNode && m.el.parentNode.classList && m.el.parentNode.classList.contains("free-wrap")) {
-        var tintOv = m.el.parentNode.querySelector(".tint-ov");
-        if (tintOv) tintOv.style.zIndex = String(z);
-      }
-      z++;
-    });
+  var nonFixed = members.filter(function (m) { return !isFixed(m.id); });
+  var fixed = members.filter(function (m) { return isFixed(m.id); });
+  var byRank = function (a, b) { return (rank[a.id] || 0) - (rank[b.id] || 0); };
+  nonFixed.sort(byRank);
+  fixed.sort(byRank);
+  var z = 1;
+  nonFixed.concat(fixed).forEach(function (m) {
+    if (!m.assignZ) {
+      m.el.style.zIndex = "";
+      return;
+    }
+    if (getComputedStyle(m.el).position === "static") m.el.style.position = "relative";
+    m.el.style.zIndex = String(z);
+    /* a tint overlay (setElementTint()) is a plain untracked sibling div
+       appended right after its image inside the same free-wrap: without
+       its own z-index it stays at the implicit 0/auto, and ANY element
+       here with a real explicit z-index (which is every one of them,
+       including its own image) paints above z-index:auto regardless of
+       dom order, hiding the tint completely. Giving it the SAME z-index
+       as its image is enough, not a higher one: for two elements sharing
+       one z-index, plain dom order decides, and the overlay is already
+       the later sibling. */
+    if (m.el.parentNode && m.el.parentNode.classList && m.el.parentNode.classList.contains("free-wrap")) {
+      var tintOv = m.el.parentNode.querySelector(".tint-ov");
+      if (tintOv) tintOv.style.zIndex = String(z);
+    }
+    z++;
   });
 }
 
@@ -1313,30 +1339,20 @@ function applyLayerOrder(layers) {
  * adjacent swap with its neighbour, so repeated clicks walk it further each
  * time, see the layer menu's Up/Down buttons), repaints every element's z-index,
  * and persists the whole order. A no-op at either end of the stack. Only
- * ever swaps with the nearest neighbour in the SAME fixed/non-fixed group
- * AND the same stacking scope (see nearestTrackedAncestorId()), skipping
- * over any others in between: swapping past an element in a different
- * scope (eg a totally different section, or id's own parent container)
- * would change LAYER_ORDER without changing anything visible, since they
- * were never being compared against each other in the first place.
+ * ever swaps with the nearest neighbour in the SAME fixed/non-fixed band
+ * (see applyLayerOrder()'s own doc comment for why that's the only
+ * grouping that still matters now), skipping over any others in between.
  * @param id the element's data-edit-id or data-resize-id
  * @param dir +1 to bring forward one step, -1 to send backward one step
  * @return true if it actually moved, false at either end of its group (so
  *   pushLayerUndo() knows not to record a no-op step)
  */
 function moveLayer(id, dir) {
-  var el = document.querySelector('[data-edit-id="' + id + '"], [data-resize-id="' + id + '"]');
-  var scope = el ? nearestTrackedAncestorId(el) : "";
-  function scopeOf(otherId) {
-    var oe = document.querySelector('[data-edit-id="' + otherId + '"], [data-resize-id="' + otherId + '"]');
-    return oe ? nearestTrackedAncestorId(oe) : "";
-  }
   var i = LAYER_ORDER.indexOf(id);
   if (i === -1) { LAYER_ORDER.push(id); i = LAYER_ORDER.length - 1; }
   var group = isFixed(id);
   var j = i + dir;
-  while (j >= 0 && j < LAYER_ORDER.length &&
-         (isFixed(LAYER_ORDER[j]) !== group || scopeOf(LAYER_ORDER[j]) !== scope)) j += dir;
+  while (j >= 0 && j < LAYER_ORDER.length && isFixed(LAYER_ORDER[j]) !== group) j += dir;
   if (j < 0 || j >= LAYER_ORDER.length) return false;
   var tmp = LAYER_ORDER[i];
   LAYER_ORDER[i] = LAYER_ORDER[j];
@@ -1446,9 +1462,23 @@ var EDIT_REDO = [];
  * @param el the element to detach from flow
  * @return el's wrap
  */
-function detachFromFlow(el) {
+function detachFromFlow(el, knownRect) {
   var wrap = el.parentNode;
   if (wrap && wrap.classList && wrap.classList.contains("free-wrap")) return wrap;
+
+  /* el's exact pre-detach viewport position, so any drift introduced by
+     the wrap/reparent below (see the correction at the bottom of this
+     function) can be measured and cancelled out. Accepts an already-
+     measured rect (knownRect) instead of measuring fresh here: a grouped
+     move detaches several siblings in one gesture, and an EARLIER sibling
+     leaving flow (becoming position:absolute) can itself reflow a LATER
+     one still waiting its turn (eg two spans sharing one <h1> line box),
+     so measuring fresh here for the second element would capture its
+     position AFTER the first one's departure already nudged it, not its
+     true pre-drag spot. Callers that detach a whole group up front (see
+     startMoveDrag()) grab every member's rect in one synchronous pass
+     before detaching any of them, and pass those in here instead. */
+  var preRect = knownRect || el.getBoundingClientRect();
 
   /* getBoundingClientRect keeps sub-pixel precision; offsetWidth/Height
      round to a whole css px, which is fine for a transformed element (its
@@ -1518,6 +1548,25 @@ function detachFromFlow(el) {
   if (el.querySelectorAll(RESIZABLE_SEL).length > 0) {
     if (cs.overflowX === "hidden" || cs.overflowX === "clip") el.style.overflowX = "visible";
     if (cs.overflowY === "hidden" || cs.overflowY === "clip") el.style.overflowY = "visible";
+  }
+
+  /* a naturally-inline element (this h1's own title/accent spans, say)
+     unconditionally blockifies the instant position:absolute lands on it
+     (a plain css rule, not a bug), which can render its text a few px off
+     from the tight inline rect measured above (the line's own line-height
+     leading applies around the text as a block that never applied to it
+     as raw inline content, and that leading itself shifts depending on
+     what ELSE is still sharing its old line box, eg a sibling span that
+     already left flow earlier, so the drift isn't even a fixed constant
+     for a given element). Rather than reason about which of those css
+     mechanics applies to a given el, just measure the actual result and
+     cancel out whatever it drifted by, so detaching is pixel-seamless
+     unconditionally, exactly as this function has always promised. */
+  var postRect = el.getBoundingClientRect();
+  var driftX = postRect.left - preRect.left, driftY = postRect.top - preRect.top;
+  if (driftX || driftY) {
+    el.style.left = (-driftX) + "px";
+    el.style.top = (-driftY) + "px";
   }
   return wrap;
 }
@@ -1691,17 +1740,22 @@ function hideLayerMenu() {
 }
 
 /**
- * Whether el is a custom Button element (right-click "Add element" >
- * Button, or the template's own CTA links): a single tagged `<a class=
- * "btn">`, its text box IS the button, same rule every other CTA on the
- * site follows. Its own helper (rather than inlining the check) since both
- * colorTarget() and the style popover's Text color row (see buildStyleMenu())
- * need the exact same test.
+ * Whether el is a button-like element that needs its own separate Text
+ * color control, distinct from its background: a custom Button element
+ * (right-click "Add element" > Button, or the template's own CTA links,
+ * a single tagged `<a class="btn">`, its text box IS the button, same rule
+ * every other CTA on the site follows), OR the theme toggle (`#themeBtn`),
+ * a plain `<button>` (not an `<a class="btn">`, so the class check alone
+ * misses it) whose own Color row already means its background (see
+ * colorTarget()), leaving no other control for its "Light mode"/"Dark
+ * mode" label's own color. Its own helper (rather than inlining the check)
+ * since both colorTarget() and the style popover's Text color row (see
+ * buildStyleMenu()) need the exact same test.
  * @param el the element
  * @return true if el is a button
  */
 function isButtonEl(el) {
-  return el.tagName === "A" && el.classList.contains("btn");
+  return (el.tagName === "A" && el.classList.contains("btn")) || el.id === "themeBtn";
 }
 
 /**
@@ -2835,14 +2889,20 @@ function startMoveDrag(e) {
   e.preventDefault();
   e.stopPropagation();
   var el = RING_EL;
-  detachFromFlow(el);
   var startX = e.clientX, startY = e.clientY;
-  var base = getPos(el);
   RING_DRAGGING = true;
   /* same rigid-group broadcast as the drag-anywhere handler, see
-     groupMembersFor() */
+     groupMembersFor(). Every member's rect is grabbed up front, before ANY
+     of them detaches, see detachFromFlow()'s knownRect param: two spans
+     sharing one flow (eg the hero title's own two halves) would otherwise
+     have the first one's detach reflow the second's still-fresh position
+     out from under it. */
   var groupMembers = groupMembersFor(elId(el));
-  groupMembers.forEach(function (m) { detachFromFlow(m.el); });
+  var elRect = el.getBoundingClientRect();
+  groupMembers.forEach(function (m) { m.preRect = m.el.getBoundingClientRect(); });
+  detachFromFlow(el, elRect);
+  var base = getPos(el);
+  groupMembers.forEach(function (m) { detachFromFlow(m.el, m.preRect); });
 
   function onMove(ev) {
     var dx = ev.clientX - startX, dy = ev.clientY - startY;
@@ -4581,9 +4641,14 @@ function wireResizable() {
         document.body.style.userSelect = "none";
         /* naturally-inline elements (a plain <span>, eg. the hero title
            text) ignore `transform` per spec until blockified, see
-           startMoveDrag()'s doc comment */
-        detachFromFlow(el);
-        groupMembers.forEach(function (m) { detachFromFlow(m.el); });
+           startMoveDrag()'s doc comment. Every member's rect is grabbed
+           before ANY of them detaches, see detachFromFlow()'s knownRect
+           param and startMoveDrag()'s own doc comment on why order matters
+           here. */
+        var elRect = el.getBoundingClientRect();
+        groupMembers.forEach(function (m) { m.preRect = m.el.getBoundingClientRect(); });
+        detachFromFlow(el, elRect);
+        groupMembers.forEach(function (m) { detachFromFlow(m.el, m.preRect); });
       }
       ev.preventDefault();
       var dx = ev.clientX - startX, dy = ev.clientY - startY;
@@ -4657,15 +4722,21 @@ function wireResizable() {
     e.preventDefault();
     var el = RING_EL;
     var step = e.shiftKey ? 10 : 1;
-    detachFromFlow(el);
+    /* every group member's rect is grabbed before ANY of them detaches, see
+       detachFromFlow()'s knownRect param and startMoveDrag()'s doc comment
+       on why the order matters for elements sharing one flow */
+    var members = groupMembersFor(elId(el));
+    var elRect = el.getBoundingClientRect();
+    members.forEach(function (m) { m.preRect = m.el.getBoundingClientRect(); });
+    detachFromFlow(el, elRect);
     var before = getPos(el);
     var after = { tx: before.tx + d[0] * step, ty: before.ty + d[1] * step };
     setOwnPos(el, after.tx, after.ty);
     positionRing();
     commitPosition(el);
     var moves = [{ id: elId(el), before: before, after: after }];
-    groupMembersFor(elId(el)).forEach(function (m) {
-      detachFromFlow(m.el);
+    members.forEach(function (m) {
+      detachFromFlow(m.el, m.preRect);
       var mAfter = { tx: m.base.tx + d[0] * step, ty: m.base.ty + d[1] * step };
       setOwnPos(m.el, mAfter.tx, mAfter.ty);
       commitPosition(m.el);

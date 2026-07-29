@@ -519,6 +519,11 @@ function isEditMode() {
  * break the per-session label. In preview mode updatePortalLink() never
  * reaches that swap (it neuters and returns early instead), so the ta
  * previewing/editing still gets a normal, fully editable field.
+ * Also stamps data-overridden on every field (cleared if there's no saved
+ * override), so a theme-toggle's ".tic-label" (see buildCustomElement()'s
+ * "theme" kind) can tell refreshThemeToggles() (js/theme.js) apart from a
+ * plain default: only a field with no override left has its text kept in
+ * sync with the live theme instead of whatever a ta typed over it.
  * @param textMap {id: overrideHtml}, from content.text
  */
 function applyTextOverrides(textMap) {
@@ -527,7 +532,12 @@ function applyTextOverrides(textMap) {
     if (skipPortalLink && el.id === "portalLink") return;
     el.setAttribute("data-default-html", el.innerHTML);
     var id = el.getAttribute("data-edit-id");
-    if (textMap && textMap[id] !== undefined) el.innerHTML = textMap[id];
+    if (textMap && textMap[id] !== undefined) {
+      el.innerHTML = textMap[id];
+      el.dataset.overridden = "1";
+    } else {
+      delete el.dataset.overridden;
+    }
   });
 }
 
@@ -543,6 +553,60 @@ var RESIZABLE_SEL = "[data-edit-id], [data-resize-id]";
  */
 function elId(el) {
   return el.getAttribute("data-edit-id") || el.getAttribute("data-resize-id");
+}
+
+/**
+ * Resolves the element a click actually selects (RING_EL, or a right-click's
+ * context-menu target), starting from `target.closest(RESIZABLE_SEL)`. A
+ * theme toggle is the one place in this codebase where a RESIZABLE_SEL match
+ * (its own data-edit-id ".tic-label" span) sits nested inside ANOTHER
+ * RESIZABLE_SEL element (the button's own data-resize-id) - every other
+ * field is either the resizable unit itself (a plain text box) or a single
+ * tagged `<a class="btn">`/`<button>` with no separately-tracked child, so
+ * `closest()` landing on the nearest match is normally exactly right. Here
+ * it isn't: the label has no resize handles or style controls of its own
+ * (isButtonEl()/colorTarget()'s bg/icon/color rows all key off the outer
+ * button), so a click landing on the label text - most of the button's
+ * clickable area - would otherwise select just the label, hiding the
+ * Background/Text color/Change icon rows entirely. Redirecting up to the
+ * button leaves the label's own click-to-edit text entry untouched (see
+ * wireTextField(), wired directly on the label and independent of
+ * selection), it only changes what gets selected/right-clicked/styled.
+ * @param target the event's target (e.g. e.target)
+ * @return the element to select, or null
+ */
+function resolveSelectableTarget(target) {
+  var el = target && target.closest ? target.closest(RESIZABLE_SEL) : null;
+  if (el && el.classList.contains("tic-label")) {
+    var toggle = el.closest("[data-theme-toggle], #themeBtn");
+    if (toggle) return toggle;
+  }
+  return el;
+}
+
+/**
+ * True for a theme toggle's own ".tic-label" span: a RESIZABLE_SEL match
+ * (its data-edit-id) that still isn't an independent element the way every
+ * other tracked descendant is. It's permanently glued to its button (no UI
+ * ever selects it on its own, see resolveSelectableTarget()), so unlike a
+ * nav link sitting inside the tracked nav bar - which SHOULD stay exactly
+ * where a ta put it if the nav itself is later moved/resized, per
+ * ancestorPos()'s "no attachment between elements" rule - the label is
+ * supposed to move and resize as one physical piece with its button,
+ * exactly like the plain (untracked) sun/moon icon markup already sitting
+ * right next to it. Used to opt the label out of that rule everywhere it's
+ * enforced (ancestorPos(), freezeDescendants()), rather than opting out of
+ * RESIZABLE_SEL matching altogether, which would also break its
+ * data-edit-id-driven click-to-edit text (wireTextField()) and its saved
+ * text override (applyTextOverrides()), neither of which cares about this
+ * distinction.
+ * @param el the element
+ * @return true if el is a theme toggle's label
+ */
+function isThemeToggleLabel(el) {
+  return !!(el.classList && el.classList.contains("tic-label") &&
+    el.parentElement && el.parentElement.hasAttribute &&
+    (el.parentElement.hasAttribute("data-theme-toggle") || el.parentElement.id === "themeBtn"));
 }
 
 /**
@@ -612,10 +676,16 @@ function getSize(el) {
  * twice, once via the card's own painted transform propagating down and
  * again via its own, landing it exactly backwards instead of standing
  * still.
+ * A theme toggle's own ".tic-label" is the one exception: it isn't an
+ * independent element at all (see isThemeToggleLabel()), so its button
+ * parent is never treated as a cancel-worthy ancestor - the label is
+ * supposed to move/resize as one piece with the button, exactly like the
+ * plain (untracked) icon markup sitting right next to it.
  * @param el the element
  * @return {tx, ty}
  */
 function ancestorPos(el) {
+  if (isThemeToggleLabel(el)) return { tx: 0, ty: 0 };
   var p = el.parentElement;
   while (p && p !== document.body) {
     if (p.matches && p.matches(RESIZABLE_SEL)) {
@@ -1846,18 +1916,19 @@ function hideLayerMenu() {
  * color control, distinct from its background: a custom Button element
  * (right-click "Add element" > Button, or the template's own CTA links,
  * a single tagged `<a class="btn">`, its text box IS the button, same rule
- * every other CTA on the site follows), OR the theme toggle (`#themeBtn`),
- * a plain `<button>` (not an `<a class="btn">`, so the class check alone
- * misses it) whose own Color row already means its background (see
- * colorTarget()), leaving no other control for its "Light mode"/"Dark
- * mode" label's own color. Its own helper (rather than inlining the check)
- * since both colorTarget() and the style popover's Text color row (see
- * buildStyleMenu()) need the exact same test.
+ * every other CTA on the site follows), OR a theme toggle (the nav's own
+ * `#themeBtn`, or a placed "theme" custom element, both tagged
+ * `data-theme-toggle`), a plain `<button>` (not an `<a class="btn">`, so the
+ * class check alone misses it) whose own Color row already means its
+ * background (see colorTarget()), leaving no other control for its "Light
+ * mode"/"Dark mode" label's own color. Its own helper (rather than inlining
+ * the check) since both colorTarget() and the style popover's Text color row
+ * (see buildStyleMenu()) need the exact same test.
  * @param el the element
  * @return true if el is a button
  */
 function isButtonEl(el) {
-  return (el.tagName === "A" && el.classList.contains("btn")) || el.id === "themeBtn";
+  return (el.tagName === "A" && el.classList.contains("btn")) || el.id === "themeBtn" || el.hasAttribute("data-theme-toggle");
 }
 
 /**
@@ -2235,6 +2306,10 @@ function buildStyleMenu() {
       '<input type="color" class="sm-textcolor">' +
       '<button type="button" class="sm-textcolor-reset" title="Reset to default">×</button>' +
     '</div>' +
+    '<div class="sm-row sm-theme-row">' +
+      '<label>Icon</label>' +
+      '<button type="button" class="sm-theme-icon-btn">Change icon</button>' +
+    '</div>' +
     '<div class="sm-row sm-fill-row">' +
       '<label>Fill</label>' +
       '<input type="color" class="sm-fill">' +
@@ -2329,11 +2404,20 @@ function buildStyleMenu() {
   var dtPattern = STYLE_MENU.querySelector(".sm-dt-pattern");
   var dtTarget = STYLE_MENU.querySelector(".sm-dt-target");
 
-  [colorInput, colorReset, textColorInput, textColorReset, fillInput, fillReset, tintInput, tintReset, shadeInput, radiusInput, borderW, borderColor, shadowInput, opacityInput, dtFont, dtFormat, dtPattern, dtTarget].forEach(function (el) {
+  var themeIconBtn = STYLE_MENU.querySelector(".sm-theme-icon-btn");
+
+  [colorInput, colorReset, textColorInput, textColorReset, fillInput, fillReset, tintInput, tintReset, shadeInput, radiusInput, borderW, borderColor, shadowInput, opacityInput, dtFont, dtFormat, dtPattern, dtTarget, themeIconBtn].forEach(function (el) {
     el.addEventListener("mousedown", function (e) { e.stopPropagation(); });
   });
   STYLE_MENU.querySelectorAll(".sm-dt-fs-dn, .sm-dt-fs-up, .sm-dt-align").forEach(function (btn) {
     btn.addEventListener("mousedown", function (e) { e.stopPropagation(); });
+  });
+
+  themeIconBtn.addEventListener("click", function () {
+    if (!STYLE_MENU_ID) return;
+    var id = STYLE_MENU_ID;
+    hideStyleMenu();
+    openThemeIconPicker(id);
   });
 
   colorInput.addEventListener("input", function () {
@@ -2835,12 +2919,14 @@ function toggleStyleMenu(anchorEl) {
   var isDatetime = el.hasAttribute("data-datetime");
   var isText = colorTarget(el) === "text";
   var isBtn = isButtonEl(el);
+  var isThemeToggle = el.hasAttribute("data-theme-toggle");
   STYLE_MENU.querySelector(".sm-color-row").style.display = isImg ? "none" : "";
   /* for every other bg-target element "Color" is the only surface control
      there is, but a button also gets its own separate Text color row right
      below, so it's worth spelling out which one this now is */
   STYLE_MENU.querySelector(".sm-color-label").textContent = isBtn ? "Background" : "Color";
   STYLE_MENU.querySelector(".sm-textcolor-row").style.display = isBtn ? "" : "none";
+  STYLE_MENU.querySelector(".sm-theme-row").style.display = isThemeToggle ? "" : "none";
   /* a datetime element paints its own text color via the Color row, so its
      Fill row (a text field's background) would just be clutter; hide it */
   STYLE_MENU.querySelector(".sm-fill-row").style.display = (isText && !isDatetime) ? "" : "none";
@@ -2980,12 +3066,17 @@ function positionRing() {
  * label sliding over to fill the gap) before its own turn comes and it
  * gets measured already-wrong. A no-op past the first resize, since a
  * pinned element is already immune to every future one, its own or an
- * ancestor's.
+ * ancestor's. Skips a theme toggle's own ".tic-label" (see
+ * isThemeToggleLabel()): pinning it absolute would freeze the label at its
+ * pre-resize spot instead of letting it reflow inside the button's own
+ * growing/shrinking flex box, same as the plain (untracked) icon markup
+ * beside it already does with no pinning at all.
  * @param el the element about to be resized
  */
 function freezeDescendants(el) {
   var wraps = [];
   el.querySelectorAll(RESIZABLE_SEL).forEach(function (d) {
+    if (isThemeToggleLabel(d)) return;
     var wrap = detachFromFlow(d);
     if (wrap.dataset.pinned !== "1") wraps.push(wrap);
   });
@@ -3374,6 +3465,18 @@ function pushGroupMoveUndo(moves) {
    content.custom_elements exactly (see renderCustomElements()) */
 var CUSTOM_ELEMENTS = [];
 
+/* the nav's real theme toggle (#themeBtn, templates/index.html)'s own sun/
+   moon pair, verbatim: a placed "theme" custom element (buildCustomElement())
+   starts out with this same auto day/night swap (css [data-theme] rule,
+   .tic.sun/.tic.moon in style.css) before a ta ever picks a fixed
+   replacement icon via the style popover's "Change icon" row. */
+var THEME_ICON_DEFAULT_SVG =
+  '<svg class="tic sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4" />' +
+  '<path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></svg>' +
+  '<svg class="tic moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /></svg>';
+
 /* every distinct icon actually used anywhere on the site (index.html's
    learn cards, schedule day rows, prizes, countdown, theme toggle, about
    section burst, plus dashboard.html/js/dashboard.js's attachment-type and
@@ -3635,8 +3738,13 @@ function freezeFreeElement(el) {
  * clip (same upload flow as an image), a plain looping muted autoplay
  * `<video>`, same object-fit: cover. A "datetime" is a live countdown or a
  * formatted static date/time (see renderDatetimeContent()), driven by its
- * own `d.target`/`d.format` rather than a click-to-edit text field. An icon
- * (the catch-all last branch)
+ * own `d.target`/`d.format` rather than a click-to-edit text field. A
+ * "theme" is a real functional light/dark toggle (see js/theme.js's
+ * `[data-theme-toggle]` listener), always built with the default sun/moon
+ * icon (a fixed replacement is a content.theme_icons override applied
+ * afterward, see applyThemeIconOverrides(), same two-pass shape the nav's
+ * static #themeBtn also relies on), its label a normal click-to-edit
+ * `.tic-label` span nested inside. An icon (the catch-all last branch)
  * with a `d.url` is a ta-uploaded icon (see fetchCustomAssets()) rendered as
  * a plain `<img>` rather than parsed svg markup; `elKind()` already treats
  * any "icon."-prefixed id as icon kind (locked aspect ratio) regardless of
@@ -3703,6 +3811,45 @@ function buildCustomElement(d) {
     el.setAttribute("data-resize-id", d.id);
     el.setAttribute("data-datetime", "1");
     renderDatetimeContent(el, d);
+  } else if (d.kind === "theme") {
+    /* a real, functional light/dark toggle (not a decorative copy): clicking
+       it anywhere it's placed calls the exact same setTheme() the nav's own
+       #themeBtn uses (see js/theme.js's delegated [data-theme-toggle]
+       listener), so every instance and the live nav toggle always agree.
+       Always starts on the auto sun/moon swap (THEME_ICON_DEFAULT_SVG, css
+       [data-theme] rule): a ta's fixed replacement icon isn't baked in here,
+       it's a per-id override applied afterward by applyThemeIconOverrides(),
+       same two-pass "build with defaults, then apply overrides" shape every
+       other kind already follows (colors, text, size, ...) - the nav's own
+       static #themeBtn (templates/index.html) needs that same override pass
+       since it isn't a custom element at all, so one shared mechanism
+       covers both instead of a custom_elements-only field that the real nav
+       button could never use. The label is a normal click-to-edit field
+       (data-edit-id) defaulting to the live theme's own "Light mode"/"Dark
+       mode" text (see refreshThemeToggles() in js/theme.js) rather than a
+       fixed default like "text"/"button" kind gets, up until a ta types
+       custom text over it. The sun/moon pair lives inside its own ".tic-icon"
+       span (d.id + ".icon"), a RESIZABLE_SEL element in its own right, so
+       the icon can be resized/moved/colored independently of the button's
+       own box and the label - see replaceThemeIcon()/applyThemeIconOverrides()
+       for why a picked replacement icon lands inside that same wrapper
+       rather than replacing the button's whole innerHTML. */
+    el = document.createElement("button");
+    el.type = "button";
+    el.className = "theme-btn";
+    el.setAttribute("data-resize-id", d.id);
+    el.setAttribute("data-theme-toggle", "1");
+    el.setAttribute("aria-label", "Toggle theme");
+    var themeIconWrap = document.createElement("span");
+    themeIconWrap.className = "tic-icon";
+    themeIconWrap.setAttribute("data-resize-id", d.id + ".icon");
+    themeIconWrap.innerHTML = THEME_ICON_DEFAULT_SVG;
+    el.appendChild(themeIconWrap);
+    var themeLabel = document.createElement("span");
+    themeLabel.className = "tic-label";
+    themeLabel.setAttribute("data-edit-id", d.id + ".label");
+    themeLabel.textContent = "Light mode";
+    el.appendChild(themeLabel);
   } else if (d.icon) {
     /* built-in or ta-uploaded icon: always real inline <svg> markup, never
        an <img>, so a future color-restyle tool can just set fill/stroke via
@@ -3891,7 +4038,7 @@ function copyDuplicateOverrides(pairs) {
   try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   var snap;
   try { snap = raw ? JSON.parse(raw) : {}; } catch (e) { snap = {}; }
-  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "shade", "radius", "border", "links", "text_color"];
+  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "shade", "radius", "border", "links", "text_color", "theme_icons"];
   pairs.forEach(function (p) {
     plainMaps.forEach(function (m) {
       if (snap[m] && snap[m][p.old] !== undefined) {
@@ -4076,7 +4223,7 @@ function customElementById(id) {
  * everything else the editor creates. Always lands on the very top of the
  * stacking order (see moveLayer()), matching what a ta would expect from
  * something they just placed.
- * @param kind "text", "button", "box", "image", "video", "icon", or "datetime"
+ * @param kind "text", "button", "box", "image", "video", "icon", "datetime", or "theme"
  * @param x left, document px (where the menu was opened)
  * @param y top, document px
  * @param extra {icon, url} for kind "icon" (a built-in's svg markup, or an
@@ -4107,6 +4254,15 @@ function addCustomElement(kind, x, y, extra) {
   applyLayerOrder(LAYER_ORDER);
   saveLayerOrder(LAYER_ORDER);
   if (kind === "text" || kind === "button") wireTextField(el);
+  if (kind === "theme") {
+    /* the button itself only carries data-resize-id; its nested ".tic-label"
+       is the actual data-edit-id field, so it needs its own wireTextField()
+       call. Also sync its text to the live theme right away, since it was
+       just built with a hardcoded "Light mode" default regardless of which
+       theme is actually active (see refreshThemeToggles() in js/theme.js). */
+    wireTextField(el.querySelector(".tic-label"));
+    if (window.refreshThemeToggles) window.refreshThemeToggles();
+  }
   /* a button's own initial link (see LINKS/applyOneLink()) is part of its
      creation, not a separately undoable step: undoing the "add" below
      just hides the button, href and all, so redoing brings the same link
@@ -4172,7 +4328,7 @@ function placeObject(objData, x, y) {
   });
   snap.custom_elements = (snap.custom_elements || []).concat(newParts);
 
-  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "shade", "radius", "border", "links", "text_color"];
+  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "shade", "radius", "border", "links", "text_color", "theme_icons"];
   plainMaps.forEach(function (m) {
     if (!objData[m]) return;
     snap[m] = snap[m] || {};
@@ -4237,10 +4393,13 @@ function placeObject(objData, x, y) {
   newParts.forEach(function (p) {
     var el = buildCustomElement(p);
     if (p.kind === "text" || p.kind === "button") wireTextField(el);
+    if (p.kind === "theme") wireTextField(el.querySelector(".tic-label"));
   });
   CUSTOM_ELEMENTS = CUSTOM_ELEMENTS.concat(newParts);
 
   applyTextOverrides(snap.text || {});
+  applyThemeIconOverrides(snap.theme_icons);
+  if (window.refreshThemeToggles) window.refreshThemeToggles();
   applySizeOverrides(snap.sizes);
   applyFontSizeOverrides(snap.font_sizes);
   applyTextStyleOverrides(snap.text_styles);
@@ -4283,6 +4442,13 @@ var CTX_TARGET_ID = null;
    "nav.brand" can share with more than one mirrored element): duplicateElement()
    needs the specific node, not just any element carrying that id. */
 var CTX_TARGET_EL = null;
+/* set by openThemeIconPicker() to repoint the icon-picker sub-view (see
+   renderCtxMenuIconPicker()) at "replace this element's icon" instead of its
+   normal "add a new icon element" behavior; cleared any time the menu goes
+   back to a normal add flow (hideCtxMenu(), renderCtxMenuRoot()) so a later
+   "Add element > Icon" click never accidentally overwrites the last theme
+   toggle a ta styled. */
+var ICON_REPLACE_TARGET = null;
 
 /** Builds the context menu once, lazily. */
 function buildCtxMenu() {
@@ -4443,8 +4609,9 @@ function renderCtxMenuLinkEditor() {
  * immediately, same /api/upload + /api/assets round trip as a video/image.
  */
 function renderCtxMenuIconPicker() {
+  var replacing = !!ICON_REPLACE_TARGET;
   CTX_MENU.innerHTML =
-    '<div class="ctx-title">Choose an icon</div>' +
+    '<div class="ctx-title">' + (replacing ? "Change icon" : "Choose an icon") + '</div>' +
     '<div class="ctx-icons">' +
       ICON_LIBRARY.map(function (ic, i) {
         return '<button type="button" class="ctx-icon-btn" data-icon="' + i + '" title="' + ic.label + '">' + ic.svg + '</button>';
@@ -4458,7 +4625,8 @@ function renderCtxMenuIconPicker() {
   CTX_MENU.querySelectorAll(".ctx-icon-btn").forEach(function (btn) {
     btn.addEventListener("click", function () {
       var ic = ICON_LIBRARY[parseInt(btn.getAttribute("data-icon"), 10)];
-      addCustomElement("icon", CTX_POS.x, CTX_POS.y, { icon: ic.svg });
+      if (replacing) replaceThemeIcon(ICON_REPLACE_TARGET, ic.svg);
+      else addCustomElement("icon", CTX_POS.x, CTX_POS.y, { icon: ic.svg });
       hideCtxMenu();
     });
   });
@@ -4488,7 +4656,8 @@ function renderCtxMenuIconPicker() {
            plain <img> if the fetch fails for any reason (eg a legacy
            non-svg upload from before this was enforced) */
         fetchSvgMarkup(ic.url).then(function (svg) {
-          addCustomElement("icon", CTX_POS.x, CTX_POS.y, svg ? { icon: svg } : { url: ic.url });
+          if (replacing) replaceThemeIcon(ICON_REPLACE_TARGET, svg || '<img src="' + ic.url + '" alt="">');
+          else addCustomElement("icon", CTX_POS.x, CTX_POS.y, svg ? { icon: svg } : { url: ic.url });
           hideCtxMenu();
         });
       });
@@ -4529,6 +4698,132 @@ function renderCtxMenuIconPicker() {
         input.disabled = false;
       });
   });
+}
+
+/**
+ * Opens the icon picker (see renderCtxMenuIconPicker()) in "replace" mode,
+ * anchored under a theme-toggle's style popover "Change icon" row rather
+ * than at a right-click point: picking an icon there calls replaceThemeIcon()
+ * on id instead of adding a brand new element. Positioned/clamped the same
+ * way showCtxMenu() anchors the right-click menu, just measured off the
+ * target element's own box instead of a click point, since there isn't one.
+ * @param id the theme-toggle element's id (STYLE_MENU_ID)
+ */
+function openThemeIconPicker(id) {
+  var el = elByAnyId(id);
+  if (!el) return;
+  if (!CTX_MENU) buildCtxMenu();
+  ICON_REPLACE_TARGET = id;
+  CTX_TARGET_ID = null;
+  CTX_TARGET_EL = null;
+  renderCtxMenuIconPicker();
+  CTX_MENU.classList.add("show");
+  var r = el.getBoundingClientRect();
+  var x = r.left + window.scrollX, y = r.bottom + window.scrollY + 6;
+  var w = CTX_MENU.offsetWidth, h = CTX_MENU.offsetHeight;
+  var maxX = window.scrollX + document.documentElement.clientWidth - w - 6;
+  var maxY = window.scrollY + document.documentElement.clientHeight - h - 6;
+  CTX_MENU.style.left = Math.max(0, Math.min(x, maxX)) + "px";
+  CTX_MENU.style.top = Math.max(0, Math.min(y, maxY)) + "px";
+}
+
+/**
+ * Re-classes a picked icon's root tag(s) to "tic" before it ever lands in a
+ * theme toggle: the picker's own markup (ICON_LIBRARY / a ta's uploaded svg)
+ * carries class="cic", the fixed 30x30 accent-colored sizing every
+ * standalone content icon on the site uses (see ICON_LIBRARY's own comment),
+ * which is wrong here on two counts - too big for the 40px-tall toggle
+ * button, and "color: var(--accent)" on the svg itself would override the
+ * inherited currentColor stroke, permanently locking the icon's color and
+ * defeating the toggle's own (or its ".tic-icon" wrapper's) color control.
+ * ".tic" (css/style.css) is the toggle's real sizing/coloring class: fills
+ * its ".tic-icon" wrapper (20x20 by default, resizable via the visual
+ * editor), no color of its own, so it inherits whichever ancestor's color
+ * wins exactly like the default sun/moon pair already does. Works on every
+ * direct child (not just the first), since the
+ * legacy non-svg fallback path hands this a plain <img> instead of an <svg>.
+ * @param markup raw icon markup (one or more root <svg>/<img> tags)
+ * @return the same markup with every root tag's class forced to "tic"
+ */
+function normalizeThemeIconMarkup(markup) {
+  var tmp = document.createElement("div");
+  tmp.innerHTML = markup;
+  Array.prototype.forEach.call(tmp.children, function (node) {
+    node.setAttribute("class", "tic");
+  });
+  return tmp.innerHTML;
+}
+
+/**
+ * Persists a theme-toggle icon override into the preview snapshot, keyed by
+ * the toggle's own id (elId(): data-resize-id for a placed "theme" custom
+ * element, or "box.themeBtn" for the nav's own static #themeBtn), same
+ * plain per-id map shape content.colors/content.text_color already use
+ * (saveEditedColor()). A shared map rather than a custom-element-only field
+ * (content.custom_elements[].icon) since the real nav toggle isn't a custom
+ * element at all and still needs its icon override to survive a reload.
+ * @param id the theme-toggle element's id
+ * @param svgMarkup the new icon's markup, or "" to clear back to the
+ *   default sun/moon swap
+ */
+function saveThemeIcon(id, svgMarkup) {
+  var raw;
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  if (!snapshot.theme_icons || typeof snapshot.theme_icons !== "object") snapshot.theme_icons = {};
+  if (!svgMarkup) delete snapshot.theme_icons[id];
+  else snapshot.theme_icons[id] = svgMarkup;
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
+ * Applies saved theme-toggle icon overrides (content.theme_icons, see
+ * saveThemeIcon()) on top of every toggle's built-in default sun/moon pair
+ * (THEME_ICON_DEFAULT_SVG, baked in by buildCustomElement()/already sitting
+ * in templates/index.html's static markup). Runs on every load, live site
+ * included, same "second pass on top of built defaults" shape every other
+ * override map uses (applyColorOverrides() etc.) - covers the nav's real
+ * #themeBtn and every placed "theme" custom element in one pass, both
+ * selected the same way js/theme.js's updateIcon() already does. Only the
+ * ".tic-icon" wrapper's own innerHTML is replaced, never the button's: that
+ * wrapper is its own RESIZABLE_SEL element (data-resize-id = id + ".icon"),
+ * so its saved size/position/color overrides (applied elsewhere, same
+ * generic passes every other tracked element goes through) survive an icon
+ * swap untouched.
+ * @param map content.theme_icons, {id: svgMarkup}
+ */
+function applyThemeIconOverrides(map) {
+  map = map || {};
+  document.querySelectorAll("[data-theme-toggle], #themeBtn").forEach(function (btn) {
+    var v = map[elId(btn)];
+    if (!v) return;
+    var wrap = btn.querySelector(".tic-icon");
+    if (wrap) wrap.innerHTML = v;
+  });
+}
+
+/**
+ * Swaps a theme-toggle's icon (the nav's own static #themeBtn, or a placed
+ * "theme" custom element, see buildCustomElement()) for a newly picked one,
+ * live in the dom and in content.theme_icons (saveThemeIcon()), so it
+ * survives a reload exactly like every other style-popover field. The
+ * picked markup is re-classed first (see normalizeThemeIconMarkup()) so it
+ * fits and recolors like the toggle's own default icon rather than the
+ * standalone-icon picker's fixed look. Only replaces the ".tic-icon"
+ * wrapper's own innerHTML (see applyThemeIconOverrides()), so the button's
+ * own box and its ".tic-label" text are never touched by an icon swap.
+ * @param id the theme-toggle element's id
+ * @param svgMarkup the new icon's raw <svg>...</svg> (or <img>) markup
+ */
+function replaceThemeIcon(id, svgMarkup) {
+  var el = elByAnyId(id);
+  if (!el || !svgMarkup) return;
+  var wrap = el.querySelector(".tic-icon");
+  if (!wrap) return;
+  var normalized = normalizeThemeIconMarkup(svgMarkup);
+  wrap.innerHTML = normalized;
+  saveThemeIcon(id, normalized);
 }
 
 /**
@@ -4650,8 +4945,27 @@ function renderCtxMenuObjectPicker() {
     '<div class="ctx-objects"></div>' +
     '<button type="button" class="ctx-new-object">New object...</button>';
   var wrap = CTX_MENU.querySelector(".ctx-objects");
+
+  /* the one built-in entry in this list that isn't a ta-saved OBJECTS_LIBRARY
+     bundle: a real functional light/dark toggle (buildCustomElement()'s
+     "theme" kind), not just a decorative group of shapes, so its name gets
+     a small "Live" badge here to signal that up front rather than a ta
+     discovering it only after placing it. */
+  var builtin = document.createElement("button");
+  builtin.type = "button";
+  builtin.className = "ctx-obj-builtin";
+  builtin.innerHTML = '<span class="ctx-obj-badge">Live</span> Light / Dark mode toggle';
+  builtin.addEventListener("click", function () {
+    addCustomElement("theme", CTX_POS.x, CTX_POS.y);
+    hideCtxMenu();
+  });
+  wrap.appendChild(builtin);
+
   if (!OBJECTS_LIBRARY.length) {
-    wrap.innerHTML = '<div class="ctx-file-msg">No saved objects yet. Build one in the object editor.</div>';
+    var msg = document.createElement("div");
+    msg.className = "ctx-file-msg";
+    msg.textContent = "No saved objects yet. Build one in the object editor.";
+    wrap.appendChild(msg);
   } else {
     OBJECTS_LIBRARY.forEach(function (obj) {
       var btn = document.createElement("button");
@@ -4706,6 +5020,7 @@ function showCtxMenu(x, y, targetId, targetEl) {
   CTX_POS = { x: x, y: y };
   CTX_TARGET_ID = targetId || null;
   CTX_TARGET_EL = targetEl || null;
+  ICON_REPLACE_TARGET = null;
   renderCtxMenuRoot();
   CTX_MENU.classList.add("show");
   var w = CTX_MENU.offsetWidth, h = CTX_MENU.offsetHeight;
@@ -4718,6 +5033,7 @@ function showCtxMenu(x, y, targetId, targetEl) {
 /** Hides the "Add element" menu. */
 function hideCtxMenu() {
   if (CTX_MENU) CTX_MENU.classList.remove("show");
+  ICON_REPLACE_TARGET = null;
 }
 
 /**
@@ -4734,7 +5050,7 @@ function wireAddElementMenu() {
        spellcheck still works while actually typing */
     if (e.target.closest && e.target.closest("[contenteditable='true']")) return;
     e.preventDefault();
-    var t = e.target.closest ? e.target.closest(RESIZABLE_SEL) : null;
+    var t = resolveSelectableTarget(e.target);
     showCtxMenu(e.pageX, e.pageY, t ? elId(t) : null, t);
   });
   /* mousedown (not click) so this runs and reads e.target BEFORE a menu
@@ -4812,7 +5128,7 @@ function wireResizable() {
   document.addEventListener("mousedown", function (e) {
     if (e.button !== 0) return;
     if (RING.contains(e.target)) return;
-    var el = e.target.closest ? e.target.closest(RESIZABLE_SEL) : null;
+    var el = resolveSelectableTarget(e.target);
     if (!el) {
       /* clicked away from every tracked element: clear the sticky selection,
          unless the click actually landed in one of the selected element's
@@ -6175,6 +6491,8 @@ function initObjectCanvas() {
     renderCustomElements(data.custom_elements);
     renderDuplicates(data.duplicates);
     applyTextOverrides(data.text || {});
+    applyThemeIconOverrides(data.theme_icons);
+    if (window.refreshThemeToggles) window.refreshThemeToggles();
     applySizeOverrides(data.sizes);
     applyFontSizeOverrides(data.font_sizes);
     applyTextStyleOverrides(data.text_styles);
@@ -6290,6 +6608,8 @@ document.addEventListener("DOMContentLoaded", function () {
       renderCustomElements(data.custom_elements);
       renderDuplicates(data.duplicates);
       applyTextOverrides(textMap);
+      applyThemeIconOverrides(data.theme_icons);
+      if (window.refreshThemeToggles) window.refreshThemeToggles();
       applySizeOverrides(data.sizes);
       applyFontSizeOverrides(data.font_sizes);
       applyTextStyleOverrides(data.text_styles);

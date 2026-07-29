@@ -24,6 +24,8 @@
   --rose:      #c2807f;   /* muted rose */
   --border:    transparent;   /* flat look, no borders */
   --grid:      rgba(255,255,255,0.014);
+  --grid-line: rgba(255,255,255,0.05);
+  --grid-line-strong: rgba(255,255,255,0.1);
   --vignette:  rgba(0,0,0,0.45);
   --shadow:    0 14px 34px rgba(0,0,0,0.40);
   --glow:      0 0 0 rgba(0,0,0,0);
@@ -51,6 +53,8 @@
   --rose:      #a85f5e;   /* muted rose */
   --border:    transparent;
   --grid:      rgba(20,30,50,0.022);
+  --grid-line: rgba(20,30,50,0.06);
+  --grid-line-strong: rgba(20,30,50,0.12);
   --vignette:  rgba(120,135,160,0.22);
   --shadow:    0 14px 30px rgba(40,55,80,0.12);
   --glow:      0 0 0 rgba(0,0,0,0);
@@ -238,7 +242,7 @@ h1, h2, h3 {
 .nav-links {
   display: flex;
   gap: 30px;
-  margin-left: 26px;
+  margin-left: 38px;
 }
 .nav-links a {
   color: var(--muted);
@@ -277,8 +281,11 @@ h1, h2, h3 {
   gap: 8px;
 }
 .theme-btn:hover { color: var(--accent); }
-/* sun shows in dark mode, moon in light, swapped by [data-theme] */
-.tic { width: 20px; height: 20px; flex: none; }
+/* .tic-icon is the resizable/moveable/colorable unit (visual editor's own
+   data-resize-id); the sun/moon svgs inside it just fill it and swap via
+   [data-theme], never sized/positioned/colored on their own */
+.tic-icon { width: 20px; height: 20px; flex: none; display: inline-flex; align-items: center; justify-content: center; }
+.tic { width: 100%; height: 100%; }
 .tic.moon { display: none; }
 [data-theme="light"] .tic.sun { display: none; }
 [data-theme="light"] .tic.moon { display: block; }
@@ -1570,6 +1577,18 @@ body.edit-mode .apply-bob { animation: none; }
   flex-shrink: 0;
 }
 
+/* theme-toggle "Change icon" row (buildStyleMenu()'s .sm-theme-row, only
+   shown for a data-theme-toggle element, see toggleStyleMenu()): a plain
+   chip button, not a full click-to-edit control, since picking an icon opens
+   its own sub-picker (openThemeIconPicker()) rather than editing inline */
+.ctx-menu .sm-theme-icon-btn {
+  flex: 1;
+  justify-content: center;
+  background: var(--surface-2);
+  border-radius: 6px;
+}
+.ctx-menu .sm-theme-icon-btn:hover { background: var(--accent); color: #fff; }
+
 /* datetime element controls in the style popover (buildStyleMenu()): its
    "Format string"/"Target" labels run longer than a color swatch row's, and
    its font/format/pattern/target fields fill the rest of the row */
@@ -1651,6 +1670,22 @@ body.edit-mode .apply-bob { animation: none; }
 /* reusable-object mini editor (templates/object-editor.html): a slim
    toolbar, not a site <nav>, wrapping the exact same visual editor engine
    as the Visual editor tab, just aimed at a blank canvas. */
+
+/* graph-paper underlay for the blank canvas: minor lines every 20px, a
+   bolder line every 100px, so free-placed elements have something to eyeball
+   alignment against. pure background-image, not a real element, so it can't
+   intercept right-clicks or shift the custom elements' absolute left/top
+   coordinates (those are relative to the page origin either way) */
+.obj-editor-page {
+  min-height: 100vh;
+  background-image:
+    linear-gradient(var(--grid-line-strong) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line-strong) 1px, transparent 1px),
+    linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+  background-size: 100px 100px, 100px 100px, 20px 20px, 20px 20px;
+}
+
 .obj-toolbar {
   position: sticky;
   top: 0;
@@ -1828,6 +1863,24 @@ body.edit-mode .apply-bob { animation: none; }
   color: var(--muted);
   font-family: var(--font-body);
   font-size: .75rem;
+}
+
+/* the "Add object" picker's one built-in entry (a real functional light/dark
+   toggle, see renderCtxMenuObjectPicker()/buildCustomElement()'s "theme"
+   kind), badged so it reads as different in kind from every ta-saved object
+   listed below it, not just alphabetically first */
+.ctx-menu .ctx-obj-builtin { gap: 8px; }
+.ctx-obj-badge {
+  flex: none;
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: .62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .4px;
 }
 
 /* ta portal's own mini logistics-tile preview (js/ta.js's wireInlineEdit()):

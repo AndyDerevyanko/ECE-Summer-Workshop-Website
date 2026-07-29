@@ -218,6 +218,11 @@ DEFAULT_CONTENT = {
     # (see colorTarget() in js/main.js), this is the separate control for
     # its label.
     "text_color": {},
+    # visual editor style popover's "Change icon" row, theme toggles only
+    # (the nav's own #themeBtn, or a placed "theme" custom element), keyed
+    # by data-resize-id, raw <svg>/<img> markup. empty means "show the
+    # default sun/moon swap", see applyThemeIconOverrides() in js/main.js.
+    "theme_icons": {},
 }
 
 # starter "objects" library entries (see the objects table below): reusable

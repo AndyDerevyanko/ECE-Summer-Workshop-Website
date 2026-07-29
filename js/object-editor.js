@@ -61,6 +61,52 @@ function showMsg(text, ok) {
 /* the object currently being edited, if it already exists on the server (see /api/objects); null while building a brand new one that's never been saved yet */
 var CURRENT_ID = null;
 
+/* localStorage key for a rolling local draft of whatever's on the canvas
+   right now: {id, name, data}, id mirrors CURRENT_ID (null for a
+   never-saved object). Refreshed every few seconds (persistDraft(), via
+   DRAFT_INTERVAL) independently of Save, since the whole point is
+   surviving a ta idle-logout mid-edit (js/idle.js's redirect to
+   login.html only clears session/role/token/last_active, never this key,
+   see loadObject()'s own restore check below) or just a closed tab, not
+   only an explicit save. */
+var DRAFT_KEY = "object_editor_draft";
+var DRAFT_INTERVAL = null;
+
+/**
+ * Snapshots the canvas's current scene (object_content, kept live-updated
+ * by js/main.js's whole editor engine, see snapshotKey()) plus the name
+ * field into the rolling local draft. Cheap and local only, no server
+ * round trip, so it can run on a plain interval regardless of session
+ * state.
+ */
+function persistDraft() {
+  var raw;
+  try { raw = localStorage.getItem("object_content"); } catch (e) { raw = null; }
+  var data;
+  try { data = raw ? JSON.parse(raw) : {}; } catch (e) { data = {}; }
+  var name = document.getElementById("objName").value.trim();
+  try {
+    localStorage.setItem(DRAFT_KEY, JSON.stringify({ id: CURRENT_ID, name: name, data: data }));
+  } catch (e) {}
+}
+
+/** Starts (or restarts) the periodic local draft autosave. */
+function startDraftAutosave() {
+  if (DRAFT_INTERVAL) clearInterval(DRAFT_INTERVAL);
+  DRAFT_INTERVAL = setInterval(persistDraft, 4000);
+}
+
+/**
+ * Reads the rolling local draft, if any.
+ * @return {id, name, data}, or null if there isn't one / it's unparseable
+ */
+function readDraft() {
+  var raw;
+  try { raw = localStorage.getItem(DRAFT_KEY); } catch (e) { raw = null; }
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch (e) { return null; }
+}
+
 /**
  * Reads ?id=N off the url.
  * @return the object id, or null if not editing an existing one
@@ -104,6 +150,13 @@ function saveObject() {
       window.history.replaceState(null, "", "object-editor.html?object=1&id=" + CURRENT_ID);
       document.getElementById("objDelete").style.display = "";
     }
+    /* refresh the local draft's own id right away rather than waiting for
+       the next 4s tick, so a just-assigned CURRENT_ID (a brand new
+       object's first save) is reflected immediately; the draft itself is
+       deliberately NOT cleared on save, editing continues on the same page
+       afterward and a later idle-logout should still be recoverable, see
+       loadObject() */
+    persistDraft();
     /* lets any other open tab (the Visual editor's right-click "Add
        element" picker, or instructor.html's own Objects list) know a save
        just happened, see the "storage" listener in js/main.js's
@@ -122,13 +175,18 @@ function deleteObject() {
   if (!window.confirm("Delete this object? This can't be undone.")) return;
   authedFetch("/api/objects/" + CURRENT_ID, { method: "DELETE" }).then(function (res) {
     if (!res.ok) throw new Error("delete failed");
+    /* the object this draft pointed at is gone, don't resurrect it on a
+       later "New" load, see loadObject()'s restore check */
+    var d = readDraft();
+    if (d && d.id === CURRENT_ID) { try { localStorage.removeItem(DRAFT_KEY); } catch (e) {} }
     window.location.href = "instructor.html#objects";
   }).catch(function () { showMsg("Couldn't delete it, try again.", false); });
 }
 
-/** Starts a brand new, unsaved object: a blank canvas with no id yet. */
+/** Starts a brand new, unsaved object: a blank canvas with no id yet, discarding any recoverable local draft too, since this is an explicit "start over" action. */
 function startNew() {
   try { localStorage.removeItem("object_content"); } catch (e) {}
+  try { localStorage.removeItem(DRAFT_KEY); } catch (e) {}
   window.location.href = "object-editor.html?object=1";
 }
 
@@ -139,16 +197,43 @@ function startNew() {
  * already reachable as window.initObjectCanvas) now that it's safe: doing
  * this before that server round trip finishes would race it, see the
  * isObjectMode() branch of js/main.js's own DOMContentLoaded handler.
+ *
+ * Before doing either, checks the rolling local draft (see persistDraft()/
+ * DRAFT_KEY): a ta logged out mid-edit by the idle timer never gets a
+ * chance to click Save, and js/idle.js's redirect only clears the session
+ * itself, never this key, so the last few seconds of unsaved work are
+ * still sitting in localStorage the next time this page loads. A draft
+ * matching what's being opened here (the same known id, or a leftover
+ * never-saved one when opening fresh with no id at all) wins over a plain
+ * server refetch/blank canvas.
  */
 function loadObject() {
   CURRENT_ID = idFromUrl();
+  var draft = readDraft();
+
+  if (!CURRENT_ID && draft) {
+    restoreFromDraft(draft);
+    return;
+  }
+
   document.getElementById("objDelete").style.display = CURRENT_ID ? "" : "none";
+
   if (!CURRENT_ID) {
     try { localStorage.removeItem("object_content"); } catch (e) {}
     document.getElementById("objName").value = "";
     window.initObjectCanvas();
+    startDraftAutosave();
     return;
   }
+
+  if (draft && draft.id === CURRENT_ID) {
+    document.getElementById("objName").value = draft.name || "";
+    try { localStorage.setItem("object_content", JSON.stringify(draft.data || {})); } catch (e) {}
+    window.initObjectCanvas();
+    startDraftAutosave();
+    return;
+  }
+
   authedFetch("/api/objects").then(function (res) { return res.json(); }).then(function (list) {
     var obj = list.filter(function (o) { return o.id === CURRENT_ID; })[0];
     if (!obj) {
@@ -160,10 +245,30 @@ function loadObject() {
     document.getElementById("objName").value = obj.name || "";
     try { localStorage.setItem("object_content", JSON.stringify(obj.data || {})); } catch (e) {}
     window.initObjectCanvas();
+    startDraftAutosave();
   }).catch(function () {
     showMsg("Couldn't load that object.", false);
     window.initObjectCanvas();
+    startDraftAutosave();
   });
+}
+
+/**
+ * Reopens a leftover unsaved draft (see loadObject()) instead of the blank
+ * canvas a fresh "New object" load would otherwise show.
+ * @param draft {id, name, data}, as read from DRAFT_KEY
+ */
+function restoreFromDraft(draft) {
+  CURRENT_ID = draft.id || null;
+  if (CURRENT_ID) {
+    window.history.replaceState(null, "", "object-editor.html?object=1&id=" + CURRENT_ID);
+  }
+  document.getElementById("objDelete").style.display = CURRENT_ID ? "" : "none";
+  document.getElementById("objName").value = draft.name || "";
+  try { localStorage.setItem("object_content", JSON.stringify(draft.data || {})); } catch (e) {}
+  window.initObjectCanvas();
+  startDraftAutosave();
+  showMsg("Restored your last unsaved design.", true);
 }
 
 document.addEventListener("DOMContentLoaded", function () {

@@ -1416,6 +1416,9 @@ function applyLayerOrder(layers) {
     if (m.el.parentNode && m.el.parentNode.classList && m.el.parentNode.classList.contains("free-wrap")) {
       var tintOv = m.el.parentNode.querySelector(".tint-ov");
       if (tintOv) tintOv.style.zIndex = String(z);
+      /* same reasoning, same fix, for a shade overlay (setElementShade()) */
+      var shadeOv = m.el.parentNode.querySelector(".shade-ov");
+      if (shadeOv) shadeOv.style.zIndex = String(z);
     }
     z++;
   });
@@ -2089,6 +2092,54 @@ function applyTintOverrides(tint) {
 }
 
 /**
+ * Darkens (or un-darkens) an image/video with a flat black overlay, the same
+ * per-element idea as the hero's own .hero-scrim, just resizable/undoable
+ * like every other style control here instead of being one fixed global
+ * layer. A plain opacity change (see applyElementOpacity()) would dim the
+ * whole element uniformly (icon, text, everything alike), which reads as
+ * "faded", not "darkened photo"; this instead stacks a same-size, pointer-
+ * events:none black ".shade-ov" sibling in the element's own free-wrap (see
+ * detachFromFlow(), same lazy-detach rule setElementTint() already follows),
+ * so the pixels themselves stay fully opaque and only get visually darker.
+ * @param el the image/video element
+ * @param alpha 0 (no shade) to 1 (fully black); 0 removes the overlay
+ */
+function setElementShade(el, alpha) {
+  var wrap = detachFromFlow(el);
+  var ov = wrap.querySelector(".shade-ov");
+  if (!alpha) {
+    if (ov) ov.remove();
+    return;
+  }
+  if (!ov) {
+    ov = document.createElement("div");
+    ov.className = "shade-ov";
+    wrap.appendChild(ov);
+  }
+  ov.style.opacity = String(alpha);
+  /* match el's own current z-index right away, same reasoning as
+     setElementTint()'s own copy of this: without it a freshly-picked shade
+     would stay invisible, behind el, until the next applyLayerOrder() run */
+  ov.style.zIndex = getComputedStyle(el).zIndex;
+}
+
+/**
+ * Applies saved image/video shade overrides on top of the page's own
+ * default (none). Runs on every load, live site included, same spot as
+ * applyTintOverrides(). Only ever touches elKind() === "img" elements; the
+ * Shade row is hidden for anything else.
+ * @param shade content.shade, {id: number 0-1}
+ */
+function applyShadeOverrides(shade) {
+  shade = shade || {};
+  document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
+    if (elKind(el) !== "img") return;
+    var v = shade[elId(el)];
+    if (v) setElementShade(el, v);
+  });
+}
+
+/**
  * Applies saved border-radius overrides on top of the page's own default
  * corners. Runs on every load, live site included.
  * @param radius content.radius, {id: px number}
@@ -2144,6 +2195,7 @@ var STYLE_OPACITY_BEFORE = "";
 var STYLE_TEXTCOLOR_BEFORE = "";
 var STYLE_FILL_BEFORE = "";
 var STYLE_TINT_BEFORE = "";
+var STYLE_SHADE_BEFORE = 0;
 var STYLE_RADIUS_BEFORE = "0";
 var STYLE_BORDER_BEFORE = { w: 0, color: "#000000" };
 /* a datetime element's {target, format, strftime} right before the current
@@ -2180,6 +2232,11 @@ function buildStyleMenu() {
       '<label>Tint</label>' +
       '<input type="color" class="sm-tint">' +
       '<button type="button" class="sm-tint-reset" title="Remove tint">×</button>' +
+    '</div>' +
+    '<div class="sm-row sm-shade-row">' +
+      '<label>Shade</label>' +
+      '<input type="range" class="sm-shade" min="0" max="100" step="1">' +
+      '<span class="sm-shade-val">0%</span>' +
     '</div>' +
     '<div class="sm-row sm-shape-row sm-radius-row">' +
       '<label>Radius</label>' +
@@ -2245,6 +2302,8 @@ function buildStyleMenu() {
   var fillReset = STYLE_MENU.querySelector(".sm-fill-reset");
   var tintInput = STYLE_MENU.querySelector(".sm-tint");
   var tintReset = STYLE_MENU.querySelector(".sm-tint-reset");
+  var shadeInput = STYLE_MENU.querySelector(".sm-shade");
+  var shadeVal = STYLE_MENU.querySelector(".sm-shade-val");
   var radiusInput = STYLE_MENU.querySelector(".sm-radius");
   var radiusVal = STYLE_MENU.querySelector(".sm-radius-val");
   var borderW = STYLE_MENU.querySelector(".sm-border-w");
@@ -2258,7 +2317,7 @@ function buildStyleMenu() {
   var dtPattern = STYLE_MENU.querySelector(".sm-dt-pattern");
   var dtTarget = STYLE_MENU.querySelector(".sm-dt-target");
 
-  [colorInput, colorReset, textColorInput, textColorReset, fillInput, fillReset, tintInput, tintReset, radiusInput, borderW, borderColor, shadowInput, opacityInput, dtFont, dtFormat, dtPattern, dtTarget].forEach(function (el) {
+  [colorInput, colorReset, textColorInput, textColorReset, fillInput, fillReset, tintInput, tintReset, shadeInput, radiusInput, borderW, borderColor, shadowInput, opacityInput, dtFont, dtFormat, dtPattern, dtTarget].forEach(function (el) {
     el.addEventListener("mousedown", function (e) { e.stopPropagation(); });
   });
   STYLE_MENU.querySelectorAll(".sm-dt-fs-dn, .sm-dt-fs-up, .sm-dt-align").forEach(function (btn) {
@@ -2394,6 +2453,25 @@ function buildStyleMenu() {
       EDIT_REDO.length = 0;
     }
     STYLE_TINT_BEFORE = "";
+  });
+
+  shadeInput.addEventListener("input", function () {
+    if (!STYLE_MENU_ID) return;
+    var el = styleMenuEl();
+    if (!el) return;
+    var v = parseFloat((parseFloat(shadeInput.value) / 100).toFixed(2));
+    setElementShade(el, v);
+    shadeVal.textContent = shadeInput.value + "%";
+    saveEditedShade(STYLE_MENU_ID, v);
+  });
+  shadeInput.addEventListener("change", function () {
+    if (!STYLE_MENU_ID) return;
+    var after = shadeInput.value;
+    if (after !== STYLE_SHADE_BEFORE) {
+      EDIT_UNDO.push({ type: "shade", id: STYLE_MENU_ID, before: STYLE_SHADE_BEFORE, after: after });
+      EDIT_REDO.length = 0;
+    }
+    STYLE_SHADE_BEFORE = after;
   });
 
   radiusInput.addEventListener("input", function () {
@@ -2667,6 +2745,19 @@ function currentTintValue(el) {
 }
 
 /**
+ * Reads an image/video's current shade amount (see setElementShade()) as a
+ * 0-1 number, 0 if it has none.
+ * @param el the image/video element
+ * @return a 0-1 number
+ */
+function currentShadeValue(el) {
+  var wrap = el.parentNode;
+  var ov = wrap && wrap.classList && wrap.classList.contains("free-wrap") ? wrap.querySelector(".shade-ov") : null;
+  if (!ov) return 0;
+  return parseFloat(getComputedStyle(ov).opacity) || 0;
+}
+
+/**
  * Reads an element's current (uniform, all four corners) border radius in
  * css px, off the live computed style so an element already rounded by the
  * stylesheet (eg a .card) starts the slider at its real look, not 0.
@@ -2742,6 +2833,7 @@ function toggleStyleMenu(anchorEl) {
      Fill row (a text field's background) would just be clutter; hide it */
   STYLE_MENU.querySelector(".sm-fill-row").style.display = (isText && !isDatetime) ? "" : "none";
   STYLE_MENU.querySelector(".sm-tint-row").style.display = isImg ? "" : "none";
+  STYLE_MENU.querySelector(".sm-shade-row").style.display = isImg ? "" : "none";
   /* rounding/border/shadow on the bare digits text make no more sense than
      on an icon, so hide the shape group for a datetime element too */
   var shapeDisplay = (isIcon || isDatetime) ? "none" : "";
@@ -2752,6 +2844,8 @@ function toggleStyleMenu(anchorEl) {
   var textColorInput = STYLE_MENU.querySelector(".sm-textcolor");
   var fillInput = STYLE_MENU.querySelector(".sm-fill");
   var tintInput = STYLE_MENU.querySelector(".sm-tint");
+  var shadeInput = STYLE_MENU.querySelector(".sm-shade");
+  var shadeVal = STYLE_MENU.querySelector(".sm-shade-val");
   var radiusInput = STYLE_MENU.querySelector(".sm-radius");
   var radiusVal = STYLE_MENU.querySelector(".sm-radius-val");
   var borderW = STYLE_MENU.querySelector(".sm-border-w");
@@ -2777,6 +2871,10 @@ function toggleStyleMenu(anchorEl) {
   if (isImg) {
     tintInput.value = currentTintValue(el);
     STYLE_TINT_BEFORE = tintInput.value === "#ffffff" ? "" : tintInput.value;
+    var shadeNow = currentShadeValue(el);
+    shadeInput.value = Math.round(shadeNow * 100);
+    shadeVal.textContent = shadeInput.value + "%";
+    STYLE_SHADE_BEFORE = shadeInput.value;
   }
 
   if (isDatetime) {
@@ -3781,7 +3879,7 @@ function copyDuplicateOverrides(pairs) {
   try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   var snap;
   try { snap = raw ? JSON.parse(raw) : {}; } catch (e) { snap = {}; }
-  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "radius", "border", "links", "text_color"];
+  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "shade", "radius", "border", "links", "text_color"];
   pairs.forEach(function (p) {
     plainMaps.forEach(function (m) {
       if (snap[m] && snap[m][p.old] !== undefined) {
@@ -4062,7 +4160,7 @@ function placeObject(objData, x, y) {
   });
   snap.custom_elements = (snap.custom_elements || []).concat(newParts);
 
-  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "radius", "border", "links", "text_color"];
+  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "shade", "radius", "border", "links", "text_color"];
   plainMaps.forEach(function (m) {
     if (!objData[m]) return;
     snap[m] = snap[m] || {};
@@ -4139,6 +4237,7 @@ function placeObject(objData, x, y) {
   applyFillOverrides(snap.fill);
   applyTextColorOverrides(snap.text_color);
   applyTintOverrides(snap.tint);
+  applyShadeOverrides(snap.shade);
   applyRadiusOverrides(snap.radius);
   applyBorderOverrides(snap.border);
   applyShadowOverrides(snap.shadow);
@@ -5642,6 +5741,19 @@ function applyHistoryAction(action, side) {
     }
     return;
   }
+  if (action.type === "shade") {
+    var shadeEl = styleMenuElById(action.id);
+    if (!shadeEl) return;
+    var shadePct = parseFloat(val) || 0;
+    setElementShade(shadeEl, shadePct / 100);
+    saveEditedShade(action.id, shadePct / 100);
+    if (STYLE_MENU_ID === action.id) {
+      STYLE_MENU.querySelector(".sm-shade").value = shadePct;
+      STYLE_MENU.querySelector(".sm-shade-val").textContent = shadePct + "%";
+      STYLE_SHADE_BEFORE = String(shadePct);
+    }
+    return;
+  }
 }
 
 /**
@@ -5904,6 +6016,24 @@ function saveEditedTint(id, value) {
 }
 
 /**
+ * Persists an image/video shade change from the style popover's Shade
+ * control into the preview snapshot, the same draft everything else here
+ * uses.
+ * @param id the element's data-resize-id
+ * @param value a 0-1 number, or 0 to remove the shade
+ */
+function saveEditedShade(id, value) {
+  var raw;
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  if (!snapshot.shade || typeof snapshot.shade !== "object") snapshot.shade = {};
+  if (!value) delete snapshot.shade[id];
+  else snapshot.shade[id] = value;
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
  * Persists a border-radius change from the style popover's Radius slider.
  * @param id the element's data-edit-id or data-resize-id
  * @param px a whole-number px value, 0 to clear back to the template default
@@ -6041,6 +6171,7 @@ function initObjectCanvas() {
     applyFillOverrides(data.fill);
     applyTextColorOverrides(data.text_color);
     applyTintOverrides(data.tint);
+    applyShadeOverrides(data.shade);
     applyRadiusOverrides(data.radius);
     applyBorderOverrides(data.border);
     applyShadowOverrides(data.shadow);
@@ -6155,6 +6286,7 @@ document.addEventListener("DOMContentLoaded", function () {
       applyFillOverrides(data.fill);
       applyTextColorOverrides(data.text_color);
       applyTintOverrides(data.tint);
+      applyShadeOverrides(data.shade);
       applyRadiusOverrides(data.radius);
       applyBorderOverrides(data.border);
       applyShadowOverrides(data.shadow);

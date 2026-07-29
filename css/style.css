@@ -1643,6 +1643,11 @@ body.edit-mode .apply-bob { animation: none; }
    mix-blend-mode rather than a flat opaque color */
 .tint-ov { position: absolute; inset: 0; pointer-events: none; mix-blend-mode: color; }
 
+/* image/video shade overlay (setElementShade() in js/main.js): a flat black
+   layer over the same box, opacity-only (no blend mode, unlike .tint-ov),
+   for darkening a photo/clip the same way .hero-scrim darkens the hero */
+.shade-ov { position: absolute; inset: 0; pointer-events: none; background: #000; }
+
 /* reusable-object mini editor (templates/object-editor.html): a slim
    toolbar, not a site <nav>, wrapping the exact same visual editor engine
    as the Visual editor tab, just aimed at a blank canvas. */

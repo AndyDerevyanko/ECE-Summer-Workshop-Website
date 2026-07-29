@@ -1599,6 +1599,18 @@ function detachFromFlow(el, knownRect) {
   wrap.style.width = w + "px";
   wrap.style.height = h + "px";
   wrap.style.margin = mTop + " " + mRight + " " + mBottom + " " + mLeft;
+  /* an inline-block whose only child is position:absolute has no in-flow
+     content of its own, so its default baseline (vertical-align: baseline)
+     falls back to its OWN bottom margin edge instead of wherever the
+     original text's baseline actually was. That drags the whole box above
+     the line's baseline as pure ascent, inflating the line box (and the
+     containing block's height along with it, eg. the hero title <h1>),
+     which can shift unrelated siblings sharing that container (eg the
+     eyebrow text above it, recentered by the hero's own flex layout) even
+     though nothing about them changed. Aligning to the line's top instead
+     removes the wrap from that baseline calculation entirely, so detaching
+     one inline span can't inflate the shared line/container it sits in. */
+  if (naturalDisplay === "inline") wrap.style.verticalAlign = "top";
   el.parentNode.insertBefore(wrap, el);
   wrap.appendChild(el);
 

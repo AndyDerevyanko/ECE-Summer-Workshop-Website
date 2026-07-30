@@ -1544,7 +1544,11 @@ body.edit-mode .apply-bob { animation: none; }
 }
 .ctx-menu .sm-color,
 .ctx-menu .sm-textcolor,
-.ctx-menu .sm-fill {
+.ctx-menu .sm-fill,
+.ctx-menu .sm-color-dark,
+.ctx-menu .sm-textcolor-dark,
+.ctx-menu .sm-fill-dark,
+.ctx-menu .sm-border-color-dark {
   width: 32px;
   height: 26px;
   padding: 0;
@@ -1555,7 +1559,11 @@ body.edit-mode .apply-bob { animation: none; }
 }
 .ctx-menu .sm-color-reset,
 .ctx-menu .sm-textcolor-reset,
-.ctx-menu .sm-fill-reset {
+.ctx-menu .sm-fill-reset,
+.ctx-menu .sm-color-dark-reset,
+.ctx-menu .sm-textcolor-dark-reset,
+.ctx-menu .sm-fill-dark-reset,
+.ctx-menu .sm-border-dark-reset {
   width: 22px;
   height: 22px;
   border-radius: 6px;
@@ -1567,7 +1575,47 @@ body.edit-mode .apply-bob { animation: none; }
 }
 .ctx-menu .sm-color-reset:hover,
 .ctx-menu .sm-textcolor-reset:hover,
-.ctx-menu .sm-fill-reset:hover { background: var(--accent); color: #fff; }
+.ctx-menu .sm-fill-reset:hover,
+.ctx-menu .sm-color-dark-reset:hover,
+.ctx-menu .sm-textcolor-dark-reset:hover,
+.ctx-menu .sm-fill-dark-reset:hover,
+.ctx-menu .sm-border-dark-reset:hover { background: var(--accent); color: #fff; }
+
+/* "🌙" buttons that reveal each Color/Text color/Fill/Border row's own
+   dark-mode override sub-row (buildStyleMenu()'s wireDarkToggle()): a
+   small, muted toggle rather than a full labeled control, since most TAs
+   never need to touch it - the auto-computed variant (autoDarkVariant() in
+   js/main.js) already covers the common case on its own. */
+.ctx-menu .sm-dark-toggle {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0;
+}
+.ctx-menu .sm-dark-toggle:hover { background: var(--surface-2); color: var(--text); }
+/* a dark-mode override sub-row, directly under its own Color/Text color/
+   Fill/Border row, collapsed (display:none, toggled by wireDarkToggle())
+   until either a TA opens it or it already carries an explicit override
+   (see toggleStyleMenu()'s primeDarkRow()). Slightly indented and muted so
+   it reads as "belongs to the row above" rather than a peer control. */
+.ctx-menu .sm-dark-row {
+  padding-left: 12px;
+  margin-top: -4px;
+}
+.ctx-menu .sm-dark-row label {
+  font-size: 11px;
+  color: var(--muted);
+  width: 92px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
 .ctx-menu .sm-opacity { flex: 1; }
 .ctx-menu .sm-opacity-val {
   font-size: 12px;

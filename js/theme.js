@@ -23,6 +23,14 @@
       try { localStorage.setItem("theme", t); } catch (e) {} /* private mode */
     }
     updateIcon(t);
+    /* re-resolves every ta-set color/fill/text-color/border against the
+       theme that just became active (js/main.js's resolveThemedColor()):
+       without this, a TA-placed element's color would stay frozen at
+       whichever theme was active when the page loaded instead of flipping
+       live with everything else. window.-gated: a no-op page with no
+       tracked elements never loaded main.js's apply*Overrides() passes at
+       all, same guard reapplyThemedColors() plays with refreshThemeToggles. */
+    if (window.reapplyThemedColors) window.reapplyThemedColors();
   }
 
   /**

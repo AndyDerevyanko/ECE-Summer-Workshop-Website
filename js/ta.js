@@ -123,7 +123,15 @@ function seed() {
     shadow: [],
     /* right-click "Add link"/"Edit link" targets, keyed by data-edit-id/
        data-resize-id, a url string, see applyOneLink() in js/main.js */
-    links: {}
+    links: {},
+    /* dark-mode overrides for colors/text_color/fill/border above, same
+       keys, each optional - an unset id still gets an auto-computed dark
+       variant rather than keeping its literal light-mode color, see
+       resolveThemedColor() in js/main.js */
+    dark_colors: {},
+    dark_text_color: {},
+    dark_fill: {},
+    dark_border: {}
   };
 }
 
@@ -262,6 +270,10 @@ function normalizeState() {
   if (!STATE.border || typeof STATE.border !== "object") STATE.border = {};
   if (!Array.isArray(STATE.shadow)) STATE.shadow = [];
   if (!STATE.links || typeof STATE.links !== "object") STATE.links = {};
+  if (!STATE.dark_colors || typeof STATE.dark_colors !== "object") STATE.dark_colors = {};
+  if (!STATE.dark_text_color || typeof STATE.dark_text_color !== "object") STATE.dark_text_color = {};
+  if (!STATE.dark_fill || typeof STATE.dark_fill !== "object") STATE.dark_fill = {};
+  if (!STATE.dark_border || typeof STATE.dark_border !== "object") STATE.dark_border = {};
   /* footer contact line used to be its own field, edited from a dedicated
      input in this section; now it's click-to-edit like the rest of the
      landing page copy, so fold any already-saved value in once and stop

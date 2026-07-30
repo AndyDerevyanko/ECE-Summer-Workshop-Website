@@ -223,6 +223,17 @@ DEFAULT_CONTENT = {
     # by data-resize-id, raw <svg>/<img> markup. empty means "show the
     # default sun/moon swap", see applyThemeIconOverrides() in js/main.js.
     "theme_icons": {},
+    # dark-mode overrides for the four maps above (colors/text_color/fill/
+    # border), same keys, each optional: an id present here wins over the
+    # auto-computed dark variant (autoDarkVariant() in js/main.js flips the
+    # light color's hsl lightness) whenever [data-theme="dark"], see
+    # resolveThemedColor()/the style popover's "dark mode color" toggles in
+    # js/main.js. an id with no entry here still gets the auto variant, it's
+    # never left at its literal light-mode color in dark mode.
+    "dark_colors": {},
+    "dark_text_color": {},
+    "dark_fill": {},
+    "dark_border": {},
 }
 
 # starter "objects" library entries (see the objects table below): reusable

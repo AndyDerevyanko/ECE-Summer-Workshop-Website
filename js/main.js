@@ -2048,6 +2048,17 @@ function applyElementOpacity(el, value) {
   }
 }
 
+/* the light-mode maps most recently passed to applyColorOverrides()/
+   applyFillOverrides()/applyTextColorOverrides()/applyBorderOverrides(),
+   paired with their dark_* counterparts, kept around purely so
+   reapplyThemedColors() can redo the same resolveThemedColor() pass after a
+   theme flip without needing a fresh fetch - see js/theme.js's setTheme(),
+   which calls it right after updateIcon(). */
+var THEMED_OVERRIDE_MAPS = {
+  colors: {}, darkColors: {}, fill: {}, darkFill: {},
+  textColor: {}, darkTextColor: {}, border: {}, darkBorder: {}
+};
+
 /**
  * Applies saved color overrides (from the style popover, see
  * buildStyleMenu()) on top of the page's own default colors. Runs on every
@@ -2060,16 +2071,21 @@ function applyElementOpacity(el, value) {
  * back to "no color override") always has the real template default to
  * fall back to, see paintSurface().
  * @param colors content.colors, {id: css color string}
+ * @param darkColors content.dark_colors, {id: css color string}, the
+ *   explicit dark-mode override for whichever ids also have one here (see
+ *   resolveThemedColor())
  */
-function applyColorOverrides(colors) {
+function applyColorOverrides(colors, darkColors) {
   colors = colors || {};
+  THEMED_OVERRIDE_MAPS.colors = colors;
+  THEMED_OVERRIDE_MAPS.darkColors = darkColors || {};
   document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
     if (fadesOwnBackground(el) && el.dataset.baseColor === undefined) {
       el.dataset.baseColor = rgbToHex(getComputedStyle(el).backgroundColor) || "#000000";
     }
     var v = colors[elId(el)];
     if (!v || elKind(el) === "img") return;
-    setElementColor(el, v);
+    setElementColor(el, resolveThemedColor(v, THEMED_OVERRIDE_MAPS.darkColors[elId(el)]));
   });
 }
 
@@ -2095,13 +2111,17 @@ function applyOpacityOverrides(opacity) {
  * popover's Fill control) on top of the page's own default (no fill).
  * Runs on every load, live site included, same as applyColorOverrides().
  * @param fill content.fill, {id: css color string}
+ * @param darkFill content.dark_fill, {id: css color string}, see
+ *   resolveThemedColor()
  */
-function applyFillOverrides(fill) {
+function applyFillOverrides(fill, darkFill) {
   fill = fill || {};
+  THEMED_OVERRIDE_MAPS.fill = fill;
+  THEMED_OVERRIDE_MAPS.darkFill = darkFill || {};
   document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
     var v = fill[elId(el)];
     if (!v) return;
-    el.style.backgroundColor = v;
+    el.style.backgroundColor = resolveThemedColor(v, THEMED_OVERRIDE_MAPS.darkFill[elId(el)]);
   });
 }
 
@@ -2114,14 +2134,18 @@ function applyFillOverrides(fill) {
  * separate control for its label, since css has no single property that's
  * "whichever of background/text makes sense for this element".
  * @param colors content.text_color, {id: css color string}
+ * @param darkColors content.dark_text_color, {id: css color string}, see
+ *   resolveThemedColor()
  */
-function applyTextColorOverrides(colors) {
+function applyTextColorOverrides(colors, darkColors) {
   colors = colors || {};
+  THEMED_OVERRIDE_MAPS.textColor = colors;
+  THEMED_OVERRIDE_MAPS.darkTextColor = darkColors || {};
   document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
     if (!isButtonEl(el)) return;
     var v = colors[elId(el)];
     if (!v) return;
-    el.style.color = v;
+    el.style.color = resolveThemedColor(v, THEMED_OVERRIDE_MAPS.darkTextColor[elId(el)]);
   });
 }
 
@@ -2241,15 +2265,41 @@ function applyRadiusOverrides(radius) {
  * default (no border, see --border in css/style.css). Runs on every load,
  * live site included.
  * @param border content.border, {id: {w, color}}
+ * @param darkBorder content.dark_border, {id: {w, color}} - only its color
+ *   is ever used (see resolveThemedColor()), width isn't theme-dependent so
+ *   the light side's own w always wins
  */
-function applyBorderOverrides(border) {
+function applyBorderOverrides(border, darkBorder) {
   border = border || {};
+  THEMED_OVERRIDE_MAPS.border = border;
+  THEMED_OVERRIDE_MAPS.darkBorder = darkBorder || {};
   document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
     var v = border[elId(el)];
     if (!v || !v.w) return;
-    el.style.border = v.w + "px solid " + v.color;
+    var dv = THEMED_OVERRIDE_MAPS.darkBorder[elId(el)];
+    el.style.border = v.w + "px solid " + resolveThemedColor(v.color, dv && dv.color);
   });
 }
+
+/**
+ * Re-resolves every color/fill/text-color/border override already on the
+ * page against whichever theme just became active, from the same maps the
+ * last applyColorOverrides()/applyFillOverrides()/applyTextColorOverrides()/
+ * applyBorderOverrides() pass cached (THEMED_OVERRIDE_MAPS) - a plain re-run
+ * of those four rather than a full page reload, so a mid-session theme
+ * toggle repaints every TA-set color immediately. Exposed on window so
+ * js/theme.js's setTheme() can call it right after updateIcon() without a
+ * circular file dependency (main.js already loads before theme.js on every
+ * page, see templates/index.html's script order, but not guaranteed the
+ * other way).
+ */
+function reapplyThemedColors() {
+  applyColorOverrides(THEMED_OVERRIDE_MAPS.colors, THEMED_OVERRIDE_MAPS.darkColors);
+  applyFillOverrides(THEMED_OVERRIDE_MAPS.fill, THEMED_OVERRIDE_MAPS.darkFill);
+  applyTextColorOverrides(THEMED_OVERRIDE_MAPS.textColor, THEMED_OVERRIDE_MAPS.darkTextColor);
+  applyBorderOverrides(THEMED_OVERRIDE_MAPS.border, THEMED_OVERRIDE_MAPS.darkBorder);
+}
+window.reapplyThemedColors = reapplyThemedColors;
 
 /**
  * Applies the shared drop-shadow (see BOX_SHADOW_VALUE) to every id in the
@@ -2281,6 +2331,12 @@ var STYLE_TINT_BEFORE = "";
 var STYLE_SHADE_BEFORE = 0;
 var STYLE_RADIUS_BEFORE = "0";
 var STYLE_BORDER_BEFORE = { w: 0, color: "#000000" };
+/* same "value right before this popover session's edit" convention as
+   STYLE_COLOR_BEFORE etc. above, for each row's "dark mode color" sub-row */
+var STYLE_DARKCOLOR_BEFORE = "";
+var STYLE_DARKTEXTCOLOR_BEFORE = "";
+var STYLE_DARKFILL_BEFORE = "";
+var STYLE_DARKBORDER_BEFORE = "";
 /* a datetime element's {target, format, strftime} right before the current
    popover-session edit, so format/pattern/target changes push one undo
    step each against the value they started from (see buildStyleMenu()) */
@@ -2300,11 +2356,23 @@ function buildStyleMenu() {
       '<label class="sm-color-label">Color</label>' +
       '<input type="color" class="sm-color">' +
       '<button type="button" class="sm-color-reset" title="Reset to default">×</button>' +
+      '<button type="button" class="sm-dark-toggle sm-color-dark-toggle" title="Set a different color for dark mode">🌙</button>' +
+    '</div>' +
+    '<div class="sm-row sm-dark-row sm-color-dark-row">' +
+      '<label>Dark mode color</label>' +
+      '<input type="color" class="sm-color-dark">' +
+      '<button type="button" class="sm-color-dark-reset" title="Reset to auto">×</button>' +
     '</div>' +
     '<div class="sm-row sm-textcolor-row">' +
       '<label>Text color</label>' +
       '<input type="color" class="sm-textcolor">' +
       '<button type="button" class="sm-textcolor-reset" title="Reset to default">×</button>' +
+      '<button type="button" class="sm-dark-toggle sm-textcolor-dark-toggle" title="Set a different text color for dark mode">🌙</button>' +
+    '</div>' +
+    '<div class="sm-row sm-dark-row sm-textcolor-dark-row">' +
+      '<label>Dark mode text color</label>' +
+      '<input type="color" class="sm-textcolor-dark">' +
+      '<button type="button" class="sm-textcolor-dark-reset" title="Reset to auto">×</button>' +
     '</div>' +
     '<div class="sm-row sm-theme-row">' +
       '<label>Icon</label>' +
@@ -2314,6 +2382,12 @@ function buildStyleMenu() {
       '<label>Fill</label>' +
       '<input type="color" class="sm-fill">' +
       '<button type="button" class="sm-fill-reset" title="Reset to default">×</button>' +
+      '<button type="button" class="sm-dark-toggle sm-fill-dark-toggle" title="Set a different fill for dark mode">🌙</button>' +
+    '</div>' +
+    '<div class="sm-row sm-dark-row sm-fill-dark-row">' +
+      '<label>Dark mode fill</label>' +
+      '<input type="color" class="sm-fill-dark">' +
+      '<button type="button" class="sm-fill-dark-reset" title="Reset to auto">×</button>' +
     '</div>' +
     '<div class="sm-row sm-tint-row">' +
       '<label>Tint</label>' +
@@ -2335,6 +2409,12 @@ function buildStyleMenu() {
       '<input type="range" class="sm-border-w" min="0" max="10" step="1">' +
       '<span class="sm-border-val">0px</span>' +
       '<input type="color" class="sm-border-color">' +
+      '<button type="button" class="sm-dark-toggle sm-border-dark-toggle" title="Set a different border color for dark mode">🌙</button>' +
+    '</div>' +
+    '<div class="sm-row sm-dark-row sm-shape-row sm-border-dark-row">' +
+      '<label>Dark mode border</label>' +
+      '<input type="color" class="sm-border-color-dark">' +
+      '<button type="button" class="sm-border-dark-reset" title="Reset to auto">×</button>' +
     '</div>' +
     '<div class="sm-row sm-shape-row sm-shadow-row">' +
       '<label>Shadow</label>' +
@@ -2383,10 +2463,19 @@ function buildStyleMenu() {
 
   var colorInput = STYLE_MENU.querySelector(".sm-color");
   var colorReset = STYLE_MENU.querySelector(".sm-color-reset");
+  var colorDarkToggle = STYLE_MENU.querySelector(".sm-color-dark-toggle");
+  var colorDarkInput = STYLE_MENU.querySelector(".sm-color-dark");
+  var colorDarkReset = STYLE_MENU.querySelector(".sm-color-dark-reset");
   var textColorInput = STYLE_MENU.querySelector(".sm-textcolor");
   var textColorReset = STYLE_MENU.querySelector(".sm-textcolor-reset");
+  var textColorDarkToggle = STYLE_MENU.querySelector(".sm-textcolor-dark-toggle");
+  var textColorDarkInput = STYLE_MENU.querySelector(".sm-textcolor-dark");
+  var textColorDarkReset = STYLE_MENU.querySelector(".sm-textcolor-dark-reset");
   var fillInput = STYLE_MENU.querySelector(".sm-fill");
   var fillReset = STYLE_MENU.querySelector(".sm-fill-reset");
+  var fillDarkToggle = STYLE_MENU.querySelector(".sm-fill-dark-toggle");
+  var fillDarkInput = STYLE_MENU.querySelector(".sm-fill-dark");
+  var fillDarkReset = STYLE_MENU.querySelector(".sm-fill-dark-reset");
   var tintInput = STYLE_MENU.querySelector(".sm-tint");
   var tintReset = STYLE_MENU.querySelector(".sm-tint-reset");
   var shadeInput = STYLE_MENU.querySelector(".sm-shade");
@@ -2396,6 +2485,9 @@ function buildStyleMenu() {
   var borderW = STYLE_MENU.querySelector(".sm-border-w");
   var borderVal = STYLE_MENU.querySelector(".sm-border-val");
   var borderColor = STYLE_MENU.querySelector(".sm-border-color");
+  var borderDarkToggle = STYLE_MENU.querySelector(".sm-border-dark-toggle");
+  var borderColorDark = STYLE_MENU.querySelector(".sm-border-color-dark");
+  var borderDarkReset = STYLE_MENU.querySelector(".sm-border-dark-reset");
   var shadowInput = STYLE_MENU.querySelector(".sm-shadow");
   var opacityInput = STYLE_MENU.querySelector(".sm-opacity");
   var opacityVal = STYLE_MENU.querySelector(".sm-opacity-val");
@@ -2406,9 +2498,33 @@ function buildStyleMenu() {
 
   var themeIconBtn = STYLE_MENU.querySelector(".sm-theme-icon-btn");
 
-  [colorInput, colorReset, textColorInput, textColorReset, fillInput, fillReset, tintInput, tintReset, shadeInput, radiusInput, borderW, borderColor, shadowInput, opacityInput, dtFont, dtFormat, dtPattern, dtTarget, themeIconBtn].forEach(function (el) {
+  [colorInput, colorReset, colorDarkToggle, colorDarkInput, colorDarkReset,
+   textColorInput, textColorReset, textColorDarkToggle, textColorDarkInput, textColorDarkReset,
+   fillInput, fillReset, fillDarkToggle, fillDarkInput, fillDarkReset,
+   tintInput, tintReset, shadeInput, radiusInput, borderW, borderColor,
+   borderDarkToggle, borderColorDark, borderDarkReset,
+   shadowInput, opacityInput, dtFont, dtFormat, dtPattern, dtTarget, themeIconBtn].forEach(function (el) {
     el.addEventListener("mousedown", function (e) { e.stopPropagation(); });
   });
+
+  /**
+   * Wires one Color/Text color/Fill/Border row's "🌙" toggle: click shows
+   * (or hides) its dark-mode sub-row, same "click again to collapse" idea
+   * as toggleStyleMenu() itself. Purely a visibility toggle - the dark
+   * value underneath is set/cleared by its own input/reset, wired
+   * separately below.
+   * @param toggleBtn the row's "🌙" button
+   * @param darkRow the "sm-dark-row" div it shows/hides
+   */
+  function wireDarkToggle(toggleBtn, darkRow) {
+    toggleBtn.addEventListener("click", function () {
+      darkRow.style.display = darkRow.style.display === "none" ? "" : "none";
+    });
+  }
+  wireDarkToggle(colorDarkToggle, STYLE_MENU.querySelector(".sm-color-dark-row"));
+  wireDarkToggle(textColorDarkToggle, STYLE_MENU.querySelector(".sm-textcolor-dark-row"));
+  wireDarkToggle(fillDarkToggle, STYLE_MENU.querySelector(".sm-fill-dark-row"));
+  wireDarkToggle(borderDarkToggle, STYLE_MENU.querySelector(".sm-border-dark-row"));
   STYLE_MENU.querySelectorAll(".sm-dt-fs-dn, .sm-dt-fs-up, .sm-dt-align").forEach(function (btn) {
     btn.addEventListener("mousedown", function (e) { e.stopPropagation(); });
   });
@@ -2424,7 +2540,8 @@ function buildStyleMenu() {
     if (!STYLE_MENU_ID) return;
     var el = styleMenuEl();
     if (!el) return;
-    setElementColor(el, colorInput.value);
+    THEMED_OVERRIDE_MAPS.colors[STYLE_MENU_ID] = colorInput.value;
+    setElementColor(el, resolveThemedColor(colorInput.value, THEMED_OVERRIDE_MAPS.darkColors[STYLE_MENU_ID]));
     saveEditedColor(STYLE_MENU_ID, colorInput.value);
   });
   colorInput.addEventListener("change", function () {
@@ -2442,6 +2559,7 @@ function buildStyleMenu() {
     var el = styleMenuEl();
     if (!el) return;
     var before = STYLE_COLOR_BEFORE;
+    THEMED_OVERRIDE_MAPS.colors[STYLE_MENU_ID] = "";
     setElementColor(el, "");
     saveEditedColor(STYLE_MENU_ID, "");
     var after = currentColorValue(el);
@@ -2453,11 +2571,46 @@ function buildStyleMenu() {
     STYLE_COLOR_BEFORE = "";
   });
 
+  colorDarkInput.addEventListener("input", function () {
+    if (!STYLE_MENU_ID) return;
+    var el = styleMenuEl();
+    if (!el) return;
+    THEMED_OVERRIDE_MAPS.darkColors[STYLE_MENU_ID] = colorDarkInput.value;
+    setElementColor(el, resolveThemedColor(colorInput.value, colorDarkInput.value));
+    saveEditedDarkColor(STYLE_MENU_ID, colorDarkInput.value);
+  });
+  colorDarkInput.addEventListener("change", function () {
+    if (!STYLE_MENU_ID) return;
+    var after = colorDarkInput.value;
+    if (after !== STYLE_DARKCOLOR_BEFORE) {
+      EDIT_UNDO.push({ type: "darkcolor", id: STYLE_MENU_ID, before: STYLE_DARKCOLOR_BEFORE, after: after });
+      EDIT_REDO.length = 0;
+    }
+    STYLE_DARKCOLOR_BEFORE = after;
+  });
+  colorDarkReset.addEventListener("click", function () {
+    if (!STYLE_MENU_ID) return;
+    var el = styleMenuEl();
+    if (!el) return;
+    var before = STYLE_DARKCOLOR_BEFORE;
+    THEMED_OVERRIDE_MAPS.darkColors[STYLE_MENU_ID] = "";
+    saveEditedDarkColor(STYLE_MENU_ID, "");
+    setElementColor(el, resolveThemedColor(colorInput.value, ""));
+    var after = autoDarkVariant(colorInput.value);
+    colorDarkInput.value = after;
+    if (before !== "") {
+      EDIT_UNDO.push({ type: "darkcolor", id: STYLE_MENU_ID, before: before, after: "" });
+      EDIT_REDO.length = 0;
+    }
+    STYLE_DARKCOLOR_BEFORE = "";
+  });
+
   textColorInput.addEventListener("input", function () {
     if (!STYLE_MENU_ID) return;
     var el = styleMenuEl();
     if (!el) return;
-    el.style.color = textColorInput.value;
+    THEMED_OVERRIDE_MAPS.textColor[STYLE_MENU_ID] = textColorInput.value;
+    el.style.color = resolveThemedColor(textColorInput.value, THEMED_OVERRIDE_MAPS.darkTextColor[STYLE_MENU_ID]);
     saveEditedTextColor(STYLE_MENU_ID, textColorInput.value);
   });
   textColorInput.addEventListener("change", function () {
@@ -2475,6 +2628,7 @@ function buildStyleMenu() {
     var el = styleMenuEl();
     if (!el) return;
     var before = STYLE_TEXTCOLOR_BEFORE;
+    THEMED_OVERRIDE_MAPS.textColor[STYLE_MENU_ID] = "";
     el.style.color = "";
     saveEditedTextColor(STYLE_MENU_ID, "");
     var after = currentTextColorValue(el);
@@ -2486,11 +2640,46 @@ function buildStyleMenu() {
     STYLE_TEXTCOLOR_BEFORE = "";
   });
 
+  textColorDarkInput.addEventListener("input", function () {
+    if (!STYLE_MENU_ID) return;
+    var el = styleMenuEl();
+    if (!el) return;
+    THEMED_OVERRIDE_MAPS.darkTextColor[STYLE_MENU_ID] = textColorDarkInput.value;
+    el.style.color = resolveThemedColor(textColorInput.value, textColorDarkInput.value);
+    saveEditedDarkTextColor(STYLE_MENU_ID, textColorDarkInput.value);
+  });
+  textColorDarkInput.addEventListener("change", function () {
+    if (!STYLE_MENU_ID) return;
+    var after = textColorDarkInput.value;
+    if (after !== STYLE_DARKTEXTCOLOR_BEFORE) {
+      EDIT_UNDO.push({ type: "darktextcolor", id: STYLE_MENU_ID, before: STYLE_DARKTEXTCOLOR_BEFORE, after: after });
+      EDIT_REDO.length = 0;
+    }
+    STYLE_DARKTEXTCOLOR_BEFORE = after;
+  });
+  textColorDarkReset.addEventListener("click", function () {
+    if (!STYLE_MENU_ID) return;
+    var el = styleMenuEl();
+    if (!el) return;
+    var before = STYLE_DARKTEXTCOLOR_BEFORE;
+    THEMED_OVERRIDE_MAPS.darkTextColor[STYLE_MENU_ID] = "";
+    saveEditedDarkTextColor(STYLE_MENU_ID, "");
+    el.style.color = resolveThemedColor(textColorInput.value, "");
+    var after = autoDarkVariant(textColorInput.value);
+    textColorDarkInput.value = after;
+    if (before !== "") {
+      EDIT_UNDO.push({ type: "darktextcolor", id: STYLE_MENU_ID, before: before, after: "" });
+      EDIT_REDO.length = 0;
+    }
+    STYLE_DARKTEXTCOLOR_BEFORE = "";
+  });
+
   fillInput.addEventListener("input", function () {
     if (!STYLE_MENU_ID) return;
     var el = styleMenuEl();
     if (!el) return;
-    el.style.backgroundColor = fillInput.value;
+    THEMED_OVERRIDE_MAPS.fill[STYLE_MENU_ID] = fillInput.value;
+    el.style.backgroundColor = resolveThemedColor(fillInput.value, THEMED_OVERRIDE_MAPS.darkFill[STYLE_MENU_ID]);
     saveEditedFill(STYLE_MENU_ID, fillInput.value);
   });
   fillInput.addEventListener("change", function () {
@@ -2508,6 +2697,7 @@ function buildStyleMenu() {
     var el = styleMenuEl();
     if (!el) return;
     var before = STYLE_FILL_BEFORE;
+    THEMED_OVERRIDE_MAPS.fill[STYLE_MENU_ID] = "";
     el.style.backgroundColor = "";
     saveEditedFill(STYLE_MENU_ID, "");
     var after = currentFillValue(el);
@@ -2517,6 +2707,40 @@ function buildStyleMenu() {
       EDIT_REDO.length = 0;
     }
     STYLE_FILL_BEFORE = "";
+  });
+
+  fillDarkInput.addEventListener("input", function () {
+    if (!STYLE_MENU_ID) return;
+    var el = styleMenuEl();
+    if (!el) return;
+    THEMED_OVERRIDE_MAPS.darkFill[STYLE_MENU_ID] = fillDarkInput.value;
+    el.style.backgroundColor = resolveThemedColor(fillInput.value, fillDarkInput.value);
+    saveEditedDarkFill(STYLE_MENU_ID, fillDarkInput.value);
+  });
+  fillDarkInput.addEventListener("change", function () {
+    if (!STYLE_MENU_ID) return;
+    var after = fillDarkInput.value;
+    if (after !== STYLE_DARKFILL_BEFORE) {
+      EDIT_UNDO.push({ type: "darkfill", id: STYLE_MENU_ID, before: STYLE_DARKFILL_BEFORE, after: after });
+      EDIT_REDO.length = 0;
+    }
+    STYLE_DARKFILL_BEFORE = after;
+  });
+  fillDarkReset.addEventListener("click", function () {
+    if (!STYLE_MENU_ID) return;
+    var el = styleMenuEl();
+    if (!el) return;
+    var before = STYLE_DARKFILL_BEFORE;
+    THEMED_OVERRIDE_MAPS.darkFill[STYLE_MENU_ID] = "";
+    saveEditedDarkFill(STYLE_MENU_ID, "");
+    el.style.backgroundColor = resolveThemedColor(fillInput.value, "");
+    var after = autoDarkVariant(fillInput.value);
+    fillDarkInput.value = after;
+    if (before !== "") {
+      EDIT_UNDO.push({ type: "darkfill", id: STYLE_MENU_ID, before: before, after: "" });
+      EDIT_REDO.length = 0;
+    }
+    STYLE_DARKFILL_BEFORE = "";
   });
 
   tintInput.addEventListener("input", function () {
@@ -2594,8 +2818,13 @@ function buildStyleMenu() {
     var el = styleMenuEl();
     if (!el) return;
     var w = parseInt(borderW.value, 10);
-    if (w > 0) el.style.border = w + "px solid " + borderColor.value;
-    else el.style.border = "none";
+    THEMED_OVERRIDE_MAPS.border[STYLE_MENU_ID] = { w: w, color: borderColor.value };
+    if (w > 0) {
+      var dv = THEMED_OVERRIDE_MAPS.darkBorder[STYLE_MENU_ID];
+      el.style.border = w + "px solid " + resolveThemedColor(borderColor.value, dv && dv.color);
+    } else {
+      el.style.border = "none";
+    }
     borderVal.textContent = w + "px";
     saveEditedBorder(STYLE_MENU_ID, w, borderColor.value);
   }
@@ -2618,6 +2847,42 @@ function buildStyleMenu() {
       EDIT_REDO.length = 0;
     }
     STYLE_BORDER_BEFORE = after;
+  });
+
+  borderColorDark.addEventListener("input", function () {
+    if (!STYLE_MENU_ID) return;
+    var el = styleMenuEl();
+    if (!el) return;
+    THEMED_OVERRIDE_MAPS.darkBorder[STYLE_MENU_ID] = { color: borderColorDark.value };
+    var w = parseInt(borderW.value, 10);
+    if (w > 0) el.style.border = w + "px solid " + resolveThemedColor(borderColor.value, borderColorDark.value);
+    saveEditedDarkBorder(STYLE_MENU_ID, borderColorDark.value);
+  });
+  borderColorDark.addEventListener("change", function () {
+    if (!STYLE_MENU_ID) return;
+    var after = borderColorDark.value;
+    if (after !== STYLE_DARKBORDER_BEFORE) {
+      EDIT_UNDO.push({ type: "darkborder", id: STYLE_MENU_ID, before: STYLE_DARKBORDER_BEFORE, after: after });
+      EDIT_REDO.length = 0;
+    }
+    STYLE_DARKBORDER_BEFORE = after;
+  });
+  borderDarkReset.addEventListener("click", function () {
+    if (!STYLE_MENU_ID) return;
+    var el = styleMenuEl();
+    if (!el) return;
+    var before = STYLE_DARKBORDER_BEFORE;
+    THEMED_OVERRIDE_MAPS.darkBorder[STYLE_MENU_ID] = { color: "" };
+    saveEditedDarkBorder(STYLE_MENU_ID, "");
+    var w = parseInt(borderW.value, 10);
+    if (w > 0) el.style.border = w + "px solid " + resolveThemedColor(borderColor.value, "");
+    var after = autoDarkVariant(borderColor.value);
+    borderColorDark.value = after;
+    if (before !== "") {
+      EDIT_UNDO.push({ type: "darkborder", id: STYLE_MENU_ID, before: before, after: "" });
+      EDIT_REDO.length = 0;
+    }
+    STYLE_DARKBORDER_BEFORE = "";
   });
 
   shadowInput.addEventListener("change", function () {
@@ -2801,6 +3066,91 @@ function rgbToHex(rgb) {
 }
 
 /**
+ * Converts a "#rrggbb" hex string to {h, s, l} (h 0-360, s/l 0-100), the
+ * intermediate autoDarkVariant() flips lightness in rather than plain rgb
+ * (flipping rgb channels directly would shift hue/saturation too, eg a TA's
+ * navy blue would come back a washed-out tan instead of a lighter blue).
+ * @param hex a "#rrggbb" string
+ * @return {h, s, l}, or null if unparseable
+ */
+function hexToHsl(hex) {
+  var m = /^#?([0-9a-f]{6})$/i.exec(hex || "");
+  if (!m) return null;
+  var r = parseInt(m[1].slice(0, 2), 16) / 255;
+  var g = parseInt(m[1].slice(2, 4), 16) / 255;
+  var b = parseInt(m[1].slice(4, 6), 16) / 255;
+  var max = Math.max(r, g, b), min = Math.min(r, g, b);
+  var h = 0, s = 0, l = (max + min) / 2;
+  var d = max - min;
+  if (d !== 0) {
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+      case g: h = (b - r) / d + 2; break;
+      default: h = (r - g) / d + 4;
+    }
+    h *= 60;
+  }
+  return { h: h, s: s * 100, l: l * 100 };
+}
+
+/**
+ * Converts {h, s, l} (see hexToHsl()) back to a "#rrggbb" hex string.
+ * @param h 0-360, s/l 0-100
+ * @return a "#rrggbb" string
+ */
+function hslToHex(h, s, l) {
+  s /= 100; l /= 100;
+  function f(n) {
+    var k = (n + h / 30) % 12;
+    var a = s * Math.min(l, 1 - l);
+    var c = l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    return Math.round(c * 255);
+  }
+  function hex(n) { return ("0" + n.toString(16)).slice(-2); }
+  return "#" + hex(f(0)) + hex(f(8)) + hex(f(4));
+}
+
+/**
+ * Auto-computes a dark-mode variant of a TA-picked light-mode color: same
+ * hue/saturation, lightness flipped around the midpoint (l' = 100 - l), the
+ * same trick this site's own --text/--bg/--surface css variables already
+ * amount to between their [data-theme="light"] and (default) dark palettes.
+ * A near-black color a ta picked for a light background becomes near-white
+ * for the dark one, same hue, so it never goes invisible in the theme it
+ * wasn't designed against. Used as the fallback whenever a TA hasn't picked
+ * an explicit dark-mode override (see resolveThemedColor()).
+ * @param hex a "#rrggbb" string (or any css color the browser normalized to
+ *   one via getComputedStyle - callers here always pass one of those)
+ * @return a "#rrggbb" string, or the input unchanged if unparseable (eg a
+ *   css var()/color-mix() string that never went through getComputedStyle)
+ */
+function autoDarkVariant(hex) {
+  var c = hexToHsl(hex);
+  if (!c) return hex;
+  return hslToHex(c.h, c.s, 100 - c.l);
+}
+
+/**
+ * Resolves which of a color-bearing override's two saved values actually
+ * applies right now: the light-mode value as-is outside dark mode, or (in
+ * dark mode) the TA's explicit dark-mode override if they set one, else the
+ * light value's auto-computed variant (autoDarkVariant()) - never the
+ * literal light-mode color unmodified, which is the whole bug this exists
+ * to fix (a TA-placed element's color used to be identical in both themes).
+ * @param base the saved light-mode value ("" / undefined means no override
+ *   at all, callers already skip that case before reaching here)
+ * @param darkOverride the saved dark-mode override, "" / undefined if none
+ * @return the css color string to actually paint
+ */
+function resolveThemedColor(base, darkOverride) {
+  if (!base) return base;
+  var isDark = document.documentElement.getAttribute("data-theme") !== "light";
+  if (!isDark) return base;
+  return darkOverride || autoDarkVariant(base);
+}
+
+/**
  * Reads an element's current background fill (a textbox's own surface
  * color, separate from its font color, see colorTarget()) as a hex string,
  * "#ffffff" if it's transparent/unset (an <input type=color> has no real
@@ -2921,15 +3271,18 @@ function toggleStyleMenu(anchorEl) {
   var isBtn = isButtonEl(el);
   var isThemeToggle = el.hasAttribute("data-theme-toggle");
   STYLE_MENU.querySelector(".sm-color-row").style.display = isImg ? "none" : "";
+  STYLE_MENU.querySelector(".sm-color-dark-row").style.display = isImg ? "none" : "";
   /* for every other bg-target element "Color" is the only surface control
      there is, but a button also gets its own separate Text color row right
      below, so it's worth spelling out which one this now is */
   STYLE_MENU.querySelector(".sm-color-label").textContent = isBtn ? "Background" : "Color";
   STYLE_MENU.querySelector(".sm-textcolor-row").style.display = isBtn ? "" : "none";
+  STYLE_MENU.querySelector(".sm-textcolor-dark-row").style.display = isBtn ? "" : "none";
   STYLE_MENU.querySelector(".sm-theme-row").style.display = isThemeToggle ? "" : "none";
   /* a datetime element paints its own text color via the Color row, so its
      Fill row (a text field's background) would just be clutter; hide it */
   STYLE_MENU.querySelector(".sm-fill-row").style.display = (isText && !isDatetime) ? "" : "none";
+  STYLE_MENU.querySelector(".sm-fill-dark-row").style.display = (isText && !isDatetime) ? "" : "none";
   STYLE_MENU.querySelector(".sm-tint-row").style.display = isImg ? "" : "none";
   STYLE_MENU.querySelector(".sm-shade-row").style.display = isImg ? "" : "none";
   /* rounding/border/shadow on the bare digits text make no more sense than
@@ -2939,8 +3292,11 @@ function toggleStyleMenu(anchorEl) {
   STYLE_MENU.querySelectorAll(".sm-dt-row").forEach(function (row) { row.style.display = isDatetime ? "" : "none"; });
 
   var colorInput = STYLE_MENU.querySelector(".sm-color");
+  var colorDarkInput = STYLE_MENU.querySelector(".sm-color-dark");
   var textColorInput = STYLE_MENU.querySelector(".sm-textcolor");
+  var textColorDarkInput = STYLE_MENU.querySelector(".sm-textcolor-dark");
   var fillInput = STYLE_MENU.querySelector(".sm-fill");
+  var fillDarkInput = STYLE_MENU.querySelector(".sm-fill-dark");
   var tintInput = STYLE_MENU.querySelector(".sm-tint");
   var shadeInput = STYLE_MENU.querySelector(".sm-shade");
   var shadeVal = STYLE_MENU.querySelector(".sm-shade-val");
@@ -2949,21 +3305,47 @@ function toggleStyleMenu(anchorEl) {
   var borderW = STYLE_MENU.querySelector(".sm-border-w");
   var borderVal = STYLE_MENU.querySelector(".sm-border-val");
   var borderColor = STYLE_MENU.querySelector(".sm-border-color");
+  var borderColorDark = STYLE_MENU.querySelector(".sm-border-color-dark");
   var shadowInput = STYLE_MENU.querySelector(".sm-shadow");
   var opacityInput = STYLE_MENU.querySelector(".sm-opacity");
   var opacityVal = STYLE_MENU.querySelector(".sm-opacity-val");
 
+  /**
+   * Pre-fills one row's "dark mode color" sub-input and auto-expands (or
+   * collapses) it: open showing the TA's own explicit override if they set
+   * one, else the auto-computed variant of the light value, collapsed - a
+   * TA who never touches it should never even notice it's there.
+   * @param darkInput the sub-row's <input type=color>
+   * @param darkRow the sub-row's own "sm-dark-row" div
+   * @param darkMap THEMED_OVERRIDE_MAPS.dark* for this row
+   * @param baseValue the row's own current light-mode value
+   */
+  function primeDarkRow(darkInput, darkRow, darkMap, baseValue) {
+    var explicit = darkMap[STYLE_MENU_ID];
+    darkInput.value = explicit || autoDarkVariant(baseValue);
+    if (darkRow.style.display !== "none") darkRow.style.display = explicit ? "" : "none";
+  }
+
   colorInput.value = currentColorValue(el);
   STYLE_COLOR_BEFORE = colorInput.value;
+  THEMED_OVERRIDE_MAPS.colors[STYLE_MENU_ID] = colorInput.value;
+  primeDarkRow(colorDarkInput, STYLE_MENU.querySelector(".sm-color-dark-row"), THEMED_OVERRIDE_MAPS.darkColors, colorInput.value);
+  STYLE_DARKCOLOR_BEFORE = THEMED_OVERRIDE_MAPS.darkColors[STYLE_MENU_ID] || "";
 
   if (isText) {
     fillInput.value = currentFillValue(el);
     STYLE_FILL_BEFORE = fillInput.value;
+    THEMED_OVERRIDE_MAPS.fill[STYLE_MENU_ID] = fillInput.value;
+    primeDarkRow(fillDarkInput, STYLE_MENU.querySelector(".sm-fill-dark-row"), THEMED_OVERRIDE_MAPS.darkFill, fillInput.value);
+    STYLE_DARKFILL_BEFORE = THEMED_OVERRIDE_MAPS.darkFill[STYLE_MENU_ID] || "";
   }
 
   if (isBtn) {
     textColorInput.value = currentTextColorValue(el);
     STYLE_TEXTCOLOR_BEFORE = textColorInput.value;
+    THEMED_OVERRIDE_MAPS.textColor[STYLE_MENU_ID] = textColorInput.value;
+    primeDarkRow(textColorDarkInput, STYLE_MENU.querySelector(".sm-textcolor-dark-row"), THEMED_OVERRIDE_MAPS.darkTextColor, textColorInput.value);
+    STYLE_DARKTEXTCOLOR_BEFORE = THEMED_OVERRIDE_MAPS.darkTextColor[STYLE_MENU_ID] || "";
   }
 
   if (isImg) {
@@ -3000,6 +3382,13 @@ function toggleStyleMenu(anchorEl) {
     borderVal.textContent = bd.w + "px";
     borderColor.value = bd.color;
     STYLE_BORDER_BEFORE = bd;
+    THEMED_OVERRIDE_MAPS.border[STYLE_MENU_ID] = bd;
+    var darkBd = THEMED_OVERRIDE_MAPS.darkBorder[STYLE_MENU_ID];
+    var darkBdColor = darkBd && darkBd.color;
+    borderColorDark.value = darkBdColor || autoDarkVariant(bd.color);
+    STYLE_MENU.querySelector(".sm-border-dark-row").style.display =
+      (shapeDisplay !== "none" && darkBdColor) ? "" : "none";
+    STYLE_DARKBORDER_BEFORE = darkBdColor || "";
 
     shadowInput.checked = currentShadowOn(el);
   }
@@ -4038,7 +4427,7 @@ function copyDuplicateOverrides(pairs) {
   try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   var snap;
   try { snap = raw ? JSON.parse(raw) : {}; } catch (e) { snap = {}; }
-  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "shade", "radius", "border", "links", "text_color", "theme_icons"];
+  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "shade", "radius", "border", "links", "text_color", "theme_icons", "dark_colors", "dark_text_color", "dark_fill", "dark_border"];
   pairs.forEach(function (p) {
     plainMaps.forEach(function (m) {
       if (snap[m] && snap[m][p.old] !== undefined) {
@@ -4328,7 +4717,7 @@ function placeObject(objData, x, y) {
   });
   snap.custom_elements = (snap.custom_elements || []).concat(newParts);
 
-  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "shade", "radius", "border", "links", "text_color", "theme_icons"];
+  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "shade", "radius", "border", "links", "text_color", "theme_icons", "dark_colors", "dark_text_color", "dark_fill", "dark_border"];
   plainMaps.forEach(function (m) {
     if (!objData[m]) return;
     snap[m] = snap[m] || {};
@@ -4404,13 +4793,13 @@ function placeObject(objData, x, y) {
   applyFontSizeOverrides(snap.font_sizes);
   applyTextStyleOverrides(snap.text_styles);
   applyPositionOverrides(snap.positions);
-  applyColorOverrides(snap.colors);
-  applyFillOverrides(snap.fill);
-  applyTextColorOverrides(snap.text_color);
+  applyColorOverrides(snap.colors, snap.dark_colors);
+  applyFillOverrides(snap.fill, snap.dark_fill);
+  applyTextColorOverrides(snap.text_color, snap.dark_text_color);
   applyTintOverrides(snap.tint);
   applyShadeOverrides(snap.shade);
   applyRadiusOverrides(snap.radius);
-  applyBorderOverrides(snap.border);
+  applyBorderOverrides(snap.border, snap.dark_border);
   applyShadowOverrides(snap.shadow);
   applyOpacityOverrides(snap.opacity);
   setLockedElements(snap.locked);
@@ -5833,6 +6222,11 @@ function redoEdit() {
  *  - "datetime": {target, format, strftime} (a placed datetime custom
  *    element's edited target/display format/pattern, see buildStyleMenu()'s
  *    commitDatetimeUndo())
+ *  - "darkcolor"/"darktextcolor"/"darkfill": the style popover's "dark mode
+ *    color" sub-row for Color/Text color/Fill, a css color string or "" for
+ *    the auto-computed variant (see resolveThemedColor()/autoDarkVariant())
+ *  - "darkborder": same idea, a css color string or "" (only the color
+ *    half of the Border row is theme-dependent, see applyBorderOverrides())
  * @param action the stack entry
  * @param side "before" or "after", which side of the action to restore
  */
@@ -5950,11 +6344,25 @@ function applyHistoryAction(action, side) {
   if (action.type === "color") {
     var colorEl = styleMenuElById(action.id);
     if (!colorEl) return;
-    setElementColor(colorEl, val || "");
+    THEMED_OVERRIDE_MAPS.colors[action.id] = val || "";
+    setElementColor(colorEl, resolveThemedColor(val || "", THEMED_OVERRIDE_MAPS.darkColors[action.id]));
     saveEditedColor(action.id, val || "");
     if (STYLE_MENU_ID === action.id) {
       STYLE_MENU.querySelector(".sm-color").value = currentColorValue(colorEl);
       STYLE_COLOR_BEFORE = val || "";
+    }
+    return;
+  }
+  if (action.type === "darkcolor") {
+    var darkColorEl = styleMenuElById(action.id);
+    if (!darkColorEl) return;
+    THEMED_OVERRIDE_MAPS.darkColors[action.id] = val || "";
+    saveEditedDarkColor(action.id, val || "");
+    var darkColorBase = THEMED_OVERRIDE_MAPS.colors[action.id] || currentColorValue(darkColorEl);
+    setElementColor(darkColorEl, resolveThemedColor(darkColorBase, val || ""));
+    if (STYLE_MENU_ID === action.id) {
+      STYLE_MENU.querySelector(".sm-color-dark").value = val || autoDarkVariant(darkColorBase);
+      STYLE_DARKCOLOR_BEFORE = val || "";
     }
     return;
   }
@@ -5970,7 +6378,8 @@ function applyHistoryAction(action, side) {
   if (action.type === "fill") {
     var fillEl = styleMenuElById(action.id);
     if (!fillEl) return;
-    fillEl.style.backgroundColor = val || "";
+    THEMED_OVERRIDE_MAPS.fill[action.id] = val || "";
+    fillEl.style.backgroundColor = resolveThemedColor(val || "", THEMED_OVERRIDE_MAPS.darkFill[action.id]);
     saveEditedFill(action.id, val || "");
     if (STYLE_MENU_ID === action.id) {
       STYLE_MENU.querySelector(".sm-fill").value = currentFillValue(fillEl);
@@ -5978,14 +6387,41 @@ function applyHistoryAction(action, side) {
     }
     return;
   }
+  if (action.type === "darkfill") {
+    var darkFillEl = styleMenuElById(action.id);
+    if (!darkFillEl) return;
+    THEMED_OVERRIDE_MAPS.darkFill[action.id] = val || "";
+    saveEditedDarkFill(action.id, val || "");
+    var darkFillBase = THEMED_OVERRIDE_MAPS.fill[action.id] || currentFillValue(darkFillEl);
+    darkFillEl.style.backgroundColor = resolveThemedColor(darkFillBase, val || "");
+    if (STYLE_MENU_ID === action.id) {
+      STYLE_MENU.querySelector(".sm-fill-dark").value = val || autoDarkVariant(darkFillBase);
+      STYLE_DARKFILL_BEFORE = val || "";
+    }
+    return;
+  }
   if (action.type === "textcolor") {
     var textColorEl = styleMenuElById(action.id);
     if (!textColorEl) return;
-    textColorEl.style.color = val || "";
+    THEMED_OVERRIDE_MAPS.textColor[action.id] = val || "";
+    textColorEl.style.color = resolveThemedColor(val || "", THEMED_OVERRIDE_MAPS.darkTextColor[action.id]);
     saveEditedTextColor(action.id, val || "");
     if (STYLE_MENU_ID === action.id) {
       STYLE_MENU.querySelector(".sm-textcolor").value = currentTextColorValue(textColorEl);
       STYLE_TEXTCOLOR_BEFORE = val || "";
+    }
+    return;
+  }
+  if (action.type === "darktextcolor") {
+    var darkTextColorEl = styleMenuElById(action.id);
+    if (!darkTextColorEl) return;
+    THEMED_OVERRIDE_MAPS.darkTextColor[action.id] = val || "";
+    saveEditedDarkTextColor(action.id, val || "");
+    var darkTextBase = THEMED_OVERRIDE_MAPS.textColor[action.id] || currentTextColorValue(darkTextColorEl);
+    darkTextColorEl.style.color = resolveThemedColor(darkTextBase, val || "");
+    if (STYLE_MENU_ID === action.id) {
+      STYLE_MENU.querySelector(".sm-textcolor-dark").value = val || autoDarkVariant(darkTextBase);
+      STYLE_DARKTEXTCOLOR_BEFORE = val || "";
     }
     return;
   }
@@ -6036,14 +6472,35 @@ function applyHistoryAction(action, side) {
     var bdEl = styleMenuElById(action.id);
     if (!bdEl) return;
     var bw = (val && val.w) || 0;
-    if (bw > 0) bdEl.style.border = bw + "px solid " + val.color;
-    else bdEl.style.border = "none";
-    saveEditedBorder(action.id, bw, val ? val.color : "#000000");
+    var bColor = val ? val.color : "#000000";
+    THEMED_OVERRIDE_MAPS.border[action.id] = { w: bw, color: bColor };
+    if (bw > 0) {
+      var bdDark = THEMED_OVERRIDE_MAPS.darkBorder[action.id];
+      bdEl.style.border = bw + "px solid " + resolveThemedColor(bColor, bdDark && bdDark.color);
+    } else {
+      bdEl.style.border = "none";
+    }
+    saveEditedBorder(action.id, bw, bColor);
     if (STYLE_MENU_ID === action.id) {
       STYLE_MENU.querySelector(".sm-border-w").value = bw;
       STYLE_MENU.querySelector(".sm-border-val").textContent = bw + "px";
-      STYLE_MENU.querySelector(".sm-border-color").value = val ? val.color : "#000000";
-      STYLE_BORDER_BEFORE = { w: bw, color: val ? val.color : "#000000" };
+      STYLE_MENU.querySelector(".sm-border-color").value = bColor;
+      STYLE_BORDER_BEFORE = { w: bw, color: bColor };
+    }
+    return;
+  }
+  if (action.type === "darkborder") {
+    var darkBdEl = styleMenuElById(action.id);
+    if (!darkBdEl) return;
+    THEMED_OVERRIDE_MAPS.darkBorder[action.id] = { color: val || "" };
+    saveEditedDarkBorder(action.id, val || "");
+    var bdBase = THEMED_OVERRIDE_MAPS.border[action.id];
+    var darkBw = (bdBase && bdBase.w) || 0;
+    var darkBaseColor = (bdBase && bdBase.color) || currentBorderValue(darkBdEl).color;
+    if (darkBw > 0) darkBdEl.style.border = darkBw + "px solid " + resolveThemedColor(darkBaseColor, val || "");
+    if (STYLE_MENU_ID === action.id) {
+      STYLE_MENU.querySelector(".sm-border-color-dark").value = val || autoDarkVariant(darkBaseColor);
+      STYLE_DARKBORDER_BEFORE = val || "";
     }
     return;
   }
@@ -6271,6 +6728,27 @@ function saveEditedColor(id, value) {
 }
 
 /**
+ * Persists a dark-mode color override (the style popover's "dark mode
+ * color" toggle under the main Color row, see buildStyleMenu()) into the
+ * preview snapshot, same draft as saveEditedColor(). "" clears the
+ * override, falling back to the light color's auto-computed variant
+ * (autoDarkVariant()) rather than to no color at all - only ever meaningful
+ * on an id that already has a light-mode color saved.
+ * @param id the element's data-edit-id or data-resize-id
+ * @param value a css color string, or "" to clear back to the auto variant
+ */
+function saveEditedDarkColor(id, value) {
+  var raw;
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  if (!snapshot.dark_colors || typeof snapshot.dark_colors !== "object") snapshot.dark_colors = {};
+  if (!value) delete snapshot.dark_colors[id];
+  else snapshot.dark_colors[id] = value;
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
  * Persists an opacity change from the style popover's slider into the
  * preview snapshot, the same draft everything else here uses.
  * @param id the element's data-edit-id or data-resize-id
@@ -6307,6 +6785,24 @@ function saveEditedFill(id, value) {
 }
 
 /**
+ * Persists a dark-mode fill override (the style popover's "dark mode color"
+ * toggle under Fill), same idea as saveEditedDarkColor() but for
+ * content.dark_fill.
+ * @param id the element's data-edit-id
+ * @param value a css color string, or "" to clear back to the auto variant
+ */
+function saveEditedDarkFill(id, value) {
+  var raw;
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  if (!snapshot.dark_fill || typeof snapshot.dark_fill !== "object") snapshot.dark_fill = {};
+  if (!value) delete snapshot.dark_fill[id];
+  else snapshot.dark_fill[id] = value;
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
  * Persists a button's text-color change from the style popover's Text
  * color control into the preview snapshot, the same draft everything else
  * here uses. Separate map from content.colors since a button's "Color" row
@@ -6322,6 +6818,24 @@ function saveEditedTextColor(id, value) {
   if (!snapshot.text_color || typeof snapshot.text_color !== "object") snapshot.text_color = {};
   if (!value) delete snapshot.text_color[id];
   else snapshot.text_color[id] = value;
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
+ * Persists a dark-mode text-color override (the style popover's "dark mode
+ * color" toggle under Text color, buttons only), same idea as
+ * saveEditedDarkColor() but for content.dark_text_color.
+ * @param id the button's data-edit-id
+ * @param value a css color string, or "" to clear back to the auto variant
+ */
+function saveEditedDarkTextColor(id, value) {
+  var raw;
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  if (!snapshot.dark_text_color || typeof snapshot.dark_text_color !== "object") snapshot.dark_text_color = {};
+  if (!value) delete snapshot.dark_text_color[id];
+  else snapshot.dark_text_color[id] = value;
   try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
 }
 
@@ -6391,6 +6905,26 @@ function saveEditedBorder(id, w, color) {
   if (!snapshot.border || typeof snapshot.border !== "object") snapshot.border = {};
   if (!w) delete snapshot.border[id];
   else snapshot.border[id] = { w: w, color: color };
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
+ * Persists a dark-mode border-color override (the style popover's "dark
+ * mode color" toggle under Border) into content.dark_border, same draft as
+ * saveEditedBorder(). Only ever stores {color}: border width isn't
+ * theme-dependent, the light side's own w always wins (see
+ * applyBorderOverrides()).
+ * @param id the element's data-edit-id or data-resize-id
+ * @param color a css color string, or "" to clear back to the auto variant
+ */
+function saveEditedDarkBorder(id, color) {
+  var raw;
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  if (!snapshot.dark_border || typeof snapshot.dark_border !== "object") snapshot.dark_border = {};
+  if (!color) delete snapshot.dark_border[id];
+  else snapshot.dark_border[id] = { color: color };
   try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
 }
 
@@ -6497,13 +7031,13 @@ function initObjectCanvas() {
     applyFontSizeOverrides(data.font_sizes);
     applyTextStyleOverrides(data.text_styles);
     applyPositionOverrides(data.positions);
-    applyColorOverrides(data.colors);
-    applyFillOverrides(data.fill);
-    applyTextColorOverrides(data.text_color);
+    applyColorOverrides(data.colors, data.dark_colors);
+    applyFillOverrides(data.fill, data.dark_fill);
+    applyTextColorOverrides(data.text_color, data.dark_text_color);
     applyTintOverrides(data.tint);
     applyShadeOverrides(data.shade);
     applyRadiusOverrides(data.radius);
-    applyBorderOverrides(data.border);
+    applyBorderOverrides(data.border, data.dark_border);
     applyShadowOverrides(data.shadow);
     applyOpacityOverrides(data.opacity);
     applyHiddenOverrides(data.hidden);
@@ -6614,13 +7148,13 @@ document.addEventListener("DOMContentLoaded", function () {
       applyFontSizeOverrides(data.font_sizes);
       applyTextStyleOverrides(data.text_styles);
       applyPositionOverrides(data.positions);
-      applyColorOverrides(data.colors);
-      applyFillOverrides(data.fill);
-      applyTextColorOverrides(data.text_color);
+      applyColorOverrides(data.colors, data.dark_colors);
+      applyFillOverrides(data.fill, data.dark_fill);
+      applyTextColorOverrides(data.text_color, data.dark_text_color);
       applyTintOverrides(data.tint);
       applyShadeOverrides(data.shade);
       applyRadiusOverrides(data.radius);
-      applyBorderOverrides(data.border);
+      applyBorderOverrides(data.border, data.dark_border);
       applyShadowOverrides(data.shadow);
       applyOpacityOverrides(data.opacity);
       applyHiddenOverrides(data.hidden);

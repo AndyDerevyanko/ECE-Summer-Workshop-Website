@@ -2083,9 +2083,10 @@ function applyColorOverrides(colors, darkColors) {
     if (fadesOwnBackground(el) && el.dataset.baseColor === undefined) {
       el.dataset.baseColor = rgbToHex(getComputedStyle(el).backgroundColor) || "#000000";
     }
-    var v = colors[elId(el)];
-    if (!v || elKind(el) === "img") return;
-    setElementColor(el, resolveThemedColor(v, THEMED_OVERRIDE_MAPS.darkColors[elId(el)]));
+    var id = elId(el);
+    var v = colors[id], dv = THEMED_OVERRIDE_MAPS.darkColors[id];
+    if ((!v && !dv) || elKind(el) === "img") return;
+    setElementColor(el, resolveThemedColor(v, dv));
   });
 }
 
@@ -2119,9 +2120,10 @@ function applyFillOverrides(fill, darkFill) {
   THEMED_OVERRIDE_MAPS.fill = fill;
   THEMED_OVERRIDE_MAPS.darkFill = darkFill || {};
   document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
-    var v = fill[elId(el)];
-    if (!v) return;
-    el.style.backgroundColor = resolveThemedColor(v, THEMED_OVERRIDE_MAPS.darkFill[elId(el)]);
+    var id = elId(el);
+    var v = fill[id], dv = THEMED_OVERRIDE_MAPS.darkFill[id];
+    if (!v && !dv) return;
+    el.style.backgroundColor = resolveThemedColor(v, dv);
   });
 }
 
@@ -2143,9 +2145,10 @@ function applyTextColorOverrides(colors, darkColors) {
   THEMED_OVERRIDE_MAPS.darkTextColor = darkColors || {};
   document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
     if (!isButtonEl(el)) return;
-    var v = colors[elId(el)];
-    if (!v) return;
-    el.style.color = resolveThemedColor(v, THEMED_OVERRIDE_MAPS.darkTextColor[elId(el)]);
+    var id = elId(el);
+    var v = colors[id], dv = THEMED_OVERRIDE_MAPS.darkTextColor[id];
+    if (!v && !dv) return;
+    el.style.color = resolveThemedColor(v, dv);
   });
 }
 
@@ -2298,8 +2301,31 @@ function reapplyThemedColors() {
   applyFillOverrides(THEMED_OVERRIDE_MAPS.fill, THEMED_OVERRIDE_MAPS.darkFill);
   applyTextColorOverrides(THEMED_OVERRIDE_MAPS.textColor, THEMED_OVERRIDE_MAPS.darkTextColor);
   applyBorderOverrides(THEMED_OVERRIDE_MAPS.border, THEMED_OVERRIDE_MAPS.darkBorder);
+  repaintInlineTextColors();
 }
 window.reapplyThemedColors = reapplyThemedColors;
+
+/**
+ * Repaints every inline foreColor span (see applyThemedForeColor(), the
+ * floating text toolbar's ".tt-color" picker) against whichever theme is
+ * currently active. Unlike the whole-element overrides above, these spans
+ * carry their own light/dark values right on themselves (data-light-color/
+ * data-dark-color) rather than in a THEMED_OVERRIDE_MAPS entry, since a
+ * single text field's innerHTML can hold any number of independently-colored
+ * spans, not just one - the id-keyed map shape the rest of this file uses
+ * doesn't fit. Those data attributes ride along in the same innerHTML string
+ * applyTextOverrides()/saveEditedField() already read and write, so no
+ * separate save path or content.* column is needed for them. Called once
+ * after every load (right after applyTextOverrides() sets each field's
+ * innerHTML from its saved override, which may have been painted for
+ * whichever theme was active at save time) and again here on every theme
+ * flip, same as the rest of reapplyThemedColors().
+ */
+function repaintInlineTextColors() {
+  document.querySelectorAll("[data-light-color], [data-dark-color]").forEach(function (span) {
+    span.style.color = resolveThemedColor(span.dataset.lightColor || "", span.dataset.darkColor || "");
+  });
+}
 
 /**
  * Applies the shared drop-shadow (see BOX_SHADOW_VALUE) to every id in the
@@ -2356,7 +2382,9 @@ function buildStyleMenu() {
       '<label class="sm-color-label">Color</label>' +
       '<input type="color" class="sm-color">' +
       '<button type="button" class="sm-color-reset" title="Reset to default">×</button>' +
-      '<button type="button" class="sm-dark-toggle sm-color-dark-toggle" title="Set a different color for dark mode">🌙</button>' +
+    '</div>' +
+    '<div class="sm-row sm-dark-toggle-row sm-color-toggle-row">' +
+      '<button type="button" class="sm-dark-toggle sm-color-dark-toggle"></button>' +
     '</div>' +
     '<div class="sm-row sm-dark-row sm-color-dark-row">' +
       '<label>Dark mode color</label>' +
@@ -2367,7 +2395,9 @@ function buildStyleMenu() {
       '<label>Text color</label>' +
       '<input type="color" class="sm-textcolor">' +
       '<button type="button" class="sm-textcolor-reset" title="Reset to default">×</button>' +
-      '<button type="button" class="sm-dark-toggle sm-textcolor-dark-toggle" title="Set a different text color for dark mode">🌙</button>' +
+    '</div>' +
+    '<div class="sm-row sm-dark-toggle-row sm-textcolor-toggle-row">' +
+      '<button type="button" class="sm-dark-toggle sm-textcolor-dark-toggle"></button>' +
     '</div>' +
     '<div class="sm-row sm-dark-row sm-textcolor-dark-row">' +
       '<label>Dark mode text color</label>' +
@@ -2382,7 +2412,9 @@ function buildStyleMenu() {
       '<label>Fill</label>' +
       '<input type="color" class="sm-fill">' +
       '<button type="button" class="sm-fill-reset" title="Reset to default">×</button>' +
-      '<button type="button" class="sm-dark-toggle sm-fill-dark-toggle" title="Set a different fill for dark mode">🌙</button>' +
+    '</div>' +
+    '<div class="sm-row sm-dark-toggle-row sm-fill-toggle-row">' +
+      '<button type="button" class="sm-dark-toggle sm-fill-dark-toggle"></button>' +
     '</div>' +
     '<div class="sm-row sm-dark-row sm-fill-dark-row">' +
       '<label>Dark mode fill</label>' +
@@ -2409,7 +2441,9 @@ function buildStyleMenu() {
       '<input type="range" class="sm-border-w" min="0" max="10" step="1">' +
       '<span class="sm-border-val">0px</span>' +
       '<input type="color" class="sm-border-color">' +
-      '<button type="button" class="sm-dark-toggle sm-border-dark-toggle" title="Set a different border color for dark mode">🌙</button>' +
+    '</div>' +
+    '<div class="sm-row sm-dark-toggle-row sm-shape-row sm-border-toggle-row">' +
+      '<button type="button" class="sm-dark-toggle sm-border-dark-toggle"></button>' +
     '</div>' +
     '<div class="sm-row sm-dark-row sm-shape-row sm-border-dark-row">' +
       '<label>Dark mode border</label>' +
@@ -2508,23 +2542,30 @@ function buildStyleMenu() {
   });
 
   /**
-   * Wires one Color/Text color/Fill/Border row's "🌙" toggle: click shows
-   * (or hides) its dark-mode sub-row, same "click again to collapse" idea
-   * as toggleStyleMenu() itself. Purely a visibility toggle - the dark
-   * value underneath is set/cleared by its own input/reset, wired
-   * separately below.
-   * @param toggleBtn the row's "🌙" button
-   * @param darkRow the "sm-dark-row" div it shows/hides
+   * Wires one Color/Text color/Fill/Border row's "🌙"/"☀️" toggle: click
+   * shows (or hides) whichever of the row's two swatches - light ("Color")
+   * or dark ("Dark mode color") - ISN'T the one currently shown by default.
+   * The one shown by default always matches the theme actually rendering
+   * right now (see primeThemedColorRow(), which sets the icon and default
+   * visibility every time the popover opens or the site theme flips while
+   * it's open): in light mode the light row is already visible and this
+   * reveals the dark one; in dark mode it's the other way around. Purely a
+   * visibility toggle either way - the value underneath is set/cleared by
+   * each row's own input/reset, wired separately below.
+   * @param toggleBtn the row's own "🌙"/"☀️" button
+   * @param lightRow the "sm-color-row"-style div (always saves to the light map)
+   * @param darkRow the "sm-dark-row" div (always saves to the dark map)
    */
-  function wireDarkToggle(toggleBtn, darkRow) {
+  function wireDarkToggle(toggleBtn, lightRow, darkRow) {
     toggleBtn.addEventListener("click", function () {
-      darkRow.style.display = darkRow.style.display === "none" ? "" : "none";
+      var secondary = isDarkThemeActive() ? lightRow : darkRow;
+      secondary.style.display = secondary.style.display === "none" ? "" : "none";
     });
   }
-  wireDarkToggle(colorDarkToggle, STYLE_MENU.querySelector(".sm-color-dark-row"));
-  wireDarkToggle(textColorDarkToggle, STYLE_MENU.querySelector(".sm-textcolor-dark-row"));
-  wireDarkToggle(fillDarkToggle, STYLE_MENU.querySelector(".sm-fill-dark-row"));
-  wireDarkToggle(borderDarkToggle, STYLE_MENU.querySelector(".sm-border-dark-row"));
+  wireDarkToggle(colorDarkToggle, STYLE_MENU.querySelector(".sm-color-row"), STYLE_MENU.querySelector(".sm-color-dark-row"));
+  wireDarkToggle(textColorDarkToggle, STYLE_MENU.querySelector(".sm-textcolor-row"), STYLE_MENU.querySelector(".sm-textcolor-dark-row"));
+  wireDarkToggle(fillDarkToggle, STYLE_MENU.querySelector(".sm-fill-row"), STYLE_MENU.querySelector(".sm-fill-dark-row"));
+  wireDarkToggle(borderDarkToggle, STYLE_MENU.querySelector(".sm-border-color"), STYLE_MENU.querySelector(".sm-border-dark-row"));
   STYLE_MENU.querySelectorAll(".sm-dt-fs-dn, .sm-dt-fs-up, .sm-dt-align").forEach(function (btn) {
     btn.addEventListener("mousedown", function (e) { e.stopPropagation(); });
   });
@@ -2560,10 +2601,14 @@ function buildStyleMenu() {
     if (!el) return;
     var before = STYLE_COLOR_BEFORE;
     THEMED_OVERRIDE_MAPS.colors[STYLE_MENU_ID] = "";
-    setElementColor(el, "");
+    /* resolve rather than blank outright - if dark mode is what's actually
+       on screen right now, clearing the LIGHT override must not blow away
+       the still-in-effect dark color/auto-variant that's currently
+       painted, see primeThemedColorRow()'s doc comment */
+    setElementColor(el, resolveThemedColor("", THEMED_OVERRIDE_MAPS.darkColors[STYLE_MENU_ID]));
     saveEditedColor(STYLE_MENU_ID, "");
     var after = currentColorValue(el);
-    colorInput.value = after;
+    colorInput.value = isDarkThemeActive() ? autoDarkVariant(after) : after;
     if (before !== "") {
       EDIT_UNDO.push({ type: "color", id: STYLE_MENU_ID, before: before, after: "" });
       EDIT_REDO.length = 0;
@@ -2629,10 +2674,10 @@ function buildStyleMenu() {
     if (!el) return;
     var before = STYLE_TEXTCOLOR_BEFORE;
     THEMED_OVERRIDE_MAPS.textColor[STYLE_MENU_ID] = "";
-    el.style.color = "";
+    el.style.color = resolveThemedColor("", THEMED_OVERRIDE_MAPS.darkTextColor[STYLE_MENU_ID]);
     saveEditedTextColor(STYLE_MENU_ID, "");
     var after = currentTextColorValue(el);
-    textColorInput.value = after;
+    textColorInput.value = isDarkThemeActive() ? autoDarkVariant(after) : after;
     if (before !== "") {
       EDIT_UNDO.push({ type: "textcolor", id: STYLE_MENU_ID, before: before, after: "" });
       EDIT_REDO.length = 0;
@@ -2698,10 +2743,10 @@ function buildStyleMenu() {
     if (!el) return;
     var before = STYLE_FILL_BEFORE;
     THEMED_OVERRIDE_MAPS.fill[STYLE_MENU_ID] = "";
-    el.style.backgroundColor = "";
+    el.style.backgroundColor = resolveThemedColor("", THEMED_OVERRIDE_MAPS.darkFill[STYLE_MENU_ID]);
     saveEditedFill(STYLE_MENU_ID, "");
     var after = currentFillValue(el);
-    fillInput.value = after;
+    fillInput.value = isDarkThemeActive() ? autoDarkVariant(after) : after;
     if (before !== "") {
       EDIT_UNDO.push({ type: "fill", id: STYLE_MENU_ID, before: before, after: "" });
       EDIT_REDO.length = 0;
@@ -2813,26 +2858,43 @@ function buildStyleMenu() {
     STYLE_RADIUS_BEFORE = after;
   });
 
-  function commitBorder() {
+  /**
+   * Commits width+color together, given the color to use. Width is always
+   * theme-independent (applyBorderOverrides() only ever reads w off the
+   * light "border" map), but the color half needs care: when light mode is
+   * the secondary/hidden swatch right now, borderColor.value is just an
+   * unconfirmed autoDarkVariant() suggestion, not something the TA
+   * actually chose - dragging only the width slider must NOT promote that
+   * suggestion into a real saved light color. So a width-only drag reuses
+   * whatever light color was last confirmed (the cached map entry) instead
+   * of reading the possibly-hidden swatch; an actual edit of the light
+   * swatch itself always passes its own (deliberately-chosen) value.
+   */
+  function commitBorder(color) {
     if (!STYLE_MENU_ID) return;
     var el = styleMenuEl();
     if (!el) return;
     var w = parseInt(borderW.value, 10);
-    THEMED_OVERRIDE_MAPS.border[STYLE_MENU_ID] = { w: w, color: borderColor.value };
+    THEMED_OVERRIDE_MAPS.border[STYLE_MENU_ID] = { w: w, color: color };
     if (w > 0) {
       var dv = THEMED_OVERRIDE_MAPS.darkBorder[STYLE_MENU_ID];
-      el.style.border = w + "px solid " + resolveThemedColor(borderColor.value, dv && dv.color);
+      el.style.border = w + "px solid " + resolveThemedColor(color, dv && dv.color);
     } else {
       el.style.border = "none";
     }
     borderVal.textContent = w + "px";
-    saveEditedBorder(STYLE_MENU_ID, w, borderColor.value);
+    saveEditedBorder(STYLE_MENU_ID, w, color);
+    return color;
   }
-  borderW.addEventListener("input", commitBorder);
-  borderColor.addEventListener("input", commitBorder);
+  function confirmedLightBorderColor() {
+    var cached = THEMED_OVERRIDE_MAPS.border[STYLE_MENU_ID];
+    return (cached && cached.color) || borderColor.value;
+  }
+  borderW.addEventListener("input", function () { commitBorder(confirmedLightBorderColor()); });
+  borderColor.addEventListener("input", function () { commitBorder(borderColor.value); });
   borderW.addEventListener("change", function () {
     if (!STYLE_MENU_ID) return;
-    var after = { w: parseInt(borderW.value, 10), color: borderColor.value };
+    var after = { w: parseInt(borderW.value, 10), color: confirmedLightBorderColor() };
     if (after.w !== STYLE_BORDER_BEFORE.w || after.color !== STYLE_BORDER_BEFORE.color) {
       EDIT_UNDO.push({ type: "border", id: STYLE_MENU_ID, before: STYLE_BORDER_BEFORE, after: after });
       EDIT_REDO.length = 0;
@@ -3132,22 +3194,52 @@ function autoDarkVariant(hex) {
 }
 
 /**
- * Resolves which of a color-bearing override's two saved values actually
- * applies right now: the light-mode value as-is outside dark mode, or (in
- * dark mode) the TA's explicit dark-mode override if they set one, else the
- * light value's auto-computed variant (autoDarkVariant()) - never the
- * literal light-mode color unmodified, which is the whole bug this exists
- * to fix (a TA-placed element's color used to be identical in both themes).
- * @param base the saved light-mode value ("" / undefined means no override
- *   at all, callers already skip that case before reaching here)
- * @param darkOverride the saved dark-mode override, "" / undefined if none
- * @return the css color string to actually paint
+ * Whether the page currently being edited/viewed is showing dark mode right
+ * now - the live signal every theme-aware color read/write in this file
+ * keys off (resolveThemedColor(), the style popover's primary/secondary
+ * swatch binding, see primeThemedColorRow()). Reads straight off
+ * documentElement rather than caching, since a ta can flip it at any moment
+ * by clicking the nav's own toggle (see js/theme.js's setTheme()) - default
+ * theme with no [data-theme] set at all would be dark (js/theme.js's
+ * currentTheme() convention), but templates/index.html always sets one
+ * explicitly, so that fallback is mostly theoretical here.
+ * @return true if dark mode is the one currently rendering
  */
-function resolveThemedColor(base, darkOverride) {
-  if (!base) return base;
-  var isDark = document.documentElement.getAttribute("data-theme") !== "light";
-  if (!isDark) return base;
-  return darkOverride || autoDarkVariant(base);
+function isDarkThemeActive() {
+  return document.documentElement.getAttribute("data-theme") !== "light";
+}
+
+/**
+ * Resolves which of a color-bearing override's two saved values actually
+ * applies right now: the TA's explicit value for whichever theme is active
+ * if they set one, else the OTHER side's auto-computed variant
+ * (autoDarkVariant(), self-inverse so it round-trips either direction) -
+ * never the literal other-theme color unmodified, which is the whole bug
+ * this exists to fix (a TA-placed element's color used to be identical in
+ * both themes). The two values are independent optional overrides, not "a
+ * base plus an optional override": either can be set without the other (a
+ * ta editing while already in dark mode - the site's own default theme -
+ * can set just the dark value, see primeThemedColorRow()), so this has to
+ * auto-flip in BOTH directions, not just light-set/dark-missing: a ta who
+ * only ever edits in dark mode and never sets a light value would otherwise
+ * see every override silently vanish back to the page default the moment
+ * light mode renders (eg a first-time visitor whose OS/browser prefers
+ * light), instead of the same auto-derived variant the dark side already
+ * gets from a light-only value.
+ * @param lightVal the saved light-mode value, "" / undefined if unset
+ * @param darkVal the saved dark-mode value, "" / undefined if unset
+ * @return the css color string to actually paint, "" if neither side is set
+ *   (callers already skip painting anything in that case)
+ */
+function resolveThemedColor(lightVal, darkVal) {
+  if (isDarkThemeActive()) {
+    if (darkVal) return darkVal;
+    if (lightVal) return autoDarkVariant(lightVal);
+    return "";
+  }
+  if (lightVal) return lightVal;
+  if (darkVal) return autoDarkVariant(darkVal);
+  return "";
 }
 
 /**
@@ -3252,6 +3344,185 @@ function currentShadowOn(el) {
 }
 
 /**
+ * Fills one Color/Text color/Fill/Border row's pair of light+dark swatches,
+ * and its toggle button, so that whichever theme is actually rendering on
+ * screen right now is always the "primary" one: shown by default, its
+ * value the color the TA can actually see. The other theme's swatch is
+ * "secondary" - collapsed behind the toggle - so a TA who never touches it
+ * never even notices it's there. Without this the panel would always treat
+ * light as primary regardless of which mode is being previewed, exactly
+ * the bug flagged in "make sure that whatever color shows up in the editor
+ * panel is the color that is being shown in the current mode they are on".
+ * The secondary swatch previews its own explicit override if the TA set
+ * one, else autoDarkVariant() of the primary value as a starting
+ * suggestion - autoDarkVariant() is self-inverse (flips HSL lightness), so
+ * the same formula works as a suggestion in either direction. Only the
+ * primary side's value is written into THEMED_OVERRIDE_MAPS eagerly (it
+ * mirrors what's already painted); the secondary side stays
+ * presentation-only until the TA actually edits or resets it.
+ * @param liveValue the color actually rendered right now (eg
+ *   currentColorValue(el)), always goes in the primary swatch
+ * @param lightInput/darkInput the row's two <input type=color>s - fixed
+ *   save targets (light always saves to lightMap, dark to darkMap)
+ *   regardless of which one is primary right now
+ * @param lightRow/darkRow their own "sm-*-row"/"sm-dark-row" divs
+ * @param toggleBtn the row's "🌙"/"☀️" toggle button
+ * @param lightMap/darkMap THEMED_OVERRIDE_MAPS.* for this row
+ * @param label used in the toggle's title, eg "color" -> "Edit dark mode color"
+ * @return {{lightBefore, darkBefore}} gesture-baseline values for the two
+ *   physical inputs, for STYLE_*_BEFORE/STYLE_DARK*_BEFORE
+ */
+function primeThemedColorRow(liveValue, lightInput, darkInput, lightRow, darkRow, toggleBtn, lightMap, darkMap, label) {
+  var id = STYLE_MENU_ID;
+  var dark = isDarkThemeActive();
+  var primaryInput = dark ? darkInput : lightInput;
+  var primaryRow = dark ? darkRow : lightRow;
+  var primaryMap = dark ? darkMap : lightMap;
+  var secondaryInput = dark ? lightInput : darkInput;
+  var secondaryRow = dark ? lightRow : darkRow;
+  var secondaryMap = dark ? lightMap : darkMap;
+
+  primaryInput.value = liveValue;
+  /* NOT primaryMap[id] = liveValue here - that would fabricate a fake
+     "explicit override" out of a plain live-value read (eg an element with
+     no dark override at all, just showing its auto-computed variant), and
+     since primary/secondary swap by theme, a later re-open (or theme
+     flip) in the OTHER direction would then see this map entry and
+     wrongly treat it as a real explicit override, auto-expanding the
+     secondary row for something the TA never actually set. Only an actual
+     edit (the row's own "input" handler) should ever write into a map. */
+  primaryRow.style.display = "";
+
+  var explicitSecondary = secondaryMap[id];
+  secondaryInput.value = explicitSecondary || autoDarkVariant(liveValue);
+  secondaryRow.style.display = explicitSecondary ? "" : "none";
+
+  toggleBtn.textContent = dark ? "☀️" : "🌙";
+  toggleBtn.title = dark ? ("Edit light mode " + label) : ("Edit dark mode " + label);
+
+  /* the primary side's baseline is always its live value (there's always
+     "a color" being rendered); the secondary side's baseline is the raw
+     explicit-override map entry, "" if unset - NOT the suggestion showing
+     in its input - so that eg clicking its reset button when nothing was
+     ever explicitly set doesn't record a spurious "suggestion -> nothing"
+     undo step. */
+  return {
+    lightBefore: dark ? (explicitSecondary || "") : liveValue,
+    darkBefore: dark ? liveValue : (explicitSecondary || "")
+  };
+}
+
+/**
+ * Re-primes Color/Text color/Fill/Border color's light<->dark swap for
+ * whichever element the style popover is currently open on - the part of
+ * toggleStyleMenu() that actually depends on which theme is active, kept
+ * separate so it can be re-run on its own by refreshStyleMenuTheme()
+ * without disturbing radius/shadow/tint/opacity/etc, which don't change
+ * with theme. Which rows are relevant for this element's KIND (isImg,
+ * isBtn, isText, isIcon/isDatetime) never changes for a given element, so
+ * that gating is recomputed fresh here too (cheap) rather than threaded in.
+ * @param el the element the popover is open on
+ */
+function primeStyleMenuThemedRows(el) {
+  var kind = elKind(el);
+  var isImg = kind === "img";
+  var isIcon = kind === "icon";
+  var isDatetime = el.hasAttribute("data-datetime");
+  var isText = colorTarget(el) === "text";
+  var isBtn = isButtonEl(el);
+  var shapeDisplay = (isIcon || isDatetime) ? "none" : "";
+
+  if (!isImg) {
+    var colorBefore = primeThemedColorRow(currentColorValue(el),
+      STYLE_MENU.querySelector(".sm-color"), STYLE_MENU.querySelector(".sm-color-dark"),
+      STYLE_MENU.querySelector(".sm-color-row"), STYLE_MENU.querySelector(".sm-color-dark-row"),
+      STYLE_MENU.querySelector(".sm-color-dark-toggle"), THEMED_OVERRIDE_MAPS.colors, THEMED_OVERRIDE_MAPS.darkColors, "color");
+    STYLE_COLOR_BEFORE = colorBefore.lightBefore;
+    STYLE_DARKCOLOR_BEFORE = colorBefore.darkBefore;
+  }
+
+  if (isText) {
+    var fillBefore = primeThemedColorRow(currentFillValue(el),
+      STYLE_MENU.querySelector(".sm-fill"), STYLE_MENU.querySelector(".sm-fill-dark"),
+      STYLE_MENU.querySelector(".sm-fill-row"), STYLE_MENU.querySelector(".sm-fill-dark-row"),
+      STYLE_MENU.querySelector(".sm-fill-dark-toggle"), THEMED_OVERRIDE_MAPS.fill, THEMED_OVERRIDE_MAPS.darkFill, "fill");
+    STYLE_FILL_BEFORE = fillBefore.lightBefore;
+    STYLE_DARKFILL_BEFORE = fillBefore.darkBefore;
+  }
+
+  if (isBtn) {
+    var textColorBefore = primeThemedColorRow(currentTextColorValue(el),
+      STYLE_MENU.querySelector(".sm-textcolor"), STYLE_MENU.querySelector(".sm-textcolor-dark"),
+      STYLE_MENU.querySelector(".sm-textcolor-row"), STYLE_MENU.querySelector(".sm-textcolor-dark-row"),
+      STYLE_MENU.querySelector(".sm-textcolor-dark-toggle"), THEMED_OVERRIDE_MAPS.textColor, THEMED_OVERRIDE_MAPS.darkTextColor, "text color");
+    STYLE_TEXTCOLOR_BEFORE = textColorBefore.lightBefore;
+    STYLE_DARKTEXTCOLOR_BEFORE = textColorBefore.darkBefore;
+  }
+
+  if (!isIcon && !isDatetime) {
+    /* border width lives in the same always-visible row as the light color
+       swatch (there's no separate "width" row to swap), so unlike
+       color/text color/fill, border can't just swap two whole rows by
+       theme - instead the light swatch <input> itself hides/shows within
+       its row (width stays put either way, since it's theme-independent,
+       see applyBorderOverrides()), while the dark row (just the one
+       swatch) still swaps wholesale like the others. */
+    var borderColor = STYLE_MENU.querySelector(".sm-border-color");
+    var borderColorDark = STYLE_MENU.querySelector(".sm-border-color-dark");
+    var borderDarkToggle = STYLE_MENU.querySelector(".sm-border-dark-toggle");
+    var bd = currentBorderValue(el);
+    STYLE_MENU.querySelector(".sm-border-w").value = bd.w;
+    STYLE_MENU.querySelector(".sm-border-val").textContent = bd.w + "px";
+    /* NOT writing bd (the live value) into THEMED_OVERRIDE_MAPS.border/
+       darkBorder here - same reasoning as primeThemedColorRow(): a plain
+       live-value read isn't a real explicit override, and fabricating one
+       would make the OTHER side wrongly auto-expand once the TA flips
+       theme or reopens this popover later, see confirmedLightBorderColor()
+       for the one place that still needs a "no real override yet"
+       fallback. */
+    var darkActive = isDarkThemeActive();
+    if (darkActive) {
+      borderColorDark.value = bd.color;
+      var cachedLight = THEMED_OVERRIDE_MAPS.border[STYLE_MENU_ID];
+      var explicitLight = cachedLight && cachedLight.color;
+      borderColor.value = explicitLight || autoDarkVariant(bd.color);
+      borderColor.style.display = explicitLight ? "" : "none";
+      STYLE_MENU.querySelector(".sm-border-dark-row").style.display = shapeDisplay;
+    } else {
+      borderColor.value = bd.color;
+      borderColor.style.display = "";
+      var cachedDark = THEMED_OVERRIDE_MAPS.darkBorder[STYLE_MENU_ID];
+      var explicitDark = cachedDark && cachedDark.color;
+      borderColorDark.value = explicitDark || autoDarkVariant(bd.color);
+      STYLE_MENU.querySelector(".sm-border-dark-row").style.display =
+        (shapeDisplay !== "none" && explicitDark) ? "" : "none";
+    }
+    STYLE_BORDER_BEFORE = { w: bd.w, color: borderColor.value };
+    STYLE_DARKBORDER_BEFORE = darkActive ? bd.color : ((THEMED_OVERRIDE_MAPS.darkBorder[STYLE_MENU_ID] || {}).color || "");
+    borderDarkToggle.textContent = darkActive ? "☀️" : "🌙";
+    borderDarkToggle.title = darkActive ? "Edit light mode border" : "Edit dark mode border";
+  }
+}
+
+/**
+ * Keeps the style popover in sync with reality when a TA flips the site's
+ * own theme toggle while the popover is already open on some element -
+ * without this the panel would keep showing whichever mode was active when
+ * it was opened, exactly the "you WILL have to add some kind of way for
+ * the editor to know which mode of page it is showing a preview of" gap.
+ * A no-op if the popover isn't open. Hooked into js/theme.js's setTheme()
+ * via window.refreshStyleMenuTheme, same window.-gated pattern as
+ * window.reapplyThemedColors.
+ */
+function refreshStyleMenuTheme() {
+  if (!STYLE_MENU || !STYLE_MENU.classList.contains("show") || !STYLE_MENU_ID) return;
+  var el = styleMenuEl();
+  if (!el) return;
+  primeStyleMenuThemedRows(el);
+}
+window.refreshStyleMenuTheme = refreshStyleMenuTheme;
+
+/**
  * Opens the style popover anchored under the ring's style button (or
  * closes it, if it's already open, so re-clicking the button toggles it),
  * pre-filling both controls from the element's current live color/opacity.
@@ -3272,17 +3543,20 @@ function toggleStyleMenu(anchorEl) {
   var isThemeToggle = el.hasAttribute("data-theme-toggle");
   STYLE_MENU.querySelector(".sm-color-row").style.display = isImg ? "none" : "";
   STYLE_MENU.querySelector(".sm-color-dark-row").style.display = isImg ? "none" : "";
+  STYLE_MENU.querySelector(".sm-color-toggle-row").style.display = isImg ? "none" : "";
   /* for every other bg-target element "Color" is the only surface control
      there is, but a button also gets its own separate Text color row right
      below, so it's worth spelling out which one this now is */
   STYLE_MENU.querySelector(".sm-color-label").textContent = isBtn ? "Background" : "Color";
   STYLE_MENU.querySelector(".sm-textcolor-row").style.display = isBtn ? "" : "none";
   STYLE_MENU.querySelector(".sm-textcolor-dark-row").style.display = isBtn ? "" : "none";
+  STYLE_MENU.querySelector(".sm-textcolor-toggle-row").style.display = isBtn ? "" : "none";
   STYLE_MENU.querySelector(".sm-theme-row").style.display = isThemeToggle ? "" : "none";
   /* a datetime element paints its own text color via the Color row, so its
      Fill row (a text field's background) would just be clutter; hide it */
   STYLE_MENU.querySelector(".sm-fill-row").style.display = (isText && !isDatetime) ? "" : "none";
   STYLE_MENU.querySelector(".sm-fill-dark-row").style.display = (isText && !isDatetime) ? "" : "none";
+  STYLE_MENU.querySelector(".sm-fill-toggle-row").style.display = (isText && !isDatetime) ? "" : "none";
   STYLE_MENU.querySelector(".sm-tint-row").style.display = isImg ? "" : "none";
   STYLE_MENU.querySelector(".sm-shade-row").style.display = isImg ? "" : "none";
   /* rounding/border/shadow on the bare digits text make no more sense than
@@ -3291,62 +3565,20 @@ function toggleStyleMenu(anchorEl) {
   STYLE_MENU.querySelectorAll(".sm-shape-row").forEach(function (row) { row.style.display = shapeDisplay; });
   STYLE_MENU.querySelectorAll(".sm-dt-row").forEach(function (row) { row.style.display = isDatetime ? "" : "none"; });
 
-  var colorInput = STYLE_MENU.querySelector(".sm-color");
-  var colorDarkInput = STYLE_MENU.querySelector(".sm-color-dark");
-  var textColorInput = STYLE_MENU.querySelector(".sm-textcolor");
-  var textColorDarkInput = STYLE_MENU.querySelector(".sm-textcolor-dark");
-  var fillInput = STYLE_MENU.querySelector(".sm-fill");
-  var fillDarkInput = STYLE_MENU.querySelector(".sm-fill-dark");
   var tintInput = STYLE_MENU.querySelector(".sm-tint");
   var shadeInput = STYLE_MENU.querySelector(".sm-shade");
   var shadeVal = STYLE_MENU.querySelector(".sm-shade-val");
   var radiusInput = STYLE_MENU.querySelector(".sm-radius");
   var radiusVal = STYLE_MENU.querySelector(".sm-radius-val");
-  var borderW = STYLE_MENU.querySelector(".sm-border-w");
-  var borderVal = STYLE_MENU.querySelector(".sm-border-val");
-  var borderColor = STYLE_MENU.querySelector(".sm-border-color");
-  var borderColorDark = STYLE_MENU.querySelector(".sm-border-color-dark");
   var shadowInput = STYLE_MENU.querySelector(".sm-shadow");
   var opacityInput = STYLE_MENU.querySelector(".sm-opacity");
   var opacityVal = STYLE_MENU.querySelector(".sm-opacity-val");
 
-  /**
-   * Pre-fills one row's "dark mode color" sub-input and auto-expands (or
-   * collapses) it: open showing the TA's own explicit override if they set
-   * one, else the auto-computed variant of the light value, collapsed - a
-   * TA who never touches it should never even notice it's there.
-   * @param darkInput the sub-row's <input type=color>
-   * @param darkRow the sub-row's own "sm-dark-row" div
-   * @param darkMap THEMED_OVERRIDE_MAPS.dark* for this row
-   * @param baseValue the row's own current light-mode value
-   */
-  function primeDarkRow(darkInput, darkRow, darkMap, baseValue) {
-    var explicit = darkMap[STYLE_MENU_ID];
-    darkInput.value = explicit || autoDarkVariant(baseValue);
-    if (darkRow.style.display !== "none") darkRow.style.display = explicit ? "" : "none";
-  }
-
-  colorInput.value = currentColorValue(el);
-  STYLE_COLOR_BEFORE = colorInput.value;
-  THEMED_OVERRIDE_MAPS.colors[STYLE_MENU_ID] = colorInput.value;
-  primeDarkRow(colorDarkInput, STYLE_MENU.querySelector(".sm-color-dark-row"), THEMED_OVERRIDE_MAPS.darkColors, colorInput.value);
-  STYLE_DARKCOLOR_BEFORE = THEMED_OVERRIDE_MAPS.darkColors[STYLE_MENU_ID] || "";
-
-  if (isText) {
-    fillInput.value = currentFillValue(el);
-    STYLE_FILL_BEFORE = fillInput.value;
-    THEMED_OVERRIDE_MAPS.fill[STYLE_MENU_ID] = fillInput.value;
-    primeDarkRow(fillDarkInput, STYLE_MENU.querySelector(".sm-fill-dark-row"), THEMED_OVERRIDE_MAPS.darkFill, fillInput.value);
-    STYLE_DARKFILL_BEFORE = THEMED_OVERRIDE_MAPS.darkFill[STYLE_MENU_ID] || "";
-  }
-
-  if (isBtn) {
-    textColorInput.value = currentTextColorValue(el);
-    STYLE_TEXTCOLOR_BEFORE = textColorInput.value;
-    THEMED_OVERRIDE_MAPS.textColor[STYLE_MENU_ID] = textColorInput.value;
-    primeDarkRow(textColorDarkInput, STYLE_MENU.querySelector(".sm-textcolor-dark-row"), THEMED_OVERRIDE_MAPS.darkTextColor, textColorInput.value);
-    STYLE_DARKTEXTCOLOR_BEFORE = THEMED_OVERRIDE_MAPS.darkTextColor[STYLE_MENU_ID] || "";
-  }
+  /* handles Color/Text color/Fill/Border color's light<->dark primary swap
+     (see primeThemedColorRow()) - factored out so refreshStyleMenuTheme()
+     can re-run just this part when the site's theme flips while the
+     popover is already open, without disturbing anything else */
+  primeStyleMenuThemedRows(el);
 
   if (isImg) {
     tintInput.value = currentTintValue(el);
@@ -3376,19 +3608,6 @@ function toggleStyleMenu(anchorEl) {
     radiusInput.value = rad;
     radiusVal.textContent = rad + "px";
     STYLE_RADIUS_BEFORE = String(rad);
-
-    var bd = currentBorderValue(el);
-    borderW.value = bd.w;
-    borderVal.textContent = bd.w + "px";
-    borderColor.value = bd.color;
-    STYLE_BORDER_BEFORE = bd;
-    THEMED_OVERRIDE_MAPS.border[STYLE_MENU_ID] = bd;
-    var darkBd = THEMED_OVERRIDE_MAPS.darkBorder[STYLE_MENU_ID];
-    var darkBdColor = darkBd && darkBd.color;
-    borderColorDark.value = darkBdColor || autoDarkVariant(bd.color);
-    STYLE_MENU.querySelector(".sm-border-dark-row").style.display =
-      (shapeDisplay !== "none" && darkBdColor) ? "" : "none";
-    STYLE_DARKBORDER_BEFORE = darkBdColor || "";
 
     shadowInput.checked = currentShadowOn(el);
   }
@@ -4787,6 +5006,7 @@ function placeObject(objData, x, y) {
   CUSTOM_ELEMENTS = CUSTOM_ELEMENTS.concat(newParts);
 
   applyTextOverrides(snap.text || {});
+  repaintInlineTextColors();
   applyThemeIconOverrides(snap.theme_icons);
   if (window.refreshThemeToggles) window.refreshThemeToggles();
   applySizeOverrides(snap.sizes);
@@ -5754,6 +5974,99 @@ var ALIGN_ICONS = {
 };
 
 /**
+ * Applies a foreColor pick from the floating toolbar's ".tt-color" swatch to
+ * the current selection inside fieldEl, then tags whichever span(s) now
+ * carry that exact color as belonging to the theme that's active right now
+ * (data-light-color / data-dark-color, read back by repaintInlineTextColors()
+ * on every load and theme flip - same independent-per-theme-value model as
+ * the style popover's Color row, see resolveThemedColor()). There's no
+ * separate "edit the other theme's color" toggle here the way the popover
+ * has one: a ta gets that by flipping the site's own theme button (already
+ * live-visible while editing) and picking a different color for the same
+ * selection, which is the exact workflow the popover's own design already
+ * settled on for "whatever's showing is whichever mode you're in".
+ *
+ * Re-tags by color VALUE, not by node identity: execCommand("foreColor") is
+ * free to split/merge/replace the spans under the selection however the
+ * browser sees fit, so there's no reliable "the node(s) I just touched" to
+ * diff against. Walking the whole field afterward and tagging every element
+ * whose live style.color now equals the just-picked hex is equivalent and
+ * doesn't need that tracking: any span currently showing exactly that color,
+ * however it got there, IS that theme's color for that span. A field is
+ * always small (a heading, a paragraph), so re-scanning it on every pick is
+ * cheap.
+ *
+ * Runs execCommand unconditionally even when forDark names the theme that
+ * ISN'T currently showing (the toolbar's secondary ".tt-color-dark" input,
+ * see buildTextToolbar()): that's the only way to get a concrete span to tag
+ * for an arbitrary selection (see the note above on why this can't diff
+ * against "before"), so the not-currently-active color briefly paints, then
+ * repaintInlineTextColors() immediately corrects the visible result back to
+ * whatever the CURRENTLY active theme's value resolves to - which is a no-op
+ * repaint if that side's value didn't just change, exactly like editing a
+ * hidden secondary swatch in the style popover doesn't repaint the element
+ * either.
+ * @param fieldEl the contenteditable text field being edited
+ * @param hex the "#rrggbb" just picked from a color input
+ * @param forDark which theme this pick is for; defaults to whichever theme
+ *   is actually active right now (the primary ".tt-color" input's case)
+ */
+function applyThemedForeColor(fieldEl, hex, forDark) {
+  var dark = forDark === undefined ? isDarkThemeActive() : forDark;
+  document.execCommand("styleWithCSS", false, true);
+  document.execCommand("foreColor", false, hex);
+  fieldEl.querySelectorAll("[style*='color']").forEach(function (span) {
+    if (rgbToHex(span.style.color) !== hex.toLowerCase()) return;
+    if (dark) span.dataset.darkColor = hex;
+    else span.dataset.lightColor = hex;
+  });
+  repaintInlineTextColors();
+}
+
+/**
+ * Finds the data-light-color/data-dark-color span (see
+ * applyThemedForeColor()) touching the current selection inside fieldEl, so
+ * the toolbar's secondary color input can prefill with that span's explicit
+ * other-theme value instead of just a blind autoDarkVariant() guess. Two
+ * cases, since a tagged span can sit on either side of the selection's
+ * common ancestor:
+ *  - selection collapsed/inside the span (typical click-then-pick): walk UP
+ *    from the common ancestor, same "closest tagged ancestor" idea as
+ *    colorTarget()'s own data-edit-id walk.
+ *  - selection wraps the whole span from outside it (typical of this
+ *    editor's own click-to-edit, which auto-selects a field's ENTIRE
+ *    contents on open, see wireTextField()'s click handler - if that's the
+ *    field's one and only colored span, the common ancestor is the field
+ *    itself, an ancestor of the tagged span, not the span or a descendant of
+ *    it): fall back to checking whether exactly one tagged descendant is
+ *    intersected by the range.
+ * A selection spanning several differently-tagged spans resolves to
+ * whichever one the selection starts in (first case) or null (second case,
+ * ambiguous), an approximation fine for priming a swatch, not for
+ * correctness (the actual color pick always re-tags whatever's really
+ * selected, see applyThemedForeColor()).
+ * @param fieldEl the contenteditable text field being edited
+ * @return the tagged span element, or null if the selection isn't inside one
+ */
+function selectionColorSpan(fieldEl) {
+  var sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return null;
+  var range = sel.getRangeAt(0);
+  var container = range.commonAncestorContainer;
+  if (container.nodeType === 3) container = container.parentElement;
+  var node = container;
+  while (node && node !== fieldEl.parentElement) {
+    if (node.dataset && (node.dataset.lightColor || node.dataset.darkColor)) return node;
+    node = node.parentElement;
+  }
+  if (container.querySelectorAll) {
+    var tagged = container.querySelectorAll("[data-light-color], [data-dark-color]");
+    if (tagged.length === 1 && range.intersectsNode(tagged[0])) return tagged[0];
+  }
+  return null;
+}
+
+/**
  * Builds the floating text toolbar once, lazily, same singleton pattern as
  * the selection ring. Every button's mousedown is swallowed (preventDefault
  * + stopPropagation) before it can steal focus (and the field's selection
@@ -5780,6 +6093,8 @@ function buildTextToolbar() {
     '<button type="button" class="tt-italic" title="Italic"><i>I</i></button>' +
     '<button type="button" class="tt-underline" title="Underline"><u>U</u></button>' +
     '<input type="color" class="tt-color" title="Text color (selection)">' +
+    '<button type="button" class="tt-color-dark-toggle" title="Edit other mode\'s text color">🌙</button>' +
+    '<input type="color" class="tt-color-dark" title="Text color (selection), other mode" style="display:none">' +
     '<span class="tt-sep"></span>' +
     '<button type="button" class="tt-align" data-align="left" title="Align left">' + ALIGN_ICONS.left + '</button>' +
     '<button type="button" class="tt-align" data-align="center" title="Align center">' + ALIGN_ICONS.center + '</button>' +
@@ -5827,13 +6142,45 @@ function buildTextToolbar() {
      field's own blur handler already treats any focus landing inside
      TEXT_TOOLBAR as "don't end the edit", so no extra plumbing is needed
      to keep the edit alive while the picker's open. */
+  /* both swatches guard against a real <input type=color> footgun: opening
+     the native picker and confirming it (eg clicking its own "OK") fires
+     "input"/"change" even if the user never actually moved off the value it
+     was pre-filled with - which for the secondary swatch is very often just
+     an autoDarkVariant() SUGGESTION, never confirmed by a real ta edit. Left
+     unguarded, a ta merely opening the toggle to see what the other theme
+     would look like (see the toggle button below) and clicking away would
+     silently bake that guess in as a permanent override. dataset.baseline
+     tracks the value as of the last prime (updateTextToolbarState()) or the
+     last real commit, so only an actual change past that point counts. */
   var colorInput = TEXT_TOOLBAR.querySelector(".tt-color");
   colorInput.addEventListener("mousedown", function (e) { e.stopPropagation(); });
   colorInput.addEventListener("input", function () {
-    document.execCommand("foreColor", false, colorInput.value);
+    if (colorInput.value === colorInput.dataset.baseline) return;
+    colorInput.dataset.baseline = colorInput.value;
+    if (TEXT_TOOLBAR_EL) applyThemedForeColor(TEXT_TOOLBAR_EL, colorInput.value);
   });
   colorInput.addEventListener("change", function () {
     if (TEXT_TOOLBAR_EL) TEXT_TOOLBAR_EL.focus();
+  });
+
+  /* the secondary swatch always edits whichever theme ISN'T currently
+     showing, same "primary tracks live theme, secondary is the other one"
+     split as the style popover's own rows (see primeThemedColorRow()) -
+     just scoped to a text selection instead of a whole element. */
+  var colorDarkInput = TEXT_TOOLBAR.querySelector(".tt-color-dark");
+  var colorDarkToggle = TEXT_TOOLBAR.querySelector(".tt-color-dark-toggle");
+  colorDarkInput.addEventListener("mousedown", function (e) { e.stopPropagation(); });
+  colorDarkInput.addEventListener("input", function () {
+    if (colorDarkInput.value === colorDarkInput.dataset.baseline) return;
+    colorDarkInput.dataset.baseline = colorDarkInput.value;
+    if (TEXT_TOOLBAR_EL) applyThemedForeColor(TEXT_TOOLBAR_EL, colorDarkInput.value, !isDarkThemeActive());
+  });
+  colorDarkInput.addEventListener("change", function () {
+    if (TEXT_TOOLBAR_EL) TEXT_TOOLBAR_EL.focus();
+  });
+  colorDarkToggle.addEventListener("mousedown", function (e) { e.preventDefault(); e.stopPropagation(); });
+  colorDarkToggle.addEventListener("click", function () {
+    colorDarkInput.style.display = colorDarkInput.style.display === "none" ? "" : "none";
   });
 
   TEXT_TOOLBAR.querySelectorAll(".tt-align").forEach(function (btn) {
@@ -5996,7 +6343,17 @@ function updateFontDeleteButton() {
  * document.queryCommandState() (only meaningful with the field focused),
  * align reads the field's own inline override (not its computed style, so a
  * field that merely inherits center alignment from a parent doesn't show as
- * "active" until a ta actually sets it here).
+ * "active" until a ta actually sets it here). The color swatches follow the
+ * same primary/secondary split as the style popover's rows (see
+ * primeThemedColorRow()): the primary ".tt-color" always shows whatever's
+ * actually painted right now (already correct for either theme since
+ * repaintInlineTextColors() keeps the selection's live color resolved), the
+ * secondary ".tt-color-dark" shows the other theme's EXPLICIT value if the
+ * selection sits inside a tagged span that has one (selectionColorSpan()),
+ * else an autoDarkVariant() suggestion, hidden until the toggle button
+ * reveals it - a fresh suggestion never counts as "the ta set this",
+ * exactly the pollution bug primeThemedColorRow() itself had to be fixed
+ * for.
  */
 function updateTextToolbarState() {
   if (!TEXT_TOOLBAR || !TEXT_TOOLBAR_EL) return;
@@ -6010,7 +6367,22 @@ function updateTextToolbarState() {
   });
   var curColor = "";
   try { curColor = document.queryCommandValue("foreColor"); } catch (e) {}
-  TEXT_TOOLBAR.querySelector(".tt-color").value = rgbToHex(curColor) || "#000000";
+  var primaryHex = rgbToHex(curColor) || "#000000";
+  var colorInput = TEXT_TOOLBAR.querySelector(".tt-color");
+  colorInput.value = primaryHex;
+  colorInput.dataset.baseline = primaryHex;
+
+  var dark = isDarkThemeActive();
+  var span = selectionColorSpan(TEXT_TOOLBAR_EL);
+  var explicitOther = span ? (dark ? span.dataset.lightColor : span.dataset.darkColor) : null;
+  var colorDarkInput = TEXT_TOOLBAR.querySelector(".tt-color-dark");
+  var suggestedOther = explicitOther || autoDarkVariant(primaryHex);
+  colorDarkInput.value = suggestedOther;
+  colorDarkInput.dataset.baseline = suggestedOther;
+  colorDarkInput.style.display = explicitOther ? "" : "none";
+  var toggle = TEXT_TOOLBAR.querySelector(".tt-color-dark-toggle");
+  toggle.textContent = dark ? "☀️" : "🌙";
+  toggle.title = dark ? "Edit light mode text color (selection)" : "Edit dark mode text color (selection)";
 }
 
 /**
@@ -7025,6 +7397,7 @@ function initObjectCanvas() {
     renderCustomElements(data.custom_elements);
     renderDuplicates(data.duplicates);
     applyTextOverrides(data.text || {});
+    repaintInlineTextColors();
     applyThemeIconOverrides(data.theme_icons);
     if (window.refreshThemeToggles) window.refreshThemeToggles();
     applySizeOverrides(data.sizes);
@@ -7142,6 +7515,7 @@ document.addEventListener("DOMContentLoaded", function () {
       renderCustomElements(data.custom_elements);
       renderDuplicates(data.duplicates);
       applyTextOverrides(textMap);
+      repaintInlineTextColors();
       applyThemeIconOverrides(data.theme_icons);
       if (window.refreshThemeToggles) window.refreshThemeToggles();
       applySizeOverrides(data.sizes);

@@ -31,6 +31,13 @@
        tracked elements never loaded main.js's apply*Overrides() passes at
        all, same guard reapplyThemedColors() plays with refreshThemeToggles. */
     if (window.reapplyThemedColors) window.reapplyThemedColors();
+    /* if a ta has the style popover open while flipping the toggle, its
+       Color/Text color/Fill/Border swatches need to swap which one
+       (light/dark) is primary right along with everything else on the
+       page - otherwise the panel would keep showing whichever mode was
+       active when it was opened. window.-gated for the same reason as
+       reapplyThemedColors above (a page with no editor loaded at all). */
+    if (window.refreshStyleMenuTheme) window.refreshStyleMenuTheme();
   }
 
   /**

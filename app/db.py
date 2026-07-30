@@ -47,6 +47,104 @@ NAV_FIXED_IDS = [
     "nav.portal", "box.themeBtn", "box.logoutBtn",
 ]
 
+# the "What You'll Learn" section's reel (see the "reel" custom-element kind
+# in js/main.js): used to be hardcoded markup in templates/index.html, now a
+# real placed reel like a ta could build themselves, so it's deletable/
+# resizable/recolorable and its tiles can have new content dropped onto
+# them. Reuses the exact same icon.learn.cardN / learn.cardN.title /
+# learn.cardN.body ids the old markup carried, so every override a ta
+# already made via click-to-edit (font size, color, text, ...) keeps
+# resolving against the same id and applies with zero data transformation -
+# see _learn_reel_overlay()/_migrate_learn_reel() below. Icon markup mirrors
+# ICON_LIBRARY's "Circuit"/"Component"/"Soldering iron"/"Chip"/"Cube"/"Flag"
+# entries in js/main.js (the old markup's own icons, just inlined here since
+# this is python, not js).
+_LEARN_REEL_ICONS = [
+    '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" '
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12h3" /><path d="M19 12h3" />'
+    '<path d="M5 12c2-7 4-7 6 0s4 7 6 0" /></svg>',
+    '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" '
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h6" /><path d="M21 12h-6" />'
+    '<path d="M9 7l6 5-6 5z" /><path d="M15 7v10" /></svg>',
+    '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" '
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 7l4 4L7 21H3v-4z" />'
+    '<path d="M15 5l2-2 4 4-2 2" /></svg>',
+    '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" '
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5" />'
+    '<path d="M9 3v3M12 3v3M15 3v3M9 18v3M12 18v3M15 18v3M3 9h3M3 12h3M3 15h3M18 9h3M18 12h3M18 15h3" /></svg>',
+    '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" '
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2l9 5v10l-9 5-9-5V7z" />'
+    '<path d="M12 12l9-5M12 12v10M12 12L3 7" /></svg>',
+    '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" '
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3v18" /><path d="M6 4h13v8H6z" />'
+    '<path d="M6 4h4.3v4H6zM14.7 4H19v4h-4.3zM10.3 8h4.4v4h-4.4z" fill="currentColor" stroke="none" /></svg>',
+]
+
+_LEARN_REEL_CARDS = [
+    {"title": "Electronics & Circuit Design", "body": "Build and debug real circuits using oscilloscopes, multimeters, function generators, and power supplies. Learn circuit analysis, prototyping, testing, and troubleshooting techniques."},
+    {"title": "Transistors, Diodes, Capacitors & Inductors", "body": "Learn how fundamental electronic components work, giving you a head start in 2nd-year courses like ECE231 and ECE212."},
+    {"title": "Soldering & PCB Assembly", "body": "Learn professional soldering techniques, component placement, rework, and PCB assembly."},
+    {"title": "Embedded Systems", "body": "Program an Arduino-compatible microcontroller to read sensors, generate signals, control motors, and talk to external hardware."},
+    {"title": "CAD & 3D Printing", "body": "Learn the basics of Fusion 360 and 3D printing to design, manufacture, and assemble your own robot."},
+    {"title": "Robotics Competition", "body": "Bring your robot to life and race it head-to-head against the rest."},
+]
+
+
+def _learn_reel_overlay():
+    """builds the migrated "What You'll Learn" reel's custom-element entry
+    plus the flat per-id override maps (text/font_sizes/text_styles/colors)
+    its tiles' bound children need to look/read right - see
+    _LEARN_REEL_ICONS/_LEARN_REEL_CARDS above. Position/tile size are a
+    one-time approximation eyeballed against the live rendered page at a
+    1280px viewport (the old section's own heading-to-video-row gap), not
+    analytically derived - a ta can drag/resize it like anything else if a
+    narrower viewport leaves it looking off; see the reserved min-height
+    left in its place in templates/index.html so the video row below it
+    doesn't collide with it in the meantime.
+    @return (entry, text, font_sizes, text_styles, colors)
+    """
+    tiles = []
+    text, font_sizes, text_styles, colors = {}, {}, {}, {}
+    for i, card in enumerate(_LEARN_REEL_CARDS, start=1):
+        icon_id = "icon.learn.card%d" % i
+        title_id = "learn.card%d.title" % i
+        body_id = "learn.card%d.body" % i
+        tiles.append({
+            "id": "learn.reel.tile.%d" % (i - 1),
+            "children": [
+                {"id": icon_id, "kind": "icon", "left": 20, "top": 22, "icon": _LEARN_REEL_ICONS[i - 1]},
+                {"id": title_id, "kind": "text", "left": 58, "top": 24, "w": 240, "h": 46},
+                {"id": body_id, "kind": "text", "left": 20, "top": 80, "w": 280, "h": 130},
+            ],
+        })
+        text[title_id] = card["title"]
+        text[body_id] = card["body"]
+        # 1.05rem/var(--font-head) matches the old .card h3's own rule (see
+        # css/style.css); "text" kind text_styles has no bold control, so
+        # this is an approximation, not pixel-identical to the old markup
+        font_sizes[title_id] = "1.05rem"
+        text_styles[title_id] = {"fontFamily": "var(--font-head)"}
+        colors[body_id] = "var(--muted)"
+    entry = {
+        "id": "learn.reel", "kind": "reel", "orientation": "horizontal",
+        "left": 80, "top": 1888, "tileW": 320, "tileH": 230,
+        # explicit panel size, unlike a freshly-placed reel (which freezes
+        # at its own just-rendered pre-clone size, see addCustomElement()):
+        # this entry is built once at page load already past the point
+        # js/learn-reel.js has cloned it 4x for the loop (renderCustomElements()
+        # runs before initAllReels(), see the call order in main.js), so
+        # without an explicit width here the panel would size itself to fit
+        # all 24 cloned tiles unclipped instead of acting as a proper
+        # scrolling/drifting viewport - see initReel().
+        "w": 1160, "h": 230,
+        "tiles": tiles,
+    }
+    return entry, text, font_sizes, text_styles, colors
+
+
+(_LEARN_REEL_ENTRY, _LEARN_REEL_TEXT, _LEARN_REEL_FONT_SIZES,
+ _LEARN_REEL_TEXT_STYLES, _LEARN_REEL_COLORS) = _learn_reel_overlay()
+
 # starting content, same shape as the old hardcoded DAYS/EXTRAS/timer vars.
 # only used the first time the content table is empty.
 DEFAULT_CONTENT = {
@@ -235,6 +333,11 @@ DEFAULT_CONTENT = {
     "dark_fill": {},
     "dark_border": {},
 }
+DEFAULT_CONTENT["custom_elements"].append(_LEARN_REEL_ENTRY)
+DEFAULT_CONTENT["text"].update(_LEARN_REEL_TEXT)
+DEFAULT_CONTENT["font_sizes"].update(_LEARN_REEL_FONT_SIZES)
+DEFAULT_CONTENT["text_styles"].update(_LEARN_REEL_TEXT_STYLES)
+DEFAULT_CONTENT["colors"].update(_LEARN_REEL_COLORS)
 
 # starter "objects" library entries (see the objects table below): reusable
 # element bundles a ta can drop onto the page from the visual editor's
@@ -572,6 +675,7 @@ def init_db():
     _seed_default_profile(conn)
     _seed_last_applied_profile(conn)
     _seed_default_objects(conn)
+    _migrate_learn_reel(conn)
     conn.close()
 
 
@@ -841,6 +945,50 @@ def _seed_default_objects(conn):
             "INSERT INTO objects (owner, name, data) VALUES (?, ?, ?)",
             ("system", obj["name"], json.dumps(data)),
         )
+    conn.commit()
+
+
+def _migrate_learn_reel(conn):
+    """one-time patch (same meta-flag trick as _seed_default_objects()) that
+    adds the "What You'll Learn" reel (see _learn_reel_overlay()) to every
+    already-existing content blob that predates it - the live content row
+    AND every saved profile - so an old profile applied after this ships
+    doesn't render a blank gap where the reel used to sit (its hardcoded
+    markup is gone from templates/index.html now, replaced by the "reel"
+    custom-element kind in js/main.js). A brand-new db never needs this:
+    DEFAULT_CONTENT already carries the reel, so _seed_content() bakes it in
+    directly.
+    @param conn an open db connection
+    """
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO meta (key, value) VALUES ('learn_reel_migrated', '1')"
+    )
+    conn.commit()
+    if cur.rowcount == 0:
+        return
+
+    def patch(data):
+        ids = [c.get("id") for c in data.get("custom_elements", [])]
+        if "learn.reel" in ids:
+            return data, False
+        data.setdefault("custom_elements", []).append(json.loads(json.dumps(_LEARN_REEL_ENTRY)))
+        data.setdefault("text", {}).update(_LEARN_REEL_TEXT)
+        data.setdefault("font_sizes", {}).update(_LEARN_REEL_FONT_SIZES)
+        data.setdefault("text_styles", {}).update(_LEARN_REEL_TEXT_STYLES)
+        data.setdefault("colors", {}).update(_LEARN_REEL_COLORS)
+        return data, True
+
+    row = conn.execute("SELECT data FROM content WHERE id = 1").fetchone()
+    if row:
+        data, changed = patch(json.loads(row["data"]))
+        if changed:
+            conn.execute("UPDATE content SET data = ? WHERE id = 1", (json.dumps(data),))
+
+    for prow in conn.execute("SELECT id, data FROM profiles").fetchall():
+        data, changed = patch(json.loads(prow["data"]))
+        if changed:
+            conn.execute("UPDATE profiles SET data = ? WHERE id = ?", (json.dumps(data), prow["id"]))
+
     conn.commit()
 
 

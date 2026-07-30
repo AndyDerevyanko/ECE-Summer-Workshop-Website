@@ -28,6 +28,7 @@
   --grid-line-strong: rgba(255,255,255,0.1);
   --vignette:  rgba(0,0,0,0.45);
   --shadow:    0 14px 34px rgba(0,0,0,0.40);
+  --shadow-pop: 0 22px 46px rgba(0,0,0,0.5), 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
   --glow:      0 0 0 rgba(0,0,0,0);
 
   --maxw: 1120px;
@@ -57,6 +58,7 @@
   --grid-line-strong: rgba(20,30,50,0.12);
   --vignette:  rgba(120,135,160,0.22);
   --shadow:    0 14px 30px rgba(40,55,80,0.12);
+  --shadow-pop: 0 22px 40px rgba(40,55,80,0.22), 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent);
   --glow:      0 0 0 rgba(0,0,0,0);
 }
 
@@ -447,6 +449,87 @@ h1, h2, h3 {
 .card-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
 .card-head h3 { margin: 0; }
 .card .emoji { font-size: 1.9rem; display: block; margin-bottom: 10px; }
+
+/* ---------- reel (auto-drifting horizontal/vertical tile strip) ----------
+   placed via the visual editor's right-click "Add element" > Reel/Vertical
+   reel (addCustomElement()'s "reel" kind, js/main.js) - the panel (.reel)
+   is a normal resizable/movable/deletable/colorable custom element; its
+   tiles (.reel-tile) are individually selectable/stylable (color/radius/
+   border/opacity, generic via colorTarget()/elKind()) but can't be
+   independently moved/resized/deleted, since they live in the track's flex
+   flow (see the data-reel-tile guards throughout js/main.js). Drifts on its
+   own via js/learn-reel.js (a compositor Web Animation, not rAF, so idle
+   drift can't be throttled choppy - see initReel()), hovering a tile eases
+   the drift to a stop and pops it instead of just pausing dead.
+   .reel--editor-scroll is the ta-editor mode (manual scrollbar, still
+   loops, no autoplay/pop - see initReel()); .static-grid is the
+   prefers-reduced-motion fallback (a single plain grid, no scroll/drift at
+   all). */
+.reel { position: relative; margin: 6px 0; }
+.reel-mask {
+  overflow: hidden;
+  /* padding + matching negative margin: gives a popped tile room to scale
+     up without being clipped by this element's own box, without adding
+     any actual layout space */
+  padding: 30px 0;
+  margin: -30px 0;
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 64px, #000 calc(100% - 64px), transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0, #000 64px, #000 calc(100% - 64px), transparent 100%);
+}
+.reel-track { display: flex; gap: 20px; width: max-content; will-change: transform; }
+.reel-tile {
+  position: relative;
+  flex: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: transform .32s cubic-bezier(.2,.8,.2,1), box-shadow .32s ease, border-color .2s ease;
+}
+.reel-tile.popped { transform: scale(1.08); box-shadow: var(--shadow-pop); z-index: 5; }
+
+.reel--vertical .reel-mask {
+  padding: 0 30px;
+  margin: 0 -30px;
+  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 64px, #000 calc(100% - 64px), transparent 100%);
+  mask-image: linear-gradient(180deg, transparent 0, #000 64px, #000 calc(100% - 64px), transparent 100%);
+}
+.reel--vertical .reel-track { flex-direction: column; width: auto; height: max-content; }
+
+/* a fading edge reads as "more content, unreachable" - wrong once there's a
+   real scrollbar, so it's dropped here even though the track is still the
+   same cloned-for-looping one live mode builds (see initReel()) */
+.reel--editor-scroll .reel-mask {
+  overflow-x: auto;
+  padding: 0;
+  margin: 0;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+.reel--editor-scroll.reel--vertical .reel-mask { overflow-x: hidden; overflow-y: auto; max-height: 60vh; }
+
+.reel.static-grid .reel-mask {
+  overflow: visible;
+  padding: 0;
+  margin: 0;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+.reel.static-grid .reel-track {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  width: auto;
+  transform: none !important;
+}
+/* initReel() clears each tile's inline width/height for this fallback
+   only, so this can actually win (an inline style otherwise always beats a
+   stylesheet rule regardless of selector) */
+.reel.static-grid .reel-tile { width: auto; height: auto; }
+@media (max-width: 860px) {
+  .reel.static-grid .reel-track { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 540px) {
+  .reel.static-grid .reel-track { grid-template-columns: 1fr; }
+}
 
 /* placeholder image box, no real assets yet */
 .ph {
@@ -1448,6 +1531,19 @@ body.edit-mode .apply-bob { animation: none; }
   cursor: not-allowed;
   pointer-events: none;
   opacity: .5;
+}
+
+/* reel tile (see data-reel-tile in js/main.js): selectable enough to reach
+   the style popover (.sth), but not independently movable/resizable/
+   deletable/layer-reorderable - a tile lives in the reel's flex track,
+   detaching it via any of those would break the layout. Hidden outright
+   rather than dimmed like .locked above, since this isn't a toggleable
+   per-element state. */
+.sel-ring.reel-tile .rh,
+.sel-ring.reel-tile .mvh,
+.sel-ring.reel-tile .delh,
+.sel-ring.reel-tile .lyh {
+  display: none;
 }
 
 /* delete handle, inset into the top-right corner (move handle mirrors it

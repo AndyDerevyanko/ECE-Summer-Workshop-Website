@@ -3654,6 +3654,7 @@ function positionRing() {
   RING.style.width = r.width + "px";
   RING.style.height = r.height + "px";
   RING.classList.toggle("locked", isLocked(elId(RING_EL)));
+  RING.classList.toggle("reel-tile", RING_EL.hasAttribute("data-reel-tile"));
 }
 
 /**
@@ -3716,7 +3717,11 @@ function freezeDescendants(el) {
  * @param e the handle's mousedown
  */
 function startResizeDrag(e) {
-  if (!RING_EL) return;
+  /* a reel tile can't detachFromFlow() without breaking the flex track it
+     lives in - this only ever fires from the ring's own (already CSS-hidden
+     for a tile, see positionRing()) handle buttons, so it's defense in
+     depth, not the real gate */
+  if (!RING_EL || RING_EL.hasAttribute("data-reel-tile")) return;
   e.preventDefault();
   e.stopPropagation();
   var el = RING_EL;
@@ -3781,7 +3786,7 @@ function startResizeDrag(e) {
  * @param e the handle's mousedown
  */
 function startMoveDrag(e) {
-  if (!RING_EL || isLocked(elId(RING_EL))) return;
+  if (!RING_EL || isLocked(elId(RING_EL)) || RING_EL.hasAttribute("data-reel-tile")) return;
   e.preventDefault();
   e.stopPropagation();
   var el = RING_EL;
@@ -3883,6 +3888,11 @@ function setElementHidden(id, hidden) {
  * @param el the element to delete (always the current RING_EL)
  */
 function deleteElement(el) {
+  /* a reel tile isn't an independently deletable thing - only the reel
+     panel itself is (see buildReelElement()); this guard covers both the
+     ring's own trash handle AND the Delete/Backspace keydown handler
+     (see wireResizable()), since both call this one function */
+  if (el.hasAttribute("data-reel-tile")) return;
   var id = elId(el);
   if (!id) return;
   /* a grouped element (see groupOf()) takes every other member down with
@@ -4361,6 +4371,23 @@ function freezeFreeElement(el) {
  * @return the built, attached element
  */
 function buildCustomElement(d) {
+  var el = buildCustomElementNode(d);
+  placeFreeElement(el, d.left, d.top);
+  if (d.w) { el.style.width = d.w + "px"; el.dataset.natW = d.w; }
+  if (d.h) { el.style.height = d.h + "px"; el.dataset.natH = d.h; }
+  return el;
+}
+
+/**
+ * The kind-dispatch half of buildCustomElement(): builds and fills in one
+ * descriptor's DOM node, but doesn't place it - split out so a reel tile's
+ * bound child (see buildReelElement()) can be built the exact same way
+ * every top-level custom element is, then appended straight into its tile
+ * instead of going through placeFreeElement()/document.body.
+ * @param d see buildCustomElement()
+ * @return the built, unplaced element
+ */
+function buildCustomElementNode(d) {
   var el;
   if (d.kind === "text") {
     el = document.createElement("div");
@@ -4458,6 +4485,8 @@ function buildCustomElement(d) {
     themeLabel.setAttribute("data-edit-id", d.id + ".label");
     themeLabel.textContent = "Light mode";
     el.appendChild(themeLabel);
+  } else if (d.kind === "reel") {
+    el = buildReelElement(d);
   } else if (d.icon) {
     /* built-in or ta-uploaded icon: always real inline <svg> markup, never
        an <img>, so a future color-restyle tool can just set fill/stroke via
@@ -4482,10 +4511,90 @@ function buildCustomElement(d) {
     el = svgFromMarkup(ICON_LIBRARY[0].svg);
     el.setAttribute("data-resize-id", d.id);
   }
-  placeFreeElement(el, d.left, d.top);
-  if (d.w) { el.style.width = d.w + "px"; el.dataset.natW = d.w; }
-  if (d.h) { el.style.height = d.h + "px"; el.dataset.natH = d.h; }
   return el;
+}
+
+/**
+ * Appends el into tileEl at (x, y), the reel-tile equivalent of
+ * placeFreeElement(): same position:absolute + zeroed-margin/max-width
+ * setup, wrapped in the same ".free-wrap" span placeFreeElement() uses,
+ * just appended into tileEl instead of document.body. Using the exact same
+ * wrap convention means detachFromFlow()'s existing "already free" short-
+ * circuit (checking el.parentNode for a .free-wrap class) recognizes a
+ * bound child immediately, so every later independent move/resize/delete
+ * on it (see startResizeDrag()/startMoveDrag()/deleteElement()) needs zero
+ * reel-specific code - it works exactly as it would for any other custom
+ * element, just anchored to its tile (data-resize-id="1" on the tile, see
+ * buildReelElement()) instead of the page.
+ * @param tileEl the reel-tile div to append into
+ * @param el the built, unplaced element (see buildCustomElementNode())
+ * @param x left, tile-relative px
+ * @param y top, tile-relative px
+ * @return el
+ */
+function placeInTile(tileEl, el, x, y) {
+  var wrap = document.createElement("span");
+  wrap.className = "free-wrap";
+  wrap.style.position = "absolute";
+  wrap.style.left = x + "px";
+  wrap.style.top = y + "px";
+  tileEl.appendChild(wrap);
+  el.style.position = "absolute";
+  el.style.top = "0";
+  el.style.left = "0";
+  el.style.margin = "0";
+  el.style.maxWidth = "none";
+  wrap.appendChild(el);
+  return el;
+}
+
+/**
+ * Builds a reel's whole DOM subtree (see js/learn-reel.js for the runtime
+ * drift/hover/loop behavior this markup drives): a resizable/movable/
+ * deletable panel (.reel > .reel-mask > .reel-track), and a fixed set of
+ * content tiles inside the track. Tiles are individually selectable/
+ * stylable (data-resize-id, so the generic color/radius/border/opacity
+ * style-popover rows apply to them automatically, see colorTarget()/
+ * elKind()) but are marked data-reel-tile="1" so they're excluded from
+ * every path that would otherwise detachFromFlow() them out of the flex
+ * track (deleteElement(), the delegated drag-anywhere mousedown handler,
+ * arrow-key nudge, startResizeDrag()/startMoveDrag() - see those functions'
+ * own data-reel-tile guards). Whatever a ta has already dropped onto a tile
+ * (d.tiles[i].children) is built via buildCustomElementNode() and appended
+ * straight into that tile via placeInTile(), so it's a real DOM descendant
+ * that travels with its tile once js/learn-reel.js starts scrolling it -
+ * not just a page element that happens to visually overlap it.
+ * @param d {id, orientation, tileW, tileH, tiles: [{id, children}]}
+ * @return the unplaced panel element (placeFreeElement()'d by the caller,
+ *   buildCustomElement(), exactly like every other kind)
+ */
+function buildReelElement(d) {
+  var panel = document.createElement("div");
+  panel.className = "reel reel--" + (d.orientation === "vertical" ? "vertical" : "horizontal");
+  panel.setAttribute("data-resize-id", d.id);
+  var mask = document.createElement("div");
+  mask.className = "reel-mask";
+  var track = document.createElement("div");
+  track.className = "reel-track";
+  mask.appendChild(track);
+  panel.appendChild(mask);
+  (d.tiles || []).forEach(function (t) {
+    var tile = document.createElement("div");
+    tile.className = "reel-tile";
+    tile.setAttribute("data-resize-id", t.id);
+    tile.setAttribute("data-reel-tile", "1");
+    tile.style.width = (d.tileW || 280) + "px";
+    tile.style.height = (d.tileH || 200) + "px";
+    (t.children || []).forEach(function (childD) {
+      var childEl = buildCustomElementNode(childD);
+      placeInTile(tile, childEl, childD.left || 0, childD.top || 0);
+      if (childD.w) { childEl.style.width = childD.w + "px"; childEl.dataset.natW = childD.w; }
+      if (childD.h) { childEl.style.height = childD.h + "px"; childEl.dataset.natH = childD.h; }
+      if (childD.kind === "text" || childD.kind === "button") wireTextField(childEl);
+    });
+    track.appendChild(tile);
+  });
+  return panel;
 }
 
 /**
@@ -4822,6 +4931,98 @@ function customElementById(id) {
   return null;
 }
 
+/* default placed size for the addCustomElement() kinds that have a fixed
+   one at build time - text/button/icon/datetime/theme all size themselves
+   from their own content/default instead, so there's no hitbox to test yet
+   for those; see findReelTileHit(). */
+var REEL_DEFAULT_HIT_SIZE = { box: [160, 100], image: [240, 180], video: [320, 200] };
+
+/* how many blank tiles a freshly-placed reel starts with (see
+   addCustomElement()'s "reel" branch) - enough to visibly read as a reel
+   without being an unwieldy blank slab a ta has to fill in before it looks
+   like anything. */
+var REEL_DEFAULT_TILE_COUNT = 4;
+
+/**
+ * Finds the reel tile (if any) that a new element being placed at document
+ * (x, y) should bind into instead of landing as an independent page
+ * element (see addCustomElement()/addBoundElement()): the drop point
+ * itself, OR - for kinds with a known fixed placed size (box/image/video,
+ * see REEL_DEFAULT_HIT_SIZE) - the element's own about-to-be-placed hitbox,
+ * either one touching a tracked reel-tile's box. Cursor alone is the
+ * fallback for every other kind, since text/button/icon/datetime/theme all
+ * size themselves from their own content/default rather than a fixed box,
+ * so there's nothing to hit-test until after they're already built.
+ * @param x drop point left, document px
+ * @param y drop point top, document px
+ * @param kind the element kind being added
+ * @return the hit tile element, or null if neither the cursor nor the
+ *   hitbox touches any tracked reel tile
+ */
+function findReelTileHit(x, y, kind) {
+  var size = REEL_DEFAULT_HIT_SIZE[kind];
+  var tiles = document.querySelectorAll('[data-reel-tile="1"]');
+  for (var i = 0; i < tiles.length; i++) {
+    var r = tiles[i].getBoundingClientRect();
+    var left = r.left + window.scrollX, top = r.top + window.scrollY;
+    var right = left + r.width, bottom = top + r.height;
+    if (x >= left && x <= right && y >= top && y <= bottom) return tiles[i];
+    if (size) {
+      var ex2 = x + size[0], ey2 = y + size[1];
+      if (!(x > right || ex2 < left || y > bottom || ey2 < top)) return tiles[i];
+    }
+  }
+  return null;
+}
+
+/**
+ * Finishes wiring a freshly built custom element identically regardless of
+ * whether it landed as a top-level page element (addCustomElement()) or
+ * bound into a reel tile (addBoundElement()): text/button fields get
+ * click-to-edit wiring, a theme toggle gets its nested label wired and
+ * synced to the live theme, and a button's initial link (if any) is applied
+ * as a real href.
+ * @param el the built, placed element
+ * @param d its descriptor (already has final left/top/w/h)
+ * @param kind the element kind
+ * @param extra the same extra addCustomElement() was called with
+ */
+function finishAddedElement(el, d, kind, extra) {
+  if (kind === "text" || kind === "button") wireTextField(el);
+  if (kind === "reel" && window.initReel) {
+    /* every other kind is fully live the instant it's built, but a reel's
+       drift/hover/loop only starts once js/learn-reel.js clones and wires
+       it (initAllReels(), normally run once at page load right after
+       renderCustomElements()) - a freshly placed one needs that same call
+       made on it directly, or it'd just sit as a static, unclipped row of
+       tiles until the next reload. Runs AFTER freezeFreeElement() above has
+       already frozen the panel at its pre-clone (4-tile) natural size, so
+       the clones added here correctly overflow into that already-frozen
+       box instead of growing it, exactly like the migrated reel's own
+       explicit w/h does (see _learn_reel_overlay() in app/db.py). */
+    window.initReel(el);
+  }
+  if (kind === "theme") {
+    /* the button itself only carries data-resize-id; its nested ".tic-label"
+       is the actual data-edit-id field, so it needs its own wireTextField()
+       call. Also sync its text to the live theme right away, since it was
+       just built with a hardcoded "Light mode" default regardless of which
+       theme is actually active (see refreshThemeToggles() in js/theme.js). */
+    wireTextField(el.querySelector(".tic-label"));
+    if (window.refreshThemeToggles) window.refreshThemeToggles();
+  }
+  /* a button's own initial link (see LINKS/applyOneLink()) is part of its
+     creation, not a separately undoable step: undoing the "add" just hides
+     the button, href and all, so redoing brings the same link straight back
+     with no extra bookkeeping needed here */
+  if (kind === "button" && extra.href) {
+    applyOneLink(el, extra.href);
+    LINKS[d.id] = extra.href;
+    saveEditedLink(d.id, extra.href);
+    applyLinkHighlight();
+  }
+}
+
 /**
  * Adds one new element via the visual editor's right-click "Add element"
  * menu (see wireAddElementMenu()): built through buildCustomElement(), the
@@ -4830,15 +5031,19 @@ function customElementById(id) {
  * content.custom_elements so it round-trips through Apply/profiles like
  * everything else the editor creates. Always lands on the very top of the
  * stacking order (see moveLayer()), matching what a ta would expect from
- * something they just placed.
- * @param kind "text", "button", "box", "image", "video", "icon", "datetime", or "theme"
+ * something they just placed. If (x, y) (or, for box/image/video, the new
+ * element's own hitbox) lands on a reel tile, delegates to
+ * addBoundElement() instead - see findReelTileHit().
+ * @param kind "text", "button", "box", "image", "video", "icon", "datetime",
+ *   "theme", or "reel"
  * @param x left, document px (where the menu was opened)
  * @param y top, document px
  * @param extra {icon, url} for kind "icon" (a built-in's svg markup, or an
  *   uploaded one's url), {href} for kind "button", {url} for kind "image"/
  *   "video" (the uploaded file's url, see uploadEditorFile()); "datetime"
  *   takes sensible defaults (countdown, 30 days out) and is configured from
- *   the style popover afterward (see buildStyleMenu())
+ *   the style popover afterward (see buildStyleMenu()); {orientation} for
+ *   kind "reel" ("horizontal" or "vertical")
  * @return the new element
  */
 function addCustomElement(kind, x, y, extra) {
@@ -4852,6 +5057,19 @@ function addCustomElement(kind, x, y, extra) {
     d.format = extra.format || "countdown";
     d.strftime = extra.strftime || "";
   }
+  if (kind === "reel") {
+    d.orientation = extra.orientation === "vertical" ? "vertical" : "horizontal";
+    d.tileW = 280;
+    d.tileH = 200;
+    d.tiles = [];
+    for (var ti = 0; ti < REEL_DEFAULT_TILE_COUNT; ti++) {
+      d.tiles.push({ id: d.id + ".tile." + ti, children: [] });
+    }
+  }
+
+  var tileHit = kind === "reel" ? null : findReelTileHit(x, y, kind);
+  if (tileHit) return addBoundElement(tileHit, kind, d, extra);
+
   var el = buildCustomElement(d);
   freezeFreeElement(el);
   d.w = parseFloat(el.dataset.natW);
@@ -4861,26 +5079,7 @@ function addCustomElement(kind, x, y, extra) {
   LAYER_ORDER.push(d.id);
   applyLayerOrder(LAYER_ORDER);
   saveLayerOrder(LAYER_ORDER);
-  if (kind === "text" || kind === "button") wireTextField(el);
-  if (kind === "theme") {
-    /* the button itself only carries data-resize-id; its nested ".tic-label"
-       is the actual data-edit-id field, so it needs its own wireTextField()
-       call. Also sync its text to the live theme right away, since it was
-       just built with a hardcoded "Light mode" default regardless of which
-       theme is actually active (see refreshThemeToggles() in js/theme.js). */
-    wireTextField(el.querySelector(".tic-label"));
-    if (window.refreshThemeToggles) window.refreshThemeToggles();
-  }
-  /* a button's own initial link (see LINKS/applyOneLink()) is part of its
-     creation, not a separately undoable step: undoing the "add" below
-     just hides the button, href and all, so redoing brings the same link
-     straight back with no extra bookkeeping needed here */
-  if (kind === "button" && extra.href) {
-    applyOneLink(el, extra.href);
-    LINKS[d.id] = extra.href;
-    saveEditedLink(d.id, extra.href);
-    applyLinkHighlight();
-  }
+  finishAddedElement(el, d, kind, extra);
   /* undoing an add just hides the new element again (setElementHidden(),
      same "before" state a delete leaves behind), rather than actually
      unbuilding it: the element and its content.custom_elements entry both
@@ -4889,6 +5088,67 @@ function addCustomElement(kind, x, y, extra) {
   EDIT_UNDO.push({ type: "add", id: d.id });
   EDIT_REDO.length = 0;
   return el;
+}
+
+/**
+ * The "drop landed on a reel tile" branch of addCustomElement(): builds the
+ * same descriptor via the same buildCustomElementNode(), but appends it
+ * into tileEl (see placeInTile()) instead of document.body, and persists it
+ * nested inside the owning reel's own tiles[].children array instead of as
+ * a new top-level content.custom_elements entry - this is what makes bound
+ * content travel with its tile once js/learn-reel.js starts scrolling it
+ * (see buildReelElement()'s doc comment). Falls back to the normal unbound
+ * path if the owning reel entry can't be found for some reason (shouldn't
+ * happen - findReelTileHit() only ever returns a live tracked tile - but a
+ * silently dropped element would be a worse failure mode than a stray
+ * top-level one).
+ * @param tileEl the hit reel-tile DOM node (see findReelTileHit())
+ * @param kind the element kind being added
+ * @param d its descriptor, left/top still in page coordinates at this point
+ * @param extra see addCustomElement()
+ * @return the built, bound (or, on fallback, unbound) element
+ */
+function addBoundElement(tileEl, kind, d, extra) {
+  var tileId = elId(tileEl);
+  var reelD = null, tileD = null;
+  for (var i = 0; i < CUSTOM_ELEMENTS.length && !tileD; i++) {
+    if (CUSTOM_ELEMENTS[i].kind !== "reel") continue;
+    var found = (CUSTOM_ELEMENTS[i].tiles || []).filter(function (t) { return t.id === tileId; })[0];
+    if (found) { reelD = CUSTOM_ELEMENTS[i]; tileD = found; }
+  }
+
+  if (!tileD) {
+    var fallbackEl = buildCustomElement(d);
+    freezeFreeElement(fallbackEl);
+    d.w = parseFloat(fallbackEl.dataset.natW);
+    d.h = parseFloat(fallbackEl.dataset.natH);
+    CUSTOM_ELEMENTS.push(d);
+    saveCustomElements(CUSTOM_ELEMENTS);
+    LAYER_ORDER.push(d.id);
+    applyLayerOrder(LAYER_ORDER);
+    saveLayerOrder(LAYER_ORDER);
+    finishAddedElement(fallbackEl, d, kind, extra);
+    EDIT_UNDO.push({ type: "add", id: d.id });
+    EDIT_REDO.length = 0;
+    return fallbackEl;
+  }
+
+  var tileRect = tileEl.getBoundingClientRect();
+  d.left = Math.round(d.left - (tileRect.left + window.scrollX));
+  d.top = Math.round(d.top - (tileRect.top + window.scrollY));
+
+  var childEl = buildCustomElementNode(d);
+  placeInTile(tileEl, childEl, d.left, d.top);
+  freezeFreeElement(childEl);
+  d.w = parseFloat(childEl.dataset.natW);
+  d.h = parseFloat(childEl.dataset.natH);
+
+  tileD.children.push(d);
+  saveCustomElements(CUSTOM_ELEMENTS);
+  finishAddedElement(childEl, d, kind, extra);
+  EDIT_UNDO.push({ type: "add", id: d.id });
+  EDIT_REDO.length = 0;
+  return childEl;
 }
 
 /**
@@ -5089,11 +5349,18 @@ function renderCtxMenuRoot() {
   if (CTX_TARGET_ID) {
     var targetData = customElementById(CTX_TARGET_ID);
     var isDatetime = targetData && targetData.kind === "datetime";
-    var isSpecial = isDatetime || CTX_TARGET_ID.indexOf("logistics.") === 0 || CTX_TARGET_ID.indexOf("countdown.") === 0 ||
+    /* a reel tile isn't independently duplicable or deletable - only the
+       reel panel itself is (see buildReelElement()'s doc comment) - so it
+       joins the same "special" bucket logistics/countdown tiles already sit
+       in, which already suppresses Duplicate; Delete (new, see below) is
+       gated by the same flag */
+    var isTile = CTX_TARGET_EL && CTX_TARGET_EL.hasAttribute("data-reel-tile");
+    var isSpecial = isDatetime || isTile || CTX_TARGET_ID.indexOf("logistics.") === 0 || CTX_TARGET_ID.indexOf("countdown.") === 0 ||
       (CTX_TARGET_EL && CTX_TARGET_EL.querySelector && CTX_TARGET_EL.querySelector("#heroCountdown, #logisticsGrid"));
     toggleHtml =
       '<div class="ctx-title">This element</div>' +
       (isSpecial ? "" : '<button type="button" data-dup="1">Duplicate</button>') +
+      (isSpecial ? "" : '<button type="button" data-delete="1">Delete</button>') +
       '<button type="button" data-link-edit="1">' +
       (LINKS[CTX_TARGET_ID] ? "Edit link" : "Add link") +
       '</button>' +
@@ -5119,6 +5386,8 @@ function renderCtxMenuRoot() {
     '<button type="button" data-add="icon">Icon</button>' +
     '<button type="button" data-add="button">Button</button>' +
     '<button type="button" data-add="datetime">Date/time</button>' +
+    '<button type="button" data-add="reel">Reel <span class="ctx-obj-badge">Animated</span></button>' +
+    '<button type="button" data-add="reel-v">Vertical reel <span class="ctx-obj-badge">Animated</span></button>' +
     '<button type="button" data-add="object">Object...</button>';
   CTX_MENU.querySelectorAll("button[data-add]").forEach(function (btn) {
     btn.addEventListener("click", function () { handleCtxAdd(btn.getAttribute("data-add")); });
@@ -5127,6 +5396,13 @@ function renderCtxMenuRoot() {
   if (dupBtn) {
     dupBtn.addEventListener("click", function () {
       if (CTX_TARGET_EL) duplicateElement(CTX_TARGET_EL);
+      hideCtxMenu();
+    });
+  }
+  var deleteBtn = CTX_MENU.querySelector("[data-delete]");
+  if (deleteBtn) {
+    deleteBtn.addEventListener("click", function () {
+      if (CTX_TARGET_EL) deleteElement(CTX_TARGET_EL);
       hideCtxMenu();
     });
   }
@@ -5605,6 +5881,13 @@ function handleCtxAdd(kind) {
   if (kind === "image") { renderCtxMenuImagePicker(); return; }
   if (kind === "video") { renderCtxMenuVideoPicker(); return; }
   if (kind === "object") { renderCtxMenuObjectPicker(); return; }
+  if (kind === "reel" || kind === "reel-v") {
+    /* a fresh reel always starts blank (see addCustomElement()'s "reel"
+       branch) - no add-time sub-view needed, same as box/text */
+    addCustomElement("reel", CTX_POS.x, CTX_POS.y, { orientation: kind === "reel-v" ? "vertical" : "horizontal" });
+    hideCtxMenu();
+    return;
+  }
   /* datetime adds immediately with sensible defaults (countdown, 30 days
      out, see addCustomElement()); its format/pattern/target are all set
      afterward from the style popover, no add-time sub-view needed */
@@ -5755,6 +6038,16 @@ function wireResizable() {
     }
     /* mid-edit: leave the mouse to text selection/caret placement */
     if (el.isContentEditable) return;
+    /* a reel tile is selectable (so its style popover is reachable) but
+       can't move, resize, delete, or be shift-selected into a group -
+       any of those would detachFromFlow() it out of the flex track it
+       lives in (see buildReelElement()) - so it's selected and left at
+       that, skipping the shift-click/drag-start logic below entirely */
+    if (el.hasAttribute("data-reel-tile")) {
+      RING_EL = el;
+      positionRing();
+      return;
+    }
     /* shift-click toggles group-selection instead of starting a drag (see
        toggleSelected()); a data-edit-id text field's own click handler
        already does the same thing, this covers everything else (images,
@@ -5864,7 +6157,7 @@ function wireResizable() {
   document.addEventListener("keydown", function (e) {
     var d = ARROW_DELTAS[e.key];
     if (!d) return;
-    if (!RING_EL || isLocked(elId(RING_EL))) return;
+    if (!RING_EL || isLocked(elId(RING_EL)) || RING_EL.hasAttribute("data-reel-tile")) return;
     var active = document.activeElement;
     if (active && (active.isContentEditable || active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT")) return;
     e.preventDefault();
@@ -7540,6 +7833,7 @@ document.addEventListener("DOMContentLoaded", function () {
       applyFixedHighlight();
       applyLinkHighlight();
       applyLockHighlight();
+      if (window.initAllReels) window.initAllReels();
       if (isPreviewMode() && isEditMode()) {
         wireResizable();
         wireClickToEdit();
@@ -7556,5 +7850,6 @@ document.addEventListener("DOMContentLoaded", function () {
       setJoinUrl(DEFAULT_JOIN_URL);
       setApplyTooltip(DEFAULT_APPLY_TOOLTIP);
       applyTextOverrides({});
+      if (window.initAllReels) window.initAllReels();
     });
 });

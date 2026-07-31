@@ -15,10 +15,9 @@
    exactly when the browser guarantees full-rate callbacks anyway.
 
    In the ta editor, autoplay/hover-pop would fight editing, so a reel shows
-   a real, manually-driven scrollbar instead (still built from the same
-   cloned-for-looping track, see initReel()'s editorStatic branch) - one
-   that still wraps around seamlessly the same way the live drift loops,
-   just driven by scroll input instead of an animation.
+   a real, manually-driven scrollbar instead (see initReel()'s editorStatic
+   branch) over the plain, un-cloned set of tiles - no looping, just a hard
+   stop at either end like any other scrollable list in the editor.
 
    initAllReels() is called by js/main.js once fetchContent() has finished
    applying every text/size/position/hidden override for the load, so every
@@ -43,7 +42,12 @@ function initReel(wrap) {
   var vertical = wrap.classList.contains("reel--vertical");
   var axis = vertical ? "Y" : "X";
   var reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  var editorStatic = isPreviewMode() && isEditMode();
+  /* the object mini editor (templates/object-editor.html, ?object=1) reuses
+     this exact same editing engine against its own blank canvas instead of
+     a real page (see isObjectMode()'s doc comment in main.js) - autoplay/
+     hover-pop would fight editing there exactly the same way it would on
+     the real page, so it gets the manual-scroll mode too */
+  var editorStatic = (isPreviewMode() && isEditMode()) || isObjectMode();
 
   /* reduced motion wins over the editor's own manual-scroll mode below: a
      drifting or scroll-wrapped reel with no static fallback would just be
@@ -63,8 +67,20 @@ function initReel(wrap) {
     return;
   }
 
+  if (editorStatic) {
+    /* plain, single set of tiles, scrolled manually - no cloned loop buffer
+       and no wrap-around snap back to the other end. That trick reads
+       naturally on a live, autoplaying reel (see below), but a ta
+       deliberately scrolling through tiles to inspect/edit them doesn't
+       expect the strip to loop out from under them, and a hard stop at
+       either end is exactly what every other scrollable list in the editor
+       already does. */
+    wrap.classList.add("reel--editor-scroll");
+    return;
+  }
+
   var originalCount = track.children.length;
-  var REPEATS = 4; /* enough spare track that a fast hover-home (or a ta's own scroll) never runs it dry */
+  var REPEATS = 4; /* enough spare track that a fast hover-home never runs it dry */
   for (var r = 1; r < REPEATS; r++) {
     for (var i = 0; i < originalCount; i++) {
       var clone = track.children[i].cloneNode(true);
@@ -79,7 +95,7 @@ function initReel(wrap) {
   var setSpan = 0;
   var mask = wrap.querySelector(".reel-mask");
 
-  /** Remeasures how far one full set of tiles (+ its trailing gap) spans, along the reel's own axis, for the wrap-around. */
+  /** Remeasures how far one full set of tiles (+ its trailing gap) spans, along the reel's own axis, for the drift loop. */
   function measure() {
     var trackStyle = getComputedStyle(track);
     var gap = parseFloat(vertical ? (trackStyle.rowGap || trackStyle.gap) : (trackStyle.columnGap || trackStyle.gap)) || 0;
@@ -88,32 +104,6 @@ function initReel(wrap) {
       (lastOriginalTile.offsetLeft + lastOriginalTile.offsetWidth) - firstTile.offsetLeft + gap;
   }
   measure();
-
-  if (editorStatic) {
-    wrap.classList.add("reel--editor-scroll");
-    var scrollProp = vertical ? "scrollTop" : "scrollLeft";
-    /* starts scrolled into the second of the REPEATS cloned copies, so
-       there's a full loop's worth of buffer both behind and ahead of
-       wherever the ta first scrolls to */
-    mask[scrollProp] = setSpan;
-    var scrollTimer = null;
-    mask.addEventListener("scroll", function () {
-      /* debounced (not every scroll tick): the actual reposition only ever
-         needs to happen once scrolling has settled near an edge, doing it
-         mid-scroll risks visibly fighting the ta's own gesture */
-      if (scrollTimer) clearTimeout(scrollTimer);
-      scrollTimer = setTimeout(function () {
-        var pos = mask[scrollProp];
-        /* silently jumps by exactly one full loop - since it's an exact
-           duplicate set, the jump is visually imperceptible, the classic
-           clone-padding infinite-scroll trick */
-        if (pos < setSpan * 0.5) mask[scrollProp] = pos + setSpan;
-        else if (pos > setSpan * 1.5) mask[scrollProp] = pos - setSpan;
-      }, 120);
-    });
-    window.addEventListener("resize", measure);
-    return;
-  }
 
   var baseSpeed = 88; /* px/sec */
   var HOMING_RATE = 9; /* per-second ease-toward-target rate, see homing tick() below */

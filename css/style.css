@@ -461,10 +461,10 @@ h1, h2, h3 {
    own via js/learn-reel.js (a compositor Web Animation, not rAF, so idle
    drift can't be throttled choppy - see initReel()), hovering a tile eases
    the drift to a stop and pops it instead of just pausing dead.
-   .reel--editor-scroll is the ta-editor mode (manual scrollbar, still
-   loops, no autoplay/pop - see initReel()); .static-grid is the
-   prefers-reduced-motion fallback (a single plain grid, no scroll/drift at
-   all). */
+   .reel--editor-scroll is the ta-editor mode (manual scrollbar over the
+   plain tile set, no looping, no autoplay/pop - see initReel()); .static-grid
+   is the prefers-reduced-motion fallback (a single plain grid, no
+   scroll/drift at all). */
 .reel { position: relative; margin: 6px 0; }
 .reel-mask {
   overflow: hidden;

@@ -94,13 +94,17 @@ def _learn_reel_overlay():
     """builds the migrated "What You'll Learn" reel's custom-element entry
     plus the flat per-id override maps (text/font_sizes/text_styles/colors)
     its tiles' bound children need to look/read right - see
-    _LEARN_REEL_ICONS/_LEARN_REEL_CARDS above. Position/tile size are a
-    one-time approximation eyeballed against the live rendered page at a
-    1280px viewport (the old section's own heading-to-video-row gap), not
-    analytically derived - a ta can drag/resize it like anything else if a
-    narrower viewport leaves it looking off; see the reserved min-height
-    left in its place in templates/index.html so the video row below it
-    doesn't collide with it in the meantime.
+    _LEARN_REEL_ICONS/_LEARN_REEL_CARDS above. "left"/"top" are only a
+    same-window fallback (a one-time eyeball measurement against the live
+    rendered page at a 1280px viewport); the real positioning comes from
+    "anchor", a selector for the reserved-space spacer left in the section's
+    own flow (#learnReelAnchor in templates/index.html) - js/main.js's
+    applyElementAnchors() re-pins the reel to that element's live rect on
+    every load/resize, so it stays correctly placed under the heading no
+    matter how tall the hero above it renders (it's sized with vh units, so
+    the gap between here and the top of the page isn't a fixed pixel count).
+    A ta can still drag/resize the panel like anything else; see
+    applyElementAnchors()'s own doc comment for why that never fights this.
     @return (entry, text, font_sizes, text_styles, colors)
     """
     tiles = []
@@ -127,7 +131,8 @@ def _learn_reel_overlay():
         colors[body_id] = "var(--muted)"
     entry = {
         "id": "learn.reel", "kind": "reel", "orientation": "horizontal",
-        "left": 80, "top": 1888, "tileW": 320, "tileH": 230,
+        "anchor": "#learnReelAnchor", "left": 80, "top": 1888,
+        "tileW": 320, "tileH": 230,
         # explicit panel size, unlike a freshly-placed reel (which freezes
         # at its own just-rendered pre-clone size, see addCustomElement()):
         # this entry is built once at page load already past the point

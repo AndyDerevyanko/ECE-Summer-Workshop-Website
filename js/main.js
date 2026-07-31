@@ -4613,6 +4613,64 @@ function renderCustomElements(list) {
 }
 
 /**
+ * Re-pins any custom element carrying a stored `d.anchor` selector (right
+ * now, just the migrated "What You'll Learn" reel - see app/db.py's
+ * _LEARN_REEL_ENTRY and the #learnReelAnchor spacer in templates/index.html)
+ * to that in-flow anchor's real, current position, instead of trusting the
+ * element's stored left/top verbatim.
+ *
+ * Why this exists: `d.left`/`d.top` for a migrated element is a plain
+ * document-pixel offset, hand-measured once against one browser window.
+ * Content that used to sit in normal document flow doesn't stay put at a
+ * fixed pixel the way template markup does - anything above it that changes
+ * height (eg the hero section, sized with vh units, growing taller on a
+ * taller browser window) silently drags the real heading/paragraph down
+ * without moving the reel's frozen pixel position, so on a tall enough
+ * window the two overlap instead of stacking cleanly. The spacer div
+ * (`#learnReelAnchor`) still reserves real in-flow space exactly where the
+ * reel belongs, so re-reading its live rect on every load (and resize)
+ * keeps the reel correctly aligned under any window size, without having to
+ * make the whole free-placed custom-element system responsive.
+ *
+ * Deliberately doesn't touch anything a ta has since dragged the reel to:
+ * a manual move is stored as a separate translate offset on top of this
+ * base position (see setOwnPos()/commitPosition()), never by overwriting
+ * the wrap's left/top, so re-anchoring the base here can never fight or
+ * undo a ta's own drag.
+ *
+ * Must run after every apply*Overrides() call that could change layout
+ * height above the anchor (text/size/position/hidden), so the anchor's own
+ * rect already reflects whatever a ta has customized - see the call site
+ * next to initAllReels() in fetchContent()'s success handler.
+ */
+function applyElementAnchors() {
+  CUSTOM_ELEMENTS.forEach(function (d) {
+    if (!d.anchor) return;
+    var anchor = document.querySelector(d.anchor);
+    var el = elByAnyId(d.id);
+    var wrap = el && el.parentElement;
+    if (!anchor || !wrap || !wrap.classList.contains("free-wrap")) return;
+    var r = anchor.getBoundingClientRect();
+    wrap.style.left = (r.left + window.scrollX) + "px";
+    wrap.style.top = (r.top + window.scrollY) + "px";
+  });
+}
+
+/* re-runs applyElementAnchors() whenever the browser window is resized
+   (debounced), since a vh-sized section above an anchored element changes
+   height live as the window resizes, not just between page loads. One
+   listener for the page's whole lifetime is enough - applyElementAnchors()
+   itself is a safe no-op before the first real content load (CUSTOM_ELEMENTS
+   starts empty). */
+(function () {
+  var timer = null;
+  window.addEventListener("resize", function () {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(applyElementAnchors, 150);
+  });
+})();
+
+/**
  * Persists the whole custom_elements list into the preview snapshot, the
  * same localStorage draft every other override here uses. Rewritten
  * wholesale (not merged) since the in-memory CUSTOM_ELEMENTS array is
@@ -5330,7 +5388,9 @@ function buildCtxMenu() {
  * Renders the menu's root list: an optional "This element" section first
  * (only when the menu was opened by right-clicking an existing tagged
  * element, see CTX_TARGET_ID) with Duplicate, Lock/Unlock, and Promote/
- * Remove from navbar, then the 8 things that can be added. Duplicate is
+ * Remove from navbar, then the 7 things that can be added (an 8th, Reel/
+ * Vertical reel, lives inside "Object..." - see renderCtxMenuObjectPicker()).
+ * Duplicate is
  * left out for the countdown box/info tiles (ids starting "countdown."/
  * "logistics."), anything containing #heroCountdown/#logisticsGrid (eg the
  * whole logistics section), and any placed "datetime" custom element: all
@@ -5386,8 +5446,6 @@ function renderCtxMenuRoot() {
     '<button type="button" data-add="icon">Icon</button>' +
     '<button type="button" data-add="button">Button</button>' +
     '<button type="button" data-add="datetime">Date/time</button>' +
-    '<button type="button" data-add="reel">Reel <span class="ctx-obj-badge">Animated</span></button>' +
-    '<button type="button" data-add="reel-v">Vertical reel <span class="ctx-obj-badge">Animated</span></button>' +
     '<button type="button" data-add="object">Object...</button>';
   CTX_MENU.querySelectorAll("button[data-add]").forEach(function (btn) {
     btn.addEventListener("click", function () { handleCtxAdd(btn.getAttribute("data-add")); });
@@ -5813,7 +5871,10 @@ function renderCtxMenuVideoPicker() {
 }
 
 /**
- * Swaps the menu into its "Add object" sub-view: every object saved to the
+ * Swaps the menu into its "Add object" sub-view: two built-in entries (the
+ * Light/Dark toggle and the Reel/Vertical reel pair - all three are "for
+ * fun" extras rather than everyday building blocks, which is why they sit
+ * here instead of cluttering the root list), then every object saved to the
  * shared reusable-objects library (OBJECTS_LIBRARY, fetched fresh on every
  * page load, see fetchContent()/fetchObjectContent()), each rebuilt (see
  * placeObject()) as a group of freshly-idd elements at the point the menu
@@ -5845,6 +5906,26 @@ function renderCtxMenuObjectPicker() {
     hideCtxMenu();
   });
   wrap.appendChild(builtin);
+
+  /* the other two built-in (not ta-saved) entries in this list: a fresh
+     horizontal/vertical reel (buildReelElement()'s "reel" kind), tagged
+     "Animated" the same way the toggle above is tagged "Live" - a reel
+     starts blank, unlike a saved OBJECTS_LIBRARY bundle, so it's placed
+     the same way the toggle is instead of going through placeObject(). */
+  [
+    { orientation: "horizontal", label: "Reel" },
+    { orientation: "vertical", label: "Vertical reel" }
+  ].forEach(function (spec) {
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "ctx-obj-builtin";
+    btn.innerHTML = '<span class="ctx-obj-badge">Animated</span> ' + spec.label;
+    btn.addEventListener("click", function () {
+      addCustomElement("reel", CTX_POS.x, CTX_POS.y, { orientation: spec.orientation });
+      hideCtxMenu();
+    });
+    wrap.appendChild(btn);
+  });
 
   if (!OBJECTS_LIBRARY.length) {
     var msg = document.createElement("div");
@@ -5881,13 +5962,6 @@ function handleCtxAdd(kind) {
   if (kind === "image") { renderCtxMenuImagePicker(); return; }
   if (kind === "video") { renderCtxMenuVideoPicker(); return; }
   if (kind === "object") { renderCtxMenuObjectPicker(); return; }
-  if (kind === "reel" || kind === "reel-v") {
-    /* a fresh reel always starts blank (see addCustomElement()'s "reel"
-       branch) - no add-time sub-view needed, same as box/text */
-    addCustomElement("reel", CTX_POS.x, CTX_POS.y, { orientation: kind === "reel-v" ? "vertical" : "horizontal" });
-    hideCtxMenu();
-    return;
-  }
   /* datetime adds immediately with sensible defaults (countdown, 30 days
      out, see addCustomElement()); its format/pattern/target are all set
      afterward from the style popover, no add-time sub-view needed */
@@ -7717,6 +7791,7 @@ function initObjectCanvas() {
     applyLockHighlight();
     var hint = document.getElementById("objCanvasHint");
     if (hint) hint.style.display = (data.custom_elements || []).length ? "none" : "";
+    if (window.initAllReels) window.initAllReels();
     wireResizable();
     wireClickToEdit();
     wireAddElementMenu();
@@ -7833,6 +7908,7 @@ document.addEventListener("DOMContentLoaded", function () {
       applyFixedHighlight();
       applyLinkHighlight();
       applyLockHighlight();
+      applyElementAnchors();
       if (window.initAllReels) window.initAllReels();
       if (isPreviewMode() && isEditMode()) {
         wireResizable();

@@ -151,12 +151,19 @@
          object, not template markup - see the "reel" custom-element kind in
          js/main.js and _learn_reel_overlay()/_migrate_learn_reel() in
          app/db.py, which is what actually builds "learn.reel" into
-         content.custom_elements. This spacer just reserves the vertical
-         gap it used to occupy in flow: a custom element renders
-         position:absolute (out of flow, see placeFreeElement() in
-         js/main.js), so without it the video row below would ride up and
-         collide with the reel the instant this in-flow content disappears. -->
-    <div class="wrap reveal" style="min-height:260px" aria-hidden="true"></div>
+         content.custom_elements. This spacer reserves the vertical gap it
+         used to occupy in flow: a custom element renders position:absolute
+         (out of flow, see placeFreeElement() in js/main.js), so without it
+         the video row below would ride up and collide with the reel the
+         instant this in-flow content disappears. It's also a live anchor,
+         not just a one-time measurement: the reel's own stored position is
+         only a fallback, applyElementAnchors() (js/main.js) re-pins the
+         reel to this element's real rendered rect on every load/resize, so
+         it stays correctly placed under it regardless of how tall the
+         hero above ends up on any given window (its 100vh sizing means the
+         gap between here and the top of the page isn't a fixed number of
+         pixels the way a stored offset assumes). -->
+    <div class="wrap reveal" id="learnReelAnchor" style="min-height:260px" aria-hidden="true"></div>
 
     <div class="wrap grid grid-3 vid-row reveal" style="margin-top:34px">
       <video class="media video" data-resize-id="img.vid_1" src="assets/gallery/hand_crank_joule_thief_2025.MOV" autoplay muted loop playsinline
@@ -358,8 +365,8 @@
   </footer>
 
   <script src="js/theme.js?v=3"></script>
-  <script src="js/main.js?v=3"></script>
-  <script src="js/learn-reel.js?v=3"></script>
+  <script src="js/main.js?v=4"></script>
+  <script src="js/learn-reel.js?v=6"></script>
 </body>
 
 </html>

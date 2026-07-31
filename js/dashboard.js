@@ -13,6 +13,25 @@ var TOTAL_DAYS = 10;
 var DAYS = [];
 var EXTRAS = [];
 
+/* the full /api/content response, stashed so renderExtras() can read
+   content.colors/dark_colors/radius/sizes/text/hidden itself - it can't
+   rely on js/main.js's own applyColorOverrides()/applyTextOverrides()/etc.
+   sweeps to paint its tiles, since those run against whatever's already in
+   the DOM at the time they're called, and this section's tiles are built
+   later, after a fetchContent() resolves (see the window.renderExtras hook
+   in applySharedEditorOverrides()) - by main.js and dashboard.js's own,
+   separately-raced fetch alike, see initDashboardPage()'s doc comment. */
+var EXTRAS_CONTENT = null;
+
+/* the shared template default for a tile's filename text field - just the
+   local filename chip (js/main.js's buildExtrasFilenameChipHtml(), a
+   per-tile-resolved variant of the formula chip that deliberately never
+   shows up in the ta variables list) - computed once here since main.js is
+   guaranteed to have already run (script tag order) by the time this file's
+   own top-level code executes. */
+var DEFAULT_EXTRAS_TEXT_HTML = buildExtrasFilenameChipHtml();
+var DEFAULT_EXTRAS_EMPTY_HTML = "<strong>Nothing here yet.</strong>";
+
 /* attachments are a plain filename string (legacy), a {type:"link", value}
    object, or a {type:"file", name, url} object for an uploaded file */
 
@@ -297,27 +316,135 @@ function renderDays() {
   return unlockedCount;
 }
 
-/** Renders the "Extra attachments" list into #resList. */
-function renderExtras() {
-  var list = document.getElementById("resList");
-  if (!list) return;
-  if (!EXTRAS.length) {
-    list.innerHTML = '<p class="muted"><strong>Nothing here yet.</strong></p>';
-    return;
+/**
+ * Builds one attachment tile's markup: a plain, untracked flex wrapper
+ * (data-extras-tile, bound to this specific attachment via data-extras-id/
+ * data-extras-filename) holding FOUR INDEPENDENT SIBLING elements - the
+ * colored rect, the file-type icon, the filename text, and the Download/
+ * Open button - rather than nesting them inside the rect, so a ta deleting
+ * the rect (js/main.js's deleteElement(), which explicitly allows it) never
+ * cascades to delete the icon/text/button that visually sit on top of it
+ * (the rect is position:absolute;inset:0, see css/style.css). All four
+ * carry a SHARED, fixed id ("extras.tile.rect"/"extras.tile.icon"/
+ * "extras.tile.text"/"extras.tile.button") - the exact same id on every
+ * tile's matching element - so this is one shared template rendered once
+ * per attachment: a style edit to any single tile's rect/icon/text/button
+ * (js/main.js's mirrorExtrasTileStyle(), for the live same-session mirror)
+ * or a text edit (mirrorEditedField()) applies everywhere, live and after
+ * reload alike, since applyColorOverrides()/applyRadiusOverrides()/
+ * applySizeOverrides() already repaint every DOM node sharing one id from
+ * the very same saved maps read below - this function just has to paint
+ * that same look itself once, up front, since those sweeps already ran
+ * (against a DOM that didn't have these tiles yet) by the time this runs.
+ * Icon and button are data-extras-fixed (stylable/resizable, never
+ * deletable, per the spec); rect and the filename text are ordinary
+ * deletable elements. Icon/button/rect never move independently and rect/
+ * text never resize independently (js/main.js's startMoveDrag()/
+ * startResizeDrag() guards) - the whole tile is laid out by this shared
+ * template's own css, not per-instance dragging.
+ * @param f one EXTRAS entry (legacy filename string, {type:"link", value},
+ *   or {type:"file", name, url, id, children})
+ * @param style {rectColor, rectDarkColor, rectRadius, iconSize, buttonSize}
+ * @param textHtml content.text["extras.tile.text"], or undefined for the
+ *   shared default (just the filename chip)
+ * @param buttonHtml content.text["extras.tile.button"], or undefined for
+ *   the per-attachment default ("Open"/"Download" - see isLink()), so an
+ *   untouched template still shows the same live label live students
+ *   already see today
+ * @return an HTML string for one tile
+ */
+function buildExtrasTileHtml(f, style, textHtml, buttonHtml) {
+  var filename = itemLabel(f) || "";
+  var defaultButtonText = isLink(f) ? "Open" : "Download";
+  var rectStyle = "";
+  if (style.rectColor || style.rectDarkColor) {
+    rectStyle += "background-color:" + resolveThemedColor(style.rectColor, style.rectDarkColor) + ";";
   }
-  var rows = "";
-  EXTRAS.forEach(function (f) {
-    rows +=
-      '<div class="res-row">' +
-        itemIcon(f) +
-        '<span><span class="rname">' + itemLabel(f) + '</span></span>' +
-        '<a class="btn btn-ghost" href="' + itemHref(f) + '" target="_blank" rel="noopener">' +
-          (isLink(f) ? "Open" : "Download") +
-        '</a>' +
-      '</div>';
-  });
-  list.innerHTML = rows;
+  if (style.rectRadius) rectStyle += "border-radius:" + style.rectRadius + "px;";
+  var iconStyle = style.iconSize ? ("width:" + style.iconSize.w + "px;height:" + style.iconSize.h + "px;") : "";
+  var btnStyle = style.buttonSize ? ("width:" + style.buttonSize.w + "px;height:" + style.buttonSize.h + "px;") : "";
+  return (
+    '<div class="res-row extras-tile" data-extras-tile="1" data-extras-id="' + escapeHtml((f && f.id) || "") +
+      '" data-extras-filename="' + escapeHtml(filename) + '">' +
+      '<div class="extras-tile-rect" data-resize-id="extras.tile.rect" data-extras-role="rect"' +
+        (rectStyle ? ' style="' + rectStyle + '"' : "") + ' aria-hidden="true"></div>' +
+      '<div class="extras-tile-icon" data-resize-id="extras.tile.icon" data-extras-role="icon" data-extras-fixed="1"' +
+        (iconStyle ? ' style="' + iconStyle + '"' : "") + '>' + itemIcon(f) + '</div>' +
+      '<span class="extras-tile-text" data-edit-id="extras.tile.text" data-extras-role="text" ' +
+        'data-default-html="' + escapeHtml(DEFAULT_EXTRAS_TEXT_HTML) + '">' +
+        (textHtml !== undefined ? textHtml : DEFAULT_EXTRAS_TEXT_HTML) +
+      '</span>' +
+      '<a class="btn btn-ghost extras-tile-btn" data-edit-id="extras.tile.button" data-extras-role="button" data-extras-fixed="1" ' +
+        'data-default-html="' + escapeHtml(defaultButtonText) + '"' + (btnStyle ? ' style="' + btnStyle + '"' : "") + ' ' +
+        'href="' + escapeHtml(itemHref(f)) + '" target="_blank" rel="noopener">' +
+        (buttonHtml !== undefined ? buttonHtml : escapeHtml(defaultButtonText)) +
+      '</a>' +
+    '</div>'
+  );
 }
+
+/**
+ * Renders the "Extra attachments" section's live area: the always-present
+ * (per the ta's own "always editable" answer) empty-state text plus every
+ * current attachment's tile, inside the placed "extrasArea" custom element
+ * (js/main.js's buildCustomElementNode() "extrasArea" kind, found here by
+ * its data-extras-area marker - see applyElementAnchors()/the
+ * #dashExtrasAreaAnchor spacer in templates/dashboard.html). Rebuilds this
+ * area's whole innerHTML from EXTRAS_CONTENT every time it runs (same as
+ * renderDays() does for #dayGrid), since a shared-template style/text edit
+ * can touch every tile at once - there's no incremental per-tile diffing
+ * here, this section is small.
+ * Called via the window.renderExtras hook from js/main.js's
+ * applySharedEditorOverrides() AND from this file's own DOMContentLoaded
+ * handler below - see EXTRAS_CONTENT's doc comment for why both call it and
+ * why that's safe (whichever fetch resolves second is the one that finds
+ * both EXTRAS_CONTENT set AND the host div in the DOM, the other no-ops).
+ */
+function renderExtras() {
+  if (!EXTRAS_CONTENT) return;
+  var host = document.querySelector('[data-extras-area="1"]');
+  if (!host) return;
+  var data = EXTRAS_CONTENT;
+  var colors = data.colors || {}, darkColors = data.dark_colors || {}, radius = data.radius || {}, sizes = data.sizes || {};
+  var text = data.text || {};
+  var style = {
+    rectColor: colors["extras.tile.rect"], rectDarkColor: darkColors["extras.tile.rect"],
+    rectRadius: radius["extras.tile.rect"],
+    iconSize: sizes["extras.tile.icon"], buttonSize: sizes["extras.tile.button"]
+  };
+  var textHtml = text["extras.tile.text"];
+  var buttonHtml = text["extras.tile.button"];
+  var emptyHtml = text["dash.extras.empty"] !== undefined ? text["dash.extras.empty"] : DEFAULT_EXTRAS_EMPTY_HTML;
+
+  var html =
+    '<p class="muted extras-empty' + (EXTRAS.length ? " has-attachments" : "") + '" data-edit-id="dash.extras.empty" ' +
+      'data-default-html="' + escapeHtml(DEFAULT_EXTRAS_EMPTY_HTML) + '">' + emptyHtml + '</p>';
+  if (EXTRAS.length) {
+    html += '<div class="res-list extras-tile-list">' +
+      EXTRAS.map(function (f) { return buildExtrasTileHtml(f, style, textHtml, buttonHtml); }).join("") +
+      '</div>';
+  }
+  host.innerHTML = html;
+
+  (data.hidden || []).forEach(function (id) {
+    if (id !== "extras.tile.rect" && id !== "extras.tile.text") return;
+    host.querySelectorAll('[data-resize-id="' + id + '"], [data-edit-id="' + id + '"]').forEach(function (el) {
+      setHiddenVisual(el, true);
+    });
+  });
+
+  repaintExtrasFilenameChips();
+
+  /* click-to-edit text wiring is a one-time, non-delegated pass
+     (js/main.js's wireClickToEdit(), already run by the time either racing
+     fetch gets here) - these tiles/empty-state text are built after that
+     pass, so each needs wiring by hand, same gating as everywhere else. */
+  if (isPreviewMode() && isEditMode()) {
+    host.querySelectorAll('[data-edit-id="dash.extras.empty"], [data-edit-id="extras.tile.text"], [data-edit-id="extras.tile.button"]')
+      .forEach(wireTextField);
+  }
+}
+window.renderExtras = renderExtras;
 
 /** Clears the session and sends the student back to the login page. */
 function logout() {
@@ -360,6 +487,7 @@ document.addEventListener("DOMContentLoaded", function () {
     .then(function (data) {
       DAYS = data.days;
       EXTRAS = data.extras;
+      EXTRAS_CONTENT = data;
       var totalDaysVar = (data.variables || []).filter(function (v) { return v.key === "total_days"; })[0];
       TOTAL_DAYS = (totalDaysVar && +totalDaysVar.value) || TOTAL_DAYS;
       renderDays();

@@ -4,6 +4,7 @@ content table holds the TA-editable site content (day panels, extras, timer)."""
 import json
 import sqlite3
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -405,6 +406,24 @@ DEFAULT_CONTENT["progress_fill"]["seed.dashboard.progress"] = "var(--accent)"
 DEFAULT_CONTENT["progress_track"]["seed.dashboard.progress"] = "var(--surface-2)"
 DEFAULT_CONTENT["radius"]["seed.dashboard.progress"] = 999
 
+# the student dashboard's "Extra attachments" tile list used to be plain,
+# non-editor markup (templates/dashboard.html's old static #resList,
+# js/dashboard.js's renderExtras() building rows nobody could restyle) - now
+# a real placed "extrasArea" custom element like the progress bar above, so
+# a ta can move/resize/recolor it. "anchor" re-pins it to the reserved-space
+# spacer in the resources section's own flow (#dashExtrasAreaAnchor in
+# templates/dashboard.html), same mechanism as _DASH_PROGRESS_ENTRY. Its
+# inner tile markup (rect/icon/filename/download-button per attachment)
+# stays js/dashboard.js's own job - renderExtras() finds this element by id
+# and renders into it, see the js/main.js<->js/dashboard.js "window.renderExtras"
+# hook in applySharedEditorOverrides().
+_DASH_EXTRAS_AREA_ENTRY = {
+    "id": "seed.dashboard.extras.area", "kind": "extrasArea",
+    "anchor": "#dashExtrasAreaAnchor", "left": 0, "top": 0,
+    "w": 1160, "h": 40,
+}
+DEFAULT_CONTENT["custom_elements"].append(_DASH_EXTRAS_AREA_ENTRY)
+
 # starter "objects" library entries (see the objects table below): reusable
 # element bundles a ta can drop onto the page from the visual editor's
 # right-click "Add element" > "Object" picker (see placeObject() in
@@ -770,6 +789,7 @@ def init_db():
     _seed_default_objects(conn)
     _migrate_learn_reel(conn)
     _migrate_dashboard_progress(conn)
+    _migrate_dashboard_extras_area(conn)
     _migrate_progress_bar_object(conn)
     conn.close()
 
@@ -1135,6 +1155,44 @@ def _migrate_dashboard_progress(conn):
     conn.commit()
 
 
+def _migrate_dashboard_extras_area(conn):
+    """one-time patch (same meta-flag trick as _migrate_learn_reel()) adding
+    the migrated "extrasArea" element (_DASH_EXTRAS_AREA_ENTRY) to every
+    already-existing content blob/profile that predates it, same reasoning
+    as _migrate_dashboard_progress(): the old static #resList markup this
+    replaces needs the anchor spacer already in templates/dashboard.html,
+    but an old saved blob still needs this element patched into its own
+    custom_elements list to actually render anything into that spacer.
+    @param conn an open db connection
+    """
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO meta (key, value) VALUES ('dashboard_extras_area_migrated', '1')"
+    )
+    conn.commit()
+    if cur.rowcount == 0:
+        return
+
+    def patch(data):
+        ids = [c.get("id") for c in data.get("custom_elements", [])]
+        if "seed.dashboard.extras.area" in ids:
+            return data, False
+        data.setdefault("custom_elements", []).append(json.loads(json.dumps(_DASH_EXTRAS_AREA_ENTRY)))
+        return data, True
+
+    row = conn.execute("SELECT data FROM content WHERE id = 1").fetchone()
+    if row:
+        data, changed = patch(json.loads(row["data"]))
+        if changed:
+            conn.execute("UPDATE content SET data = ? WHERE id = 1", (json.dumps(data),))
+
+    for prow in conn.execute("SELECT id, data FROM profiles").fetchall():
+        data, changed = patch(json.loads(prow["data"]))
+        if changed:
+            conn.execute("UPDATE profiles SET data = ? WHERE id = ?", (json.dumps(data), prow["id"]))
+
+    conn.commit()
+
+
 def _migrate_progress_bar_object(conn):
     """one-time patch (same meta-flag trick as _migrate_learn_reel()) adding
     the "Progress bar" entry to an already-existing Objects library that
@@ -1197,8 +1255,22 @@ def get_content():
     # always sees the full shape
     for key, value in DEFAULT_CONTENT.items():
         data.setdefault(key, value)
+    _backfill_extras_ids(data)
     _refresh_computed_variables(data)
     return data
+
+
+def _backfill_extras_ids(data):
+    """assigns a stable id (and empty children list) to any extras entry
+    that predates the tile-binding feature, so js/main.js's attachments-tile
+    area has something durable to bind dropped elements to. legacy plain-
+    string entries are left alone - nothing binds elements to those.
+    @param data the content dict being read (mutated in place)
+    """
+    for item in data.get("extras", []):
+        if isinstance(item, dict):
+            item.setdefault("id", uuid.uuid4().hex)
+            item.setdefault("children", [])
 
 
 def save_content(data):

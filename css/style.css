@@ -1050,6 +1050,47 @@ h1, h2, h3 {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
+/* the student dashboard's live "extra attachments" tile area (js/
+   dashboard.js's renderExtras()/buildExtrasTileHtml(), js/main.js's
+   "extrasArea" custom-element kind): each tile reuses .res-row for its
+   flex layout only - its own background/border/radius is turned off here
+   and moved onto .extras-tile-rect instead, a separate absolutely-
+   positioned sibling (not an ancestor) of the icon/text/button, so deleting
+   the rect in the visual editor never takes the rest of the tile with it. */
+.extras-tile { position: relative; background: transparent; border: none; padding: 14px 18px; }
+.extras-tile-rect {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.extras-tile-icon {
+  position: relative;
+  z-index: 1;
+  width: 18px;
+  height: 18px;
+  color: var(--muted);
+  flex: none;
+}
+.extras-tile .extras-tile-icon svg { width: 100%; height: 100%; }
+.extras-tile-text { position: relative; z-index: 1; font-weight: 600; }
+.extras-tile .extras-tile-btn { position: relative; z-index: 1; }
+
+/* the section's always-in-DOM (see the "always editable" requirement)
+   "nothing here yet" text: hidden the moment real attachments exist for a
+   real visitor, but kept visible (dimmed, dashed) in the ta portal's edit
+   mode so it stays selectable/editable even then. */
+.extras-empty.has-attachments { display: none; }
+body.edit-mode .extras-empty.has-attachments {
+  display: block;
+  opacity: .5;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
 /* gate banner if not "logged in" */
 .gate {
   max-width: 460px;

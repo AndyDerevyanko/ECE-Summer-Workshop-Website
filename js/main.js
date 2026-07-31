@@ -828,6 +828,35 @@ function commitPosition(el) {
 function commitSize(el) {
   var s = getSize(el);
   saveEditedSize(elId(el), { w: Math.round(s.w), h: Math.round(s.h) });
+  mirrorExtrasTileStyle(el);
+}
+
+/**
+ * Mirrors an attachments tile's rect/icon/text/button role element's live
+ * inline style onto every other tile's same-role element (every rendered
+ * tile shares one data-resize-id/data-edit-id per role, so a style edit to
+ * any single tile is meant to apply to the shared template - see js/
+ * dashboard.js's buildExtrasTileHtml()). applyColorOverrides()/
+ * applySizeOverrides()/etc. already repaint every matching id from the saved
+ * maps on the NEXT load; this only covers the live, same-session gap, since
+ * those inputs otherwise only ever touch styleMenuEl()'s single match (see
+ * buildStyleMenu()'s colorInput/radiusInput/etc. handlers) and a resize drag
+ * only ever touches the one dragged element. A no-op for every element
+ * outside the attachments area.
+ * @param el a just-edited element, any kind
+ */
+function mirrorExtrasTileStyle(el) {
+  var role = el.getAttribute("data-extras-role");
+  if (!role) return;
+  var cssText = el.style.cssText;
+  var opColor = el.dataset.opColor, opAlpha = el.dataset.opAlpha, baseColor = el.dataset.baseColor;
+  document.querySelectorAll('[data-extras-role="' + role + '"]').forEach(function (other) {
+    if (other === el) return;
+    other.style.cssText = cssText;
+    if (opColor === undefined) delete other.dataset.opColor; else other.dataset.opColor = opColor;
+    if (opAlpha !== undefined) other.dataset.opAlpha = opAlpha;
+    if (baseColor !== undefined) other.dataset.baseColor = baseColor;
+  });
 }
 
 /**
@@ -2600,6 +2629,19 @@ function buildStyleMenu() {
     '</div>';
   document.body.appendChild(STYLE_MENU);
 
+  /* covers every color/radius/border/shadow/opacity/fill control below in
+     one place, rather than hooking mirrorExtrasTileStyle() into each row's
+     own handler individually: fires after the row's own handler already
+     repainted styleMenuElById(STYLE_MENU_ID) (bubbles up from the control),
+     so the mirror always sees the freshly-committed style. A no-op for
+     every element outside the attachments area (see mirrorExtrasTileStyle()). */
+  ["input", "change", "click"].forEach(function (evt) {
+    STYLE_MENU.addEventListener(evt, function () {
+      var el = STYLE_MENU_ID && styleMenuElById(STYLE_MENU_ID);
+      if (el) mirrorExtrasTileStyle(el);
+    });
+  });
+
   var colorInput = STYLE_MENU.querySelector(".sm-color");
   var colorReset = STYLE_MENU.querySelector(".sm-color-reset");
   var colorDarkToggle = STYLE_MENU.querySelector(".sm-color-dark-toggle");
@@ -3728,11 +3770,12 @@ function primeStyleMenuThemedRows(el) {
   var isIcon = kind === "icon";
   var isDatetime = el.hasAttribute("data-datetime");
   var isProgress = el.hasAttribute("data-progress");
+  var isExtrasArea = el.hasAttribute("data-extras-area");
   var isText = colorTarget(el) === "text";
   var isBtn = isButtonEl(el);
   var shapeDisplay = (isIcon || isDatetime) ? "none" : "";
 
-  if (!isImg && !isProgress) {
+  if (!isImg && !isProgress && !isExtrasArea) {
     var colorBefore = primeThemedColorRow(currentColorValue(el),
       STYLE_MENU.querySelector(".sm-color"), STYLE_MENU.querySelector(".sm-color-dark"),
       STYLE_MENU.querySelector(".sm-color-row"), STYLE_MENU.querySelector(".sm-color-dark-row"),
@@ -3860,15 +3903,18 @@ function toggleStyleMenu(anchorEl) {
   var isIcon = kind === "icon";
   var isDatetime = el.hasAttribute("data-datetime");
   var isProgress = el.hasAttribute("data-progress");
+  var isExtrasArea = el.hasAttribute("data-extras-area");
   var isText = colorTarget(el) === "text";
   var isBtn = isButtonEl(el);
   var isThemeToggle = el.hasAttribute("data-theme-toggle");
   /* a progress element paints its own Progress color/Bar color rows
      instead of the generic Color row (see colorTarget(), which would
-     otherwise call it a plain "bg" target) */
-  STYLE_MENU.querySelector(".sm-color-row").style.display = (isImg || isProgress) ? "none" : "";
-  STYLE_MENU.querySelector(".sm-color-dark-row").style.display = (isImg || isProgress) ? "none" : "";
-  STYLE_MENU.querySelector(".sm-color-toggle-row").style.display = (isImg || isProgress) ? "none" : "";
+     otherwise call it a plain "bg" target); the extras-area container is
+     deliberately always transparent - a background belongs on the tile
+     rect underneath each attachment, not on the layout box around them */
+  STYLE_MENU.querySelector(".sm-color-row").style.display = (isImg || isProgress || isExtrasArea) ? "none" : "";
+  STYLE_MENU.querySelector(".sm-color-dark-row").style.display = (isImg || isProgress || isExtrasArea) ? "none" : "";
+  STYLE_MENU.querySelector(".sm-color-toggle-row").style.display = (isImg || isProgress || isExtrasArea) ? "none" : "";
   STYLE_MENU.querySelectorAll(".sm-progress-row").forEach(function (row) { row.style.display = isProgress ? "" : "none"; });
   /* for every other bg-target element "Color" is the only surface control
      there is, but a button also gets its own separate Text color row right
@@ -4051,8 +4097,14 @@ function startResizeDrag(e) {
   /* a reel tile can't detachFromFlow() without breaking the flex track it
      lives in - this only ever fires from the ring's own (already CSS-hidden
      for a tile, see positionRing()) handle buttons, so it's defense in
-     depth, not the real gate */
+     depth, not the real gate. Same reasoning for an attachments tile's rect
+     (fills the tile via inset:0, a fixed size makes no sense) and its
+     filename text (sized by its own content); the icon/button roles are
+     deliberately NOT included here - those two stay resizable, see
+     buildExtrasTileHtml() in js/dashboard.js. */
   if (!RING_EL || RING_EL.hasAttribute("data-reel-tile")) return;
+  var xRole = RING_EL.getAttribute("data-extras-role");
+  if (xRole === "rect" || xRole === "text") return;
   e.preventDefault();
   e.stopPropagation();
   var el = RING_EL;
@@ -4117,7 +4169,11 @@ function startResizeDrag(e) {
  * @param e the handle's mousedown
  */
 function startMoveDrag(e) {
-  if (!RING_EL || isLocked(elId(RING_EL)) || RING_EL.hasAttribute("data-reel-tile")) return;
+  /* every attachments-tile role (rect/icon/text/button) is laid out by
+     shared CSS across every rendered tile, not individually placed - moving
+     one would only fight that layout on the next render, see
+     buildExtrasTileHtml() in js/dashboard.js */
+  if (!RING_EL || isLocked(elId(RING_EL)) || RING_EL.hasAttribute("data-reel-tile") || RING_EL.hasAttribute("data-extras-role")) return;
   e.preventDefault();
   e.stopPropagation();
   var el = RING_EL;
@@ -4224,6 +4280,11 @@ function deleteElement(el) {
      ring's own trash handle AND the Delete/Backspace keydown handler
      (see wireResizable()), since both call this one function */
   if (el.hasAttribute("data-reel-tile")) return;
+  /* the download button and icon inside an attachments tile are the one
+     deliberate exception besides a reel tile: everything else about a tile
+     (its rect, its filename text) stays normally deletable, see
+     buildExtrasTileHtml() in js/dashboard.js */
+  if (el.hasAttribute("data-extras-fixed")) return;
   var id = elId(el);
   if (!id) return;
   /* a grouped element (see groupOf()) takes every other member down with
@@ -4593,6 +4654,65 @@ function repaintFormulaChips() {
   });
 }
 
+/**
+ * Builds the markup for a "filename" chip: an attachments-tile-only variant
+ * of the formula chip above (data-fx-local instead of data-fx-op/data-fx-a)
+ * that resolves off whichever tile it's actually rendered inside right now
+ * (closest("[data-extras-tile]")'s own data-extras-filename, set by js/
+ * dashboard.js's buildExtrasTileHtml()) rather than a content.variables
+ * lookup - so unlike every fx-chip above, this one deliberately never shows
+ * up in js/ta.js's variables list. Lives inside the shared tile text
+ * template (content.text["extras.tile.text"]), same as any other text a ta
+ * types there, so deleting it (plain contenteditable backspace - still
+ * atomic, contenteditable="false") removes it from every tile at once, same
+ * as any other template edit.
+ * @return an HTML string for a single <span class="fx-chip">
+ */
+function buildExtrasFilenameChipHtml() {
+  return '<span class="fx-chip" contenteditable="false" data-fx-local="filename">filename</span>';
+}
+
+/**
+ * Repaints every filename chip's displayed text off the tile it's actually
+ * rendered inside right now. Needed because content.text's saved template
+ * HTML carries whichever tile's filename happened to be resolved when it
+ * was last saved - in particular, mirrorEditedField() blindly copies one
+ * tile's just-edited innerHTML onto every other tile sharing the same
+ * data-edit-id, which for every other chip is exactly right (same template,
+ * same everywhere) but would leave every OTHER tile showing the edited
+ * tile's own filename. Called unconditionally at the end of
+ * mirrorEditedField() (cheap no-op wherever no filename chip exists) so
+ * that blind copy is corrected right back to each tile's own filename
+ * immediately after.
+ */
+function repaintExtrasFilenameChips() {
+  document.querySelectorAll('.fx-chip[data-fx-local="filename"]').forEach(function (chip) {
+    var tile = chip.closest("[data-extras-tile]");
+    chip.textContent = (tile && tile.dataset.extrasFilename) || "";
+  });
+}
+
+/**
+ * Handles the attachments area's right-click "Create textbox with filename
+ * variable" action (see renderCtxMenuRoot()'s data-extras-add-filename
+ * button): restores the filename chip into the shared tile text template at
+ * the end of whichever tile the context menu was opened on, so a ta who
+ * backspaced the chip out of the template can bring it back without
+ * retyping the rest of it by hand. Goes through the exact same
+ * commitTextFieldChange()/mirrorEditedField() path a normal typed edit
+ * does, so undo and cross-tile mirroring both work identically - the
+ * restored chip (and any text the ta adds around it afterward) then shows
+ * up on every tile, same as any other template edit.
+ * @param tile the [data-extras-tile] the context menu was opened on
+ */
+function insertExtrasFilenameChip(tile) {
+  var field = tile.querySelector('[data-extras-role="text"]');
+  if (!field) return;
+  var before = field.innerHTML;
+  field.innerHTML = before + (before ? " " : "") + buildExtrasFilenameChipHtml();
+  commitTextFieldChange(field, before, field.innerHTML);
+}
+
 /* the nav's real theme toggle (#themeBtn, templates/index.html)'s own sun/
    moon pair, verbatim: a placed "theme" custom element (buildCustomElement())
    starts out with this same auto day/night swap (css [data-theme] rule,
@@ -4919,6 +5039,23 @@ function buildCustomElementNode(d) {
     el.style.background = "var(--surface-2)";
     el.style.width = "160px";
     el.style.height = "100px";
+  } else if (d.kind === "extrasArea") {
+    /* transparent layout container for the student dashboard's "Extra
+       attachments" tile list (see app/db.py's _DASH_EXTRAS_AREA_ENTRY) -
+       js/dashboard.js's renderExtras() finds it by data-resize-id and
+       renders the actual per-attachment tiles inside; this only builds the
+       empty shell. Deliberately no background (kept transparent, unlike
+       "box") - see toggleStyleMenu()'s isExtrasArea handling, which hides
+       the generic Color row for it the same way it does for "progress".
+       Height is intentionally not left resize-tracked in practice -
+       renderExtras() forces height:auto on every render since the tile
+       count varies - only width is meant to be dragged, so tiles reflow to
+       whatever width a ta picks. */
+    el = document.createElement("div");
+    el.setAttribute("data-resize-id", d.id);
+    el.setAttribute("data-extras-area", "1");
+    el.style.width = "100%";
+    el.style.minHeight = "40px";
   } else if (d.kind === "image" && d.url) {
     el = document.createElement("img");
     el.src = d.url;
@@ -5969,12 +6106,21 @@ function renderCtxMenuRoot() {
        in, which already suppresses Duplicate; Delete (new, see below) is
        gated by the same flag */
     var isTile = CTX_TARGET_EL && CTX_TARGET_EL.hasAttribute("data-reel-tile");
-    var isSpecial = isDatetime || isTile || CTX_TARGET_ID.indexOf("logistics.") === 0 || CTX_TARGET_ID.indexOf("countdown.") === 0 ||
+    /* the download button/icon inside an attachments tile are undeletable
+       (see deleteElement()'s data-extras-fixed guard); duplicate is also
+       suppressed for EVERY tile role (rect included) since a copy would be
+       an orphan outside the shared-template system, see
+       buildExtrasTileHtml() in js/dashboard.js */
+    var isExtrasFixed = CTX_TARGET_EL && CTX_TARGET_EL.hasAttribute("data-extras-fixed");
+    var isExtrasRole = CTX_TARGET_EL && CTX_TARGET_EL.hasAttribute("data-extras-role");
+    var extrasTile = CTX_TARGET_EL && CTX_TARGET_EL.closest && CTX_TARGET_EL.closest("[data-extras-tile]");
+    var isSpecial = isDatetime || isTile || isExtrasFixed || CTX_TARGET_ID.indexOf("logistics.") === 0 || CTX_TARGET_ID.indexOf("countdown.") === 0 ||
       (CTX_TARGET_EL && CTX_TARGET_EL.querySelector && CTX_TARGET_EL.querySelector("#heroCountdown, #logisticsGrid"));
     toggleHtml =
       '<div class="ctx-title">This element</div>' +
-      (isSpecial ? "" : '<button type="button" data-dup="1">Duplicate</button>') +
+      ((isSpecial || isExtrasRole) ? "" : '<button type="button" data-dup="1">Duplicate</button>') +
       (isSpecial ? "" : '<button type="button" data-delete="1">Delete</button>') +
+      (extrasTile ? '<button type="button" data-extras-add-filename="1">Create textbox with filename variable</button>' : "") +
       '<button type="button" data-link-edit="1">' +
       (LINKS[CTX_TARGET_ID] ? "Edit link" : "Add link") +
       '</button>' +
@@ -6016,6 +6162,14 @@ function renderCtxMenuRoot() {
   if (deleteBtn) {
     deleteBtn.addEventListener("click", function () {
       if (CTX_TARGET_EL) deleteElement(CTX_TARGET_EL);
+      hideCtxMenu();
+    });
+  }
+  var extrasFilenameBtn = CTX_MENU.querySelector("[data-extras-add-filename]");
+  if (extrasFilenameBtn) {
+    extrasFilenameBtn.addEventListener("click", function () {
+      var tile = CTX_TARGET_EL && CTX_TARGET_EL.closest && CTX_TARGET_EL.closest("[data-extras-tile]");
+      if (tile) insertExtrasFilenameChip(tile);
       hideCtxMenu();
     });
   }
@@ -6794,7 +6948,7 @@ function wireResizable() {
   document.addEventListener("keydown", function (e) {
     var d = ARROW_DELTAS[e.key];
     if (!d) return;
-    if (!RING_EL || isLocked(elId(RING_EL)) || RING_EL.hasAttribute("data-reel-tile")) return;
+    if (!RING_EL || isLocked(elId(RING_EL)) || RING_EL.hasAttribute("data-reel-tile") || RING_EL.hasAttribute("data-extras-role")) return;
     var active = document.activeElement;
     if (active && (active.isContentEditable || active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT")) return;
     e.preventDefault();
@@ -7721,6 +7875,7 @@ function mirrorEditedField(id, html, editedEl) {
   document.querySelectorAll('[data-edit-id="' + id + '"]').forEach(function (el) {
     if (el !== editedEl) el.innerHTML = html;
   });
+  repaintExtrasFilenameChips();
 }
 
 /** Reverts the most recent click-to-edit commit, moving it onto the redo stack. */
@@ -8705,6 +8860,14 @@ function applySharedEditorOverrides(data, textMap) {
   applyLockHighlight();
   applyElementAnchors();
   if (window.initAllReels) window.initAllReels();
+  /* js/dashboard.js's own renderExtras() also runs off its own independent
+     fetchContent() call (see initDashboardPage()'s doc comment) and races
+     this one - whichever finishes second is the one that actually has
+     somewhere to render into (this function is what builds the "extrasArea"
+     custom element renderExtras() renders tiles inside), so both sides
+     trigger a render attempt and the earlier one just no-ops, same
+     window.-gated cross-script pattern as window.initAllReels above */
+  if (window.renderExtras) window.renderExtras();
   if (isPreviewMode() && isEditMode()) {
     wireResizable();
     wireClickToEdit();

@@ -84,13 +84,19 @@
 
     <section class="section-sm" id="resources" style="background:var(--bg-2)">
       <div class="wrap">
-        <h2 style="font-size:1.4rem;margin-bottom:6px"><svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg> Extra attachments</h2>
-        <p class="muted" style="margin-top:0;margin-bottom:18px">
+        <h2 style="font-size:1.4rem;margin-bottom:6px" data-edit-id="dash.extras.heading"><svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg> Extra attachments</h2>
+        <p class="muted" style="margin-top:0;margin-bottom:18px" data-edit-id="dash.extras.subtext">
           Anything else the staff upload goes here.
         </p>
-        <div class="res-list" id="resList">
-          <!-- filled in by dashboard.js -->
-        </div>
+        <!-- reserved space for the placed "extrasArea" custom element (see
+             app/db.py's _DASH_EXTRAS_AREA_ENTRY, js/main.js's
+             applyElementAnchors()): a ta can move/resize it like any other
+             visual-editor element; js/dashboard.js's renderExtras() finds it
+             by data-resize-id and renders the actual tile list inside it -
+             see the window.renderExtras hook in applySharedEditorOverrides() -
+             this spacer just keeps its default spot reserved in normal
+             document flow, same as #dashProgressAnchor above -->
+        <div class="dash-extras-area-anchor" id="dashExtrasAreaAnchor" style="min-height:40px" aria-hidden="true"></div>
       </div>
     </section>
   </main>

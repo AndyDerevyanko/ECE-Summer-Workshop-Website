@@ -384,9 +384,19 @@ function showMsg(text, ok) {
 }
 
 /**
+ * A stable id for a new extras entry, so js/main.js's attachments-tile area
+ * has something durable to bind dropped elements to across reorders/deletes.
+ * @return a fresh random id
+ */
+function newExtraId() {
+  return (window.crypto && crypto.randomUUID) ? crypto.randomUUID() :
+    Date.now().toString(36) + Math.random().toString(36).slice(2);
+}
+
+/**
  * Uploads one file.
  * @param file the File object from a file input
- * @return a promise resolving to the {type:"file", name, url} attachment entry
+ * @return a promise resolving to the {type:"file", name, url, id, children} attachment entry
  */
 function uploadFile(file) {
   var fd = new FormData();
@@ -397,7 +407,7 @@ function uploadFile(file) {
       return res.json();
     })
     .then(function (data) {
-      return { type: "file", name: data.name, url: data.url };
+      return { type: "file", name: data.name, url: data.url, id: newExtraId(), children: [] };
     });
 }
 
@@ -2117,7 +2127,7 @@ document.addEventListener("DOMContentLoaded", function () {
   function addExtraLink() {
     var v = extraLinkInput.value.trim();
     if (!v) return;
-    STATE.extras.push({ type: "link", value: v });
+    STATE.extras.push({ type: "link", value: v, id: newExtraId(), children: [] });
     extraLinkInput.value = "";
     extraLinkRow.style.display = "none";
     renderExtras();

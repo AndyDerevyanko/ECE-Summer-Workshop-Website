@@ -1906,6 +1906,73 @@ body.edit-mode .apply-bob { animation: none; }
 .text-toolbar .tt-align svg { width: 14px; height: 14px; }
 .text-toolbar .tt-font-del { color: var(--rose, #c0576b); }
 .text-toolbar .tt-font-del:hover { background: var(--rose, #c0576b); color: #fff; }
+.text-toolbar button:disabled { opacity: .3; cursor: default; }
+.text-toolbar button:disabled:hover { background: var(--surface-2); color: var(--text); }
+
+/* an inserted live value inside a text field (js/main.js's buildFormulaChipHtml()/
+   FX_MENU) - plain inline text on the live site, a dashed underline while
+   editing is the only hint it's special, matching the low-key discoverability
+   the toolbar's other inline spans (foreColor picks) already have */
+.fx-chip { }
+body.edit-mode .fx-chip { cursor: pointer; border-bottom: 1px dashed currentColor; }
+
+/* the "ƒx" toolbar button's own popover (js/main.js's buildFormulaMenu()),
+   same singleton-popover shape as .text-toolbar/.ctx-menu above */
+.fx-menu {
+  position: absolute;
+  display: none;
+  flex-direction: column;
+  gap: 6px;
+  width: 210px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .35);
+  padding: 10px;
+  z-index: 10003;
+}
+.fx-menu.show { display: flex; }
+.fx-menu .fxm-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--muted);
+  font-family: var(--font-body);
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .4px;
+}
+.fx-menu .fxm-row select, .fx-menu .fxm-row input {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 6px 7px;
+  font-family: var(--font-body);
+  font-size: .82rem;
+  text-transform: none;
+  letter-spacing: normal;
+}
+.fx-menu .fxm-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+.fx-menu .fxm-sep { flex: 1; }
+.fx-menu .fxm-actions button {
+  border: none;
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: .8rem;
+  background: var(--surface-2);
+  color: var(--text);
+}
+.fx-menu .fxm-ok { background: var(--accent); color: #fff; }
+.fx-menu .fxm-remove { color: var(--rose, #c0576b); }
+.fx-menu .fxm-remove:hover { background: var(--rose, #c0576b); color: #fff; }
 
 /* right-click "Add element" menu (js/main.js's wireAddElementMenu()), a
    plain small popover, one singleton like the ring/text toolbar above */

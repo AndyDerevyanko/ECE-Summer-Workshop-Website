@@ -4449,24 +4449,148 @@ function variableNumericValue(key) {
 }
 
 /**
- * Fills a "progress" element's style-popover Current/Total <select> with
- * every number-typed variable (a progress bar's fill ratio is only ever
- * meaningful between two numbers - string/boolean/datetime variables just
- * don't show up as options here), built with real DOM nodes rather than an
- * innerHTML string since a variable's ta-typed "name" isn't escaped
- * anywhere else in this file.
- * @param selectEl the "sm-progress-current"/"sm-progress-total" <select>
- * @param selectedKey the element's current d.varCurrent/d.varTotal
+ * Fills a <select> with every variable matching predicate, built with real
+ * DOM nodes rather than an innerHTML string since a variable's ta-typed
+ * "name" isn't escaped anywhere else in this file. Shared by the "progress"
+ * element's style-popover Current/Total selects (see
+ * populateProgressVarSelect()) and the text toolbar's formula menu (see
+ * openFormulaMenu()).
+ * @param selectEl the <select> to fill
+ * @param predicate function(variable) -> bool, which variables to include
+ * @param selectedKey the value to preselect
  */
-function populateProgressVarSelect(selectEl, selectedKey) {
+function populateVariableSelect(selectEl, predicate, selectedKey) {
   selectEl.textContent = "";
-  VARIABLES.filter(function (v) { return v.type === "number"; }).forEach(function (v) {
+  VARIABLES.filter(predicate).forEach(function (v) {
     var opt = document.createElement("option");
     opt.value = v.key;
     opt.textContent = v.name || v.key;
     selectEl.appendChild(opt);
   });
   selectEl.value = selectedKey;
+}
+
+/**
+ * Fills a "progress" element's style-popover Current/Total <select> with
+ * every number-typed variable (a progress bar's fill ratio is only ever
+ * meaningful between two numbers - string/boolean/datetime variables just
+ * don't show up as options here). See populateVariableSelect().
+ * @param selectEl the "sm-progress-current"/"sm-progress-total" <select>
+ * @param selectedKey the element's current d.varCurrent/d.varTotal
+ */
+function populateProgressVarSelect(selectEl, selectedKey) {
+  populateVariableSelect(selectEl, function (v) { return v.type === "number"; }, selectedKey);
+}
+
+/**
+ * Every operation the text toolbar's formula chip ("ƒx" button) can insert.
+ * "value" is the only one that accepts a non-number variable (its B select
+ * stays hidden); every other op reads both operands as numbers via
+ * variableNumericValue(), same 0-on-unset/unparseable fallback as the
+ * progress bar's bindings.
+ */
+var FX_OPS = {
+  value: { label: "Value", needsB: false, anyType: true },
+  sum: { label: "Sum (A + B)", needsB: true },
+  difference: { label: "Difference (A − B)", needsB: true },
+  product: { label: "Product (A × B)", needsB: true },
+  quotient: { label: "Quotient (A ÷ B)", needsB: true },
+  percent: { label: "Percent (A of B, as %)", needsB: true },
+  fraction: { label: "“A of B”", needsB: true }
+};
+
+/**
+ * Escapes text being dropped into an innerHTML string. Nothing else in this
+ * file needs this (a ta's own contentEditable output is trusted verbatim,
+ * see saveEditedField()/applyTextOverrides()), but a formula chip's
+ * displayed text is computed from live variable data, not typed by a ta, so
+ * building its <span> markup (see buildFormulaChipHtml()) is the one place
+ * here that turns arbitrary data into an HTML string and needs to guard
+ * against it looking like markup.
+ * @param str any value, coerced to string
+ * @return str with &<>"' replaced by entities
+ */
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+}
+
+/**
+ * Computes a formula chip's live display text from its op + operand
+ * variable keys (see FX_OPS, buildFormulaChipHtml()). Reads current
+ * VARIABLES, so this always reflects whatever was last fetched - same
+ * reload-to-refresh freshness as the progress bar's own bindings
+ * (paintProgressElement()), there is no live polling anywhere in this app.
+ * @param op one of FX_OPS's keys
+ * @param aKey variable A's key
+ * @param bKey variable B's key, ignored for "value"
+ * @param decimals decimal places for any numeric result
+ * @return the text to show inside the chip
+ */
+function formulaChipText(op, aKey, bKey, decimals) {
+  var dp = parseInt(decimals, 10);
+  if (isNaN(dp) || dp < 0) dp = 0;
+  if (op === "value") {
+    var a = variableByKey(aKey);
+    if (!a) return "";
+    if (a.type === "number") return variableNumericValue(aKey).toFixed(dp);
+    if (a.type === "boolean") return a.value ? "Yes" : "No";
+    if (a.type === "datetime") {
+      var d = a.value ? new Date(a.value) : null;
+      return d && !isNaN(d.getTime()) ? d.toLocaleString() : "";
+    }
+    return a.value == null ? "" : String(a.value);
+  }
+  var av = variableNumericValue(aKey);
+  var bv = variableNumericValue(bKey);
+  switch (op) {
+    case "sum": return (av + bv).toFixed(dp);
+    case "difference": return (av - bv).toFixed(dp);
+    case "product": return (av * bv).toFixed(dp);
+    case "quotient": return bv === 0 ? "—" : (av / bv).toFixed(dp);
+    case "percent": return bv === 0 ? "—" : (av / bv * 100).toFixed(dp) + "%";
+    case "fraction": return av.toFixed(dp) + " of " + bv.toFixed(dp);
+    default: return "";
+  }
+}
+
+/**
+ * Builds the <span> markup for a new/edited formula chip, config baked into
+ * data-fx-* attributes (read back by repaintFormulaChips() and
+ * openFormulaMenu()'s edit flow) riding along inside the same content.text
+ * HTML string as everything else a ta types in this field - same
+ * self-describing-inline-span approach as the toolbar's own foreColor spans
+ * (data-light-color/data-dark-color, see applyThemedForeColor()).
+ * contenteditable="false" makes the browser treat it as one atomic unit for
+ * caret/backspace navigation inside the surrounding contentEditable field.
+ * @param op one of FX_OPS's keys
+ * @param aKey variable A's key
+ * @param bKey variable B's key, omitted from the markup for "value"
+ * @param decimals decimal places for any numeric result
+ * @return an HTML string for a single <span class="fx-chip">
+ */
+function buildFormulaChipHtml(op, aKey, bKey, decimals) {
+  var text = formulaChipText(op, aKey, bKey, decimals);
+  var attrs = ' data-fx-op="' + escapeHtml(op) + '" data-fx-a="' + escapeHtml(aKey) + '"' +
+    (bKey ? ' data-fx-b="' + escapeHtml(bKey) + '"' : '') +
+    ' data-fx-decimals="' + escapeHtml(String(decimals)) + '"';
+  return '<span class="fx-chip" contenteditable="false"' + attrs + '>' + escapeHtml(text) + '</span>';
+}
+
+/**
+ * Repaints every formula chip's displayed text against current VARIABLES,
+ * same role for chips as repaintInlineTextColors() plays for foreColor
+ * spans: applyTextOverrides() just set each field's innerHTML from its
+ * saved content.text snapshot, which may carry a chip's stale baked-in text
+ * from whenever it was last saved, so every load (and every VARIABLES
+ * refresh) needs to re-render each chip's text from live data. Called right
+ * after VARIABLES is (re)assigned, alongside applyProgressBindings().
+ */
+function repaintFormulaChips() {
+  document.querySelectorAll(".fx-chip").forEach(function (chip) {
+    chip.textContent = formulaChipText(chip.dataset.fxOp, chip.dataset.fxA, chip.dataset.fxB, chip.dataset.fxDecimals);
+  });
 }
 
 /* the nav's real theme toggle (#themeBtn, templates/index.html)'s own sun/
@@ -6466,12 +6590,19 @@ function wireAddElementMenu() {
        its own popover on click */
     if (STYLE_MENU && STYLE_MENU.classList.contains("show") &&
         !STYLE_MENU.contains(e.target) && e.target !== STYLE_BTN) hideStyleMenu();
+    /* the fx button toggles its own menu open via its click handler same as
+       the style/layer buttons above, but there's no dedicated "fx button"
+       element to exclude by identity (it lives inside TEXT_TOOLBAR, rebuilt
+       once): excluding by "not already showing" is enough since a fresh
+       open always starts from FX_MENU not yet visible. */
+    if (FX_MENU && FX_MENU.classList.contains("show") && !FX_MENU.contains(e.target)) closeFormulaMenu();
   }, true);
   document.addEventListener("keydown", function (e) {
     if (e.key !== "Escape") return;
     if (CTX_MENU && CTX_MENU.classList.contains("show")) hideCtxMenu();
     if (LAYER_MENU && LAYER_MENU.classList.contains("show")) hideLayerMenu();
     if (STYLE_MENU && STYLE_MENU.classList.contains("show")) hideStyleMenu();
+    if (FX_MENU && FX_MENU.classList.contains("show")) closeFormulaMenu();
     if (SELECTED_IDS.length) clearSelection();
   });
   /* object-editor.js's saveObject() stamps this key after a successful save
@@ -6535,7 +6666,8 @@ function wireResizable() {
       if ((!LAYER_MENU || !LAYER_MENU.contains(e.target)) &&
           (!STYLE_MENU || !STYLE_MENU.contains(e.target)) &&
           (!CTX_MENU || !CTX_MENU.contains(e.target)) &&
-          (!TEXT_TOOLBAR || !TEXT_TOOLBAR.contains(e.target))) {
+          (!TEXT_TOOLBAR || !TEXT_TOOLBAR.contains(e.target)) &&
+          (!FX_MENU || !FX_MENU.contains(e.target))) {
         RING_EL = null;
         RING.style.display = "none";
       }
@@ -6900,7 +7032,9 @@ function buildTextToolbar() {
     '<button type="button" class="tt-align" data-align="justify" title="Justify">' + ALIGN_ICONS.justify + '</button>' +
     '<span class="tt-sep"></span>' +
     '<button type="button" class="ls-dn" title="Tighter letter spacing">Sp-</button>' +
-    '<button type="button" class="ls-up" title="Wider letter spacing">Sp+</button>';
+    '<button type="button" class="ls-up" title="Wider letter spacing">Sp+</button>' +
+    '<span class="tt-sep"></span>' +
+    '<button type="button" class="tt-fx" title="Insert a live value from a variable">ƒx</button>';
   document.body.appendChild(TEXT_TOOLBAR);
 
   TEXT_TOOLBAR.querySelectorAll("button").forEach(function (btn) {
@@ -7014,6 +7148,11 @@ function buildTextToolbar() {
       EDIT_UNDO.push({ type: "letterspacing", id: id, before: before, after: val });
       EDIT_REDO.length = 0;
     });
+  });
+
+  TEXT_TOOLBAR.querySelector(".tt-fx").addEventListener("click", function () {
+    if (!TEXT_TOOLBAR_EL || this.disabled) return;
+    openFormulaMenu(TEXT_TOOLBAR_EL, null);
   });
 
   TEXT_TOOLBAR.querySelector(".tt-font").addEventListener("change", function () {
@@ -7181,6 +7320,13 @@ function updateTextToolbarState() {
   var toggle = TEXT_TOOLBAR.querySelector(".tt-color-dark-toggle");
   toggle.textContent = dark ? "☀️" : "🌙";
   toggle.title = dark ? "Edit light mode text color (selection)" : "Edit dark mode text color (selection)";
+
+  /* logistics.*.big/lbl fields save through saveEditedField()'s special-case
+     branch that stores plain textContent into content.logistics, stripping
+     any markup - a formula chip's <span> would get silently flattened to
+     its rendered text on save, so offer the button nowhere it can't work */
+  var id = TEXT_TOOLBAR_EL.getAttribute("data-edit-id") || "";
+  TEXT_TOOLBAR.querySelector(".tt-fx").disabled = id.indexOf("logistics.") === 0;
 }
 
 /**
@@ -7232,6 +7378,205 @@ function hideTextToolbar() {
   if (TEXT_TOOLBAR) TEXT_TOOLBAR.classList.remove("show");
 }
 
+/* the text toolbar's "ƒx" button's own popover: picks an operation + one or
+   two variables and inserts/edits a formula chip (see buildFormulaChipHtml())
+   in the field currently being edited. Same lazy-singleton pattern as
+   TEXT_TOOLBAR/STYLE_MENU. */
+var FX_MENU = null;
+/* the data-edit-id field the menu is currently acting on */
+var FX_MENU_FIELD = null;
+/* the chip <span> being edited, or null when inserting a brand new one */
+var FX_MENU_CHIP = null;
+/* the field's selection at the moment the menu opened (insert case only) -
+   picking a variable in the menu's own <select>s moves real browser focus
+   (and the selection) away from the field, so the caret position has to be
+   captured up front and restored right before execCommand("insertHTML") */
+var FX_MENU_RANGE = null;
+
+/** Builds the formula menu once, lazily. */
+function buildFormulaMenu() {
+  FX_MENU = document.createElement("div");
+  FX_MENU.className = "fx-menu";
+  FX_MENU.innerHTML =
+    '<label class="fxm-row">Insert<select class="fxm-op"></select></label>' +
+    '<label class="fxm-row fxm-a-row">Variable<select class="fxm-a"></select></label>' +
+    '<label class="fxm-row fxm-b-row">Of<select class="fxm-b"></select></label>' +
+    '<label class="fxm-row fxm-dec-row">Decimals<input type="number" class="fxm-decimals" min="0" max="6" value="0"></label>' +
+    '<div class="fxm-actions">' +
+      '<button type="button" class="fxm-remove" style="display:none">Remove</button>' +
+      '<span class="fxm-sep"></span>' +
+      '<button type="button" class="fxm-cancel">Cancel</button>' +
+      '<button type="button" class="fxm-ok">Insert</button>' +
+    '</div>';
+  document.body.appendChild(FX_MENU);
+
+  var opSelect = FX_MENU.querySelector(".fxm-op");
+  Object.keys(FX_OPS).forEach(function (op) {
+    var opt = document.createElement("option");
+    opt.value = op;
+    opt.textContent = FX_OPS[op].label;
+    opSelect.appendChild(opt);
+  });
+
+  /* buttons never need to actually take focus themselves (same reasoning as
+     TEXT_TOOLBAR's own buttons, see buildTextToolbar()): swallowing their
+     mousedown keeps the field's contentEditable focus (and selection) intact
+     the whole time these are used. The op/variable/decimals controls DO need
+     real focus to open/type, so those only get their mousedown's bubbling
+     stopped, not prevented - same split TEXT_TOOLBAR's font <select> and
+     color <input>s already use. */
+  FX_MENU.querySelectorAll("button").forEach(function (btn) {
+    btn.addEventListener("mousedown", function (e) { e.preventDefault(); e.stopPropagation(); });
+  });
+  FX_MENU.querySelectorAll("select, input").forEach(function (ctl) {
+    ctl.addEventListener("mousedown", function (e) { e.stopPropagation(); });
+  });
+
+  opSelect.addEventListener("change", refreshFormulaMenuRows);
+  FX_MENU.querySelector(".fxm-a").addEventListener("change", refreshFormulaMenuRows);
+  FX_MENU.querySelector(".fxm-cancel").addEventListener("click", closeFormulaMenu);
+  FX_MENU.querySelector(".fxm-ok").addEventListener("click", commitFormulaMenu);
+  FX_MENU.querySelector(".fxm-remove").addEventListener("click", removeFormulaMenuChip);
+}
+
+/**
+ * Shows/hides the menu's Of/Decimals rows and refills the Variable/Of
+ * selects for whichever operation is now picked - "value" is the only op
+ * that accepts a non-number variable and has no second operand, every other
+ * op needs two number-typed variables. Also drives the Decimals row's
+ * visibility off the currently-picked A variable's type for "value" (a
+ * string/boolean/datetime value has no decimal places to speak of), and
+ * always hides it for "fraction" (always whole numbers, see
+ * formulaChipText()).
+ */
+function refreshFormulaMenuRows() {
+  var op = FX_MENU.querySelector(".fxm-op").value;
+  var meta = FX_OPS[op];
+  var aSelect = FX_MENU.querySelector(".fxm-a");
+  var aPredicate = meta.anyType ? function () { return true; } : function (v) { return v.type === "number"; };
+  var curA = aSelect.value;
+  var aStillValid = curA && VARIABLES.some(function (v) { return v.key === curA && aPredicate(v); });
+  var firstA = (VARIABLES.filter(aPredicate)[0] || {}).key || "";
+  populateVariableSelect(aSelect, aPredicate, aStillValid ? curA : firstA);
+
+  FX_MENU.querySelector(".fxm-b-row").style.display = meta.needsB ? "" : "none";
+  if (meta.needsB) {
+    var bSelect = FX_MENU.querySelector(".fxm-b");
+    var curB = bSelect.value;
+    var numberPredicate = function (v) { return v.type === "number"; };
+    var bStillValid = curB && VARIABLES.some(function (v) { return v.key === curB && numberPredicate(v); });
+    var firstB = (VARIABLES.filter(numberPredicate)[0] || {}).key || "";
+    populateVariableSelect(bSelect, numberPredicate, bStillValid ? curB : firstB);
+  }
+
+  var aVar = variableByKey(aSelect.value);
+  var showDecimals = op !== "fraction" && (meta.needsB || (aVar && aVar.type === "number"));
+  FX_MENU.querySelector(".fxm-dec-row").style.display = showDecimals ? "" : "none";
+}
+
+/**
+ * Opens the formula menu, either to insert a brand new chip at the field's
+ * current selection (chip === null) or to reconfigure/remove one already
+ * placed (chip is that <span class="fx-chip">, prefills every control from
+ * its own data-fx-* attributes). Only ever called while fieldEl is already
+ * mid-edit (isContentEditable), from the toolbar's ƒx button or a click on
+ * an existing chip, see wireTextField().
+ * @param fieldEl the data-edit-id field being edited
+ * @param chip the fx-chip <span> to edit, or null to insert a new one
+ */
+function openFormulaMenu(fieldEl, chip) {
+  if (!FX_MENU) buildFormulaMenu();
+  FX_MENU_FIELD = fieldEl;
+  FX_MENU_CHIP = chip;
+  var sel = window.getSelection();
+  FX_MENU_RANGE = (!chip && sel && sel.rangeCount) ? sel.getRangeAt(0).cloneRange() : null;
+
+  FX_MENU.querySelector(".fxm-op").value = chip ? (chip.dataset.fxOp || "value") : "value";
+  refreshFormulaMenuRows();
+  if (chip && chip.dataset.fxA) FX_MENU.querySelector(".fxm-a").value = chip.dataset.fxA;
+  if (chip && chip.dataset.fxB) FX_MENU.querySelector(".fxm-b").value = chip.dataset.fxB;
+  FX_MENU.querySelector(".fxm-decimals").value = chip ? (chip.dataset.fxDecimals || "0") : "0";
+  FX_MENU.querySelector(".fxm-ok").textContent = chip ? "Update" : "Insert";
+  FX_MENU.querySelector(".fxm-remove").style.display = chip ? "" : "none";
+
+  FX_MENU.classList.add("show");
+  var anchor = chip || TEXT_TOOLBAR_EL || fieldEl;
+  var r = anchor.getBoundingClientRect();
+  var top = r.bottom + window.scrollY + 6;
+  var left = r.left + window.scrollX;
+  var maxLeft = window.scrollX + document.documentElement.clientWidth - FX_MENU.offsetWidth - 6;
+  left = Math.max(window.scrollX + 6, Math.min(left, maxLeft));
+  FX_MENU.style.left = left + "px";
+  FX_MENU.style.top = top + "px";
+}
+
+/** Hides the formula menu without changing anything. */
+function closeFormulaMenu() {
+  FX_MENU_FIELD = null;
+  FX_MENU_CHIP = null;
+  FX_MENU_RANGE = null;
+  if (FX_MENU) FX_MENU.classList.remove("show");
+}
+
+/**
+ * Applies the menu's current picks: updates FX_MENU_CHIP in place if editing
+ * one, otherwise inserts a brand new chip at the caret position captured
+ * when the menu opened (FX_MENU_RANGE). Either way ends by diffing the
+ * field's whole innerHTML through commitTextFieldChange() - same undo/save/
+ * mirror path a normal typed edit commits through on blur, since a chip is
+ * just more of the field's own innerHTML.
+ */
+function commitFormulaMenu() {
+  if (!FX_MENU_FIELD) return;
+  var op = FX_MENU.querySelector(".fxm-op").value;
+  var meta = FX_OPS[op];
+  var aKey = FX_MENU.querySelector(".fxm-a").value;
+  var bKey = meta.needsB ? FX_MENU.querySelector(".fxm-b").value : "";
+  var decimals = parseInt(FX_MENU.querySelector(".fxm-decimals").value, 10);
+  if (isNaN(decimals) || decimals < 0) decimals = 0;
+  var field = FX_MENU_FIELD;
+  var before = field.innerHTML;
+
+  if (FX_MENU_CHIP) {
+    var chip = FX_MENU_CHIP;
+    chip.dataset.fxOp = op;
+    chip.dataset.fxA = aKey;
+    if (bKey) chip.dataset.fxB = bKey; else delete chip.dataset.fxB;
+    chip.dataset.fxDecimals = String(decimals);
+    chip.textContent = formulaChipText(op, aKey, bKey, decimals);
+  } else {
+    field.focus();
+    var sel = window.getSelection();
+    sel.removeAllRanges();
+    if (FX_MENU_RANGE) {
+      sel.addRange(FX_MENU_RANGE);
+    } else {
+      var r = document.createRange();
+      r.selectNodeContents(field);
+      r.collapse(false);
+      sel.addRange(r);
+    }
+    document.execCommand("insertHTML", false, buildFormulaChipHtml(op, aKey, bKey, decimals));
+  }
+
+  var after = field.innerHTML;
+  closeFormulaMenu();
+  commitTextFieldChange(field, before, after);
+  field.focus();
+}
+
+/** Deletes the chip being edited and commits the change. */
+function removeFormulaMenuChip() {
+  if (!FX_MENU_FIELD || !FX_MENU_CHIP) return;
+  var field = FX_MENU_FIELD;
+  var before = field.innerHTML;
+  FX_MENU_CHIP.remove();
+  var after = field.innerHTML;
+  closeFormulaMenu();
+  commitTextFieldChange(field, before, after);
+  field.focus();
+}
+
 /**
  * Wires up one data-edit-id element as a click-to-edit field: shared by
  * wireClickToEdit()'s initial pass over every template field and
@@ -7252,7 +7597,15 @@ function wireTextField(el) {
 
   var beforeEdit = "";
   el.addEventListener("click", function (e) {
-    if (el.isContentEditable) return; /* already editing, let the caret land normally */
+    if (el.isContentEditable) {
+      /* a click on a chip while the field is already mid-edit reconfigures
+         it instead of just placing the caret next to it
+         (contenteditable="false" makes chips atomic for caret navigation,
+         but they still receive normal click events) */
+      var chip = e.target.closest && e.target.closest(".fx-chip");
+      if (chip) { e.preventDefault(); e.stopPropagation(); openFormulaMenu(el, chip); }
+      return; /* already editing, let the caret land normally otherwise */
+    }
     /* shift-click already toggled group-selection in the mousedown handler
        above (wireResizable(), which runs for every tracked element,
        text fields included, and fires before this click event does); this
@@ -7281,27 +7634,44 @@ function wireTextField(el) {
 
   el.addEventListener("blur", function (e) {
     if (!el.isContentEditable) return;
-    /* focus moved to the toolbar itself (eg opening the font dropdown),
-       not away from the field: don't end the edit, that control's own
-       handler runs and hands focus straight back */
-    if (e.relatedTarget && TEXT_TOOLBAR && TEXT_TOOLBAR.contains(e.relatedTarget)) return;
+    /* focus moved to the toolbar itself (eg opening the font dropdown) or
+       the formula menu (eg opening its variable <select>), not away from
+       the field: don't end the edit, that control's own handler runs and
+       hands focus straight back */
+    if (e.relatedTarget && ((TEXT_TOOLBAR && TEXT_TOOLBAR.contains(e.relatedTarget)) ||
+        (FX_MENU && FX_MENU.contains(e.relatedTarget)))) return;
     el.contentEditable = "false";
     el.classList.remove("editing");
     hideTextToolbar();
     /* the edit may have changed el's own rendered size (more/less text),
        so the ring needs to catch up if it's sitting on this field */
     positionRing();
-    var after = el.innerHTML;
-    if (after !== beforeEdit) {
-      EDIT_UNDO.push({ type: "text", id: el.getAttribute("data-edit-id"), before: beforeEdit, after: after });
-      EDIT_REDO.length = 0;
-    }
-    saveEditedField(el.getAttribute("data-edit-id"), after, el.getAttribute("data-default-html"));
-    mirrorEditedField(el.getAttribute("data-edit-id"), after, el);
+    commitTextFieldChange(el, beforeEdit, el.innerHTML);
   });
 
   el.addEventListener("keyup", updateTextToolbarState);
   el.addEventListener("mouseup", updateTextToolbarState);
+}
+
+/**
+ * Commits a text field's edit session: pushes an undo step (if anything
+ * actually changed), persists, and syncs any duplicate elements sharing the
+ * same data-edit-id. Shared by wireTextField()'s blur handler (a normal
+ * typed edit) and the formula menu's insert/update/remove (see
+ * commitFormulaMenu(), removeFormulaMenuChip()) - a formula chip is just
+ * more of the field's own innerHTML, so both paths commit identically and
+ * get full undo/redo for free, no separate action type needed.
+ * @param el the data-edit-id field
+ * @param before its innerHTML at the start of the edit session
+ * @param after its innerHTML now
+ */
+function commitTextFieldChange(el, before, after) {
+  if (after !== before) {
+    EDIT_UNDO.push({ type: "text", id: el.getAttribute("data-edit-id"), before: before, after: after });
+    EDIT_REDO.length = 0;
+  }
+  saveEditedField(el.getAttribute("data-edit-id"), after, el.getAttribute("data-default-html"));
+  mirrorEditedField(el.getAttribute("data-edit-id"), after, el);
 }
 
 /**
@@ -8321,6 +8691,7 @@ function applySharedEditorOverrides(data, textMap) {
   applyBorderOverrides(data.border, data.dark_border);
   VARIABLES = data.variables || [];
   applyProgressBindings(data.progress_fill, data.dark_progress_fill, data.progress_track, data.dark_progress_track);
+  repaintFormulaChips();
   applyShadowOverrides(data.shadow);
   applyOpacityOverrides(data.opacity);
   applyHiddenOverrides(data.hidden);
@@ -8396,6 +8767,7 @@ function initObjectCanvas() {
     applyBorderOverrides(data.border, data.dark_border);
     VARIABLES = data.variables || [];
     applyProgressBindings(data.progress_fill, data.dark_progress_fill, data.progress_track, data.dark_progress_track);
+    repaintFormulaChips();
     applyShadowOverrides(data.shadow);
     applyOpacityOverrides(data.opacity);
     applyHiddenOverrides(data.hidden);

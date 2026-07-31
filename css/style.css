@@ -937,23 +937,6 @@ h1, h2, h3 {
   background: var(--accent);
 }
 
-.progress-wrap { margin-top: 18px; }
-.progress-bar {
-  height: 12px;
-  border-radius: 999px;
-  background: var(--surface-2);
-  overflow: hidden;
-  border: 1px solid var(--border);
-}
-.progress-bar i {
-  display: block;
-  height: 100%;
-  width: 0;
-  background: var(--good);
-  transition: width 1s ease;
-}
-.progress-label { font-size: .85rem; color: var(--muted); margin-top: 8px; }
-
 .day-card {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -1375,7 +1358,6 @@ h1, h2, h3 {
 
 /* pages tagged .mono (dashboard, instructor) keep to one accent + grey */
 body.mono .eyebrow { color: var(--accent); }
-body.mono .progress-bar i { background: var(--accent); }
 
 /* click-to-edit, only active inside the visual editor's iframe
    (instructor.html/js/ta.js set ?edit=1, js/main.js's wireClickToEdit()

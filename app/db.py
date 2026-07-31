@@ -153,12 +153,36 @@ def _learn_reel_overlay():
 # starting content, same shape as the old hardcoded DAYS/EXTRAS/timer vars.
 # only used the first time the content table is empty.
 DEFAULT_CONTENT = {
-    "total_days": 10,
     "days": [
         {"day": 1, "date": "", "opens_at": "", "unlocked": False, "title": "", "blurb": "", "files": []},
         {"day": 2, "date": "", "opens_at": "", "unlocked": False, "title": "", "blurb": "", "files": []},
     ],
     "extras": [],
+    # named, typed values a ta can bind editor elements to (right now just
+    # the progress bar's Current/Total selects, see the "progress" custom-
+    # element kind in js/main.js) and, later, reference from formula text.
+    # type is one of "string"/"number"/"boolean"/"datetime". "builtin" ones
+    # can be renamed but never removed or retyped (js/ta.js enforces this in
+    # the Variables section UI); "computed" ones have no ta-editable value at
+    # all - "value" is overwritten on every read with a live-derived number,
+    # see get_content()'s _refresh_computed_variables() call. "key" is the
+    # stable, human-typeable identifier a formula/binding refers to - unlike
+    # "name" (freely renameable, shown on the tile) it never changes once a
+    # variable exists.
+    "variables": [
+        {
+            "key": "total_days", "name": "Total days", "type": "number",
+            "value": 10,
+            "description": "\"__ of TOTAL days unlocked\" progress bar on student dashboard",
+            "builtin": True, "computed": False,
+        },
+        {
+            "key": "days_progressed", "name": "Days progressed", "type": "number",
+            "value": 0,
+            "description": "The day number the workshop is currently on (count of unlocked days), calculated automatically",
+            "builtin": True, "computed": True,
+        },
+    ],
     "timer_mode": "tentative",
     "timer_target": "",
     "join_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
@@ -337,12 +361,49 @@ DEFAULT_CONTENT = {
     "dark_text_color": {},
     "dark_fill": {},
     "dark_border": {},
+    # "progress" custom-element kind's two colors (the fill and the track/
+    # background behind it), keyed by data-resize-id, a css color string.
+    # same paired light/dark-override shape as colors/dark_colors above -
+    # resolveThemedColor() in js/main.js falls back to autoDarkVariant() for
+    # whichever mode has no explicit entry here.
+    "progress_fill": {},
+    "dark_progress_fill": {},
+    "progress_track": {},
+    "dark_progress_track": {},
 }
 DEFAULT_CONTENT["custom_elements"].append(_LEARN_REEL_ENTRY)
 DEFAULT_CONTENT["text"].update(_LEARN_REEL_TEXT)
 DEFAULT_CONTENT["font_sizes"].update(_LEARN_REEL_FONT_SIZES)
 DEFAULT_CONTENT["text_styles"].update(_LEARN_REEL_TEXT_STYLES)
 DEFAULT_CONTENT["colors"].update(_LEARN_REEL_COLORS)
+
+# the student dashboard's progress bar (Days progressed of Total days) used
+# to be hardcoded markup + js (templates/dashboard.html's old #progFill/
+# #progLabel, js/dashboard.js's old renderProgress()) - now a real placed
+# "progress" custom element like a ta could build themselves, bound to the
+# two builtin variables above by default, so it's moveable/recolorable/
+# reshapeable through the visual editor same as everything else. "anchor"
+# re-pins it to the reserved-space spacer left in dash-head's own flow
+# (#dashProgressAnchor in templates/dashboard.html) on every load/resize,
+# same mechanism/reasoning as _LEARN_REEL_ENTRY's anchor - see
+# applyElementAnchors() in js/main.js. No bundled label text: "text is
+# separate from the bar" per the feature spec, a ta can place their own
+# caption next to it (the live "X of Y" number as text is a later formula-
+# text feature, not this one).
+_DASH_PROGRESS_ENTRY = {
+    "id": "seed.dashboard.progress", "kind": "progress",
+    "anchor": "#dashProgressAnchor", "left": 0, "top": 0,
+    "w": 1160, "h": 12,
+    "varCurrent": "days_progressed", "varTotal": "total_days",
+}
+DEFAULT_CONTENT["custom_elements"].append(_DASH_PROGRESS_ENTRY)
+# matches the old hardcoded .progress-bar/.progress-bar i rule (css/style.css)
+# so the migration is a visual no-op by default: var(--good) fill (var(--accent)
+# under body.mono, which both index.html and dashboard.html carry) over a
+# var(--surface-2) track.
+DEFAULT_CONTENT["progress_fill"]["seed.dashboard.progress"] = "var(--accent)"
+DEFAULT_CONTENT["progress_track"]["seed.dashboard.progress"] = "var(--surface-2)"
+DEFAULT_CONTENT["radius"]["seed.dashboard.progress"] = 999
 
 # starter "objects" library entries (see the objects table below): reusable
 # element bundles a ta can drop onto the page from the visual editor's
@@ -531,6 +592,33 @@ DEFAULT_OBJECTS = [
             "groups": [["seed.head.eyebrow", "seed.head.title"]],
         },
     },
+    {
+        "name": "Progress bar",
+        "data": {
+            # bound to the two builtin variables by default (see
+            # DEFAULT_CONTENT["variables"] above) - a ta re-binds either side
+            # to any other number variable from the style popover's Current/
+            # Total selects. The label is a plain, separate text element (see
+            # _DASH_PROGRESS_ENTRY's doc comment above for why it isn't fused
+            # into the bar itself), grouped so it moves with the bar but
+            # stays independently editable/deletable, same pattern as the
+            # Countdown timer's eyebrow/label text above.
+            "custom_elements": [
+                {"id": "seed.pb.lbl", "kind": "text", "left": 0, "top": 0, "w": 200, "h": 22},
+                {
+                    "id": "seed.pb.bar", "kind": "progress", "left": 0, "top": 28, "w": 280, "h": 14,
+                    "varCurrent": "days_progressed", "varTotal": "total_days",
+                },
+            ],
+            "text": {"seed.pb.lbl": "Progress"},
+            "font_sizes": {"seed.pb.lbl": ".85rem"},
+            "colors": {"seed.pb.lbl": "var(--muted)"},
+            "progress_fill": {"seed.pb.bar": "var(--good)"},
+            "progress_track": {"seed.pb.bar": "var(--surface-2)"},
+            "radius": {"seed.pb.bar": 999},
+            "groups": [["seed.pb.lbl", "seed.pb.bar"]],
+        },
+    },
 ]
 
 
@@ -681,6 +769,8 @@ def init_db():
     _seed_last_applied_profile(conn)
     _seed_default_objects(conn)
     _migrate_learn_reel(conn)
+    _migrate_dashboard_progress(conn)
+    _migrate_progress_bar_object(conn)
     conn.close()
 
 
@@ -997,6 +1087,101 @@ def _migrate_learn_reel(conn):
     conn.commit()
 
 
+def _migrate_dashboard_progress(conn):
+    """one-time patch (same meta-flag trick as _migrate_learn_reel()) adding
+    the migrated dashboard progress-bar element (_DASH_PROGRESS_ENTRY) and
+    the two builtin variables to every already-existing content blob/profile
+    that predates them. Needed for the same reason _migrate_learn_reel() is:
+    the old hardcoded #progFill/#progLabel markup this replaces is gone from
+    templates/dashboard.html now, so an old blob applied after this ships
+    needs the replacement patched in rather than just rendering nothing.
+    get_content()'s generic per-key backfill can't do this on its own since
+    "custom_elements" already exists as a key in an old blob (just without
+    this particular entry), the same reason _migrate_learn_reel() exists.
+    @param conn an open db connection
+    """
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO meta (key, value) VALUES ('dashboard_progress_migrated', '1')"
+    )
+    conn.commit()
+    if cur.rowcount == 0:
+        return
+
+    def patch(data):
+        changed = False
+        if "variables" not in data:
+            data["variables"] = json.loads(json.dumps(DEFAULT_CONTENT["variables"]))
+            changed = True
+        ids = [c.get("id") for c in data.get("custom_elements", [])]
+        if "seed.dashboard.progress" not in ids:
+            data.setdefault("custom_elements", []).append(json.loads(json.dumps(_DASH_PROGRESS_ENTRY)))
+            data.setdefault("progress_fill", {})["seed.dashboard.progress"] = "var(--accent)"
+            data.setdefault("progress_track", {})["seed.dashboard.progress"] = "var(--surface-2)"
+            data.setdefault("radius", {})["seed.dashboard.progress"] = 999
+            changed = True
+        return data, changed
+
+    row = conn.execute("SELECT data FROM content WHERE id = 1").fetchone()
+    if row:
+        data, changed = patch(json.loads(row["data"]))
+        if changed:
+            conn.execute("UPDATE content SET data = ? WHERE id = 1", (json.dumps(data),))
+
+    for prow in conn.execute("SELECT id, data FROM profiles").fetchall():
+        data, changed = patch(json.loads(prow["data"]))
+        if changed:
+            conn.execute("UPDATE profiles SET data = ? WHERE id = ?", (json.dumps(data), prow["id"]))
+
+    conn.commit()
+
+
+def _migrate_progress_bar_object(conn):
+    """one-time patch (same meta-flag trick as _migrate_learn_reel()) adding
+    the "Progress bar" entry to an already-existing Objects library that
+    predates it. _seed_default_objects() only ever runs once, the very
+    first time the objects table is created, so a db that already existed
+    before this feature shipped would otherwise never get the new seed
+    object at all - unlike DEFAULT_CONTENT's per-key backfill (get_content()),
+    there's no generic "fill in a missing library entry" mechanism for the
+    objects table, so this has to walk DEFAULT_OBJECTS itself.
+    @param conn an open db connection
+    """
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO meta (key, value) VALUES ('progress_bar_object_migrated', '1')"
+    )
+    conn.commit()
+    if cur.rowcount == 0:
+        return
+    existing_names = {r["name"] for r in conn.execute("SELECT name FROM objects").fetchall()}
+    for obj in DEFAULT_OBJECTS:
+        if obj["name"] == "Progress bar" and obj["name"] not in existing_names:
+            conn.execute(
+                "INSERT INTO objects (owner, name, data) VALUES (?, ?, ?)",
+                ("system", obj["name"], json.dumps(obj["data"])),
+            )
+    conn.commit()
+
+
+def _refresh_computed_variables(data):
+    """recalculates every "computed" variable's value in place off the rest
+    of `data`, so it's always derived fresh rather than trusting whatever a
+    ta's browser last saved (a computed variable has no editable value input
+    at all, see the Variables section in js/ta.js, but the array it lives in
+    still round-trips through the client on every load/apply like everything
+    else in the content blob).
+    Only one computed variable exists right now (days_progressed - the count
+    of unlocked days, same number js/dashboard.js's old renderProgress() used
+    to compute client-side as `unlockedCount`); this stays a small if-chain
+    on `key` rather than a registry since there's only the one.
+    @param data a content dict (mutated in place)
+    """
+    for v in data.get("variables", []):
+        if not v.get("computed"):
+            continue
+        if v.get("key") == "days_progressed":
+            v["value"] = sum(1 for d in data.get("days", []) if d.get("unlocked"))
+
+
 def get_content():
     """reads the live ta-editable content blob.
     @return the content dict, with any keys missing from an older save filled in from DEFAULT_CONTENT
@@ -1012,6 +1197,7 @@ def get_content():
     # always sees the full shape
     for key, value in DEFAULT_CONTENT.items():
         data.setdefault(key, value)
+    _refresh_computed_variables(data)
     return data
 
 
@@ -1019,6 +1205,11 @@ def save_content(data):
     """overwrites the live content blob.
     @param data the full content dict to save
     """
+    # re-derive computed variables before persisting, not just on read: a ta
+    # who toggles a day's unlock state and immediately hits Apply in the same
+    # session would otherwise save whatever stale days_progressed value their
+    # browser last fetched, only self-correcting on the next GET.
+    _refresh_computed_variables(data)
     conn = get_db()
     conn.execute(
         "UPDATE content SET data = ? WHERE id = 1", (json.dumps(data),)

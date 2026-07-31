@@ -38,12 +38,30 @@ var NAV_FIXED_IDS = [
  */
 function seed() {
   return {
-    total_days: 10,
     days: [
       { day: 1, date: "", opens_at: "", unlocked: false, title: "", blurb: "", files: [] },
       { day: 2, date: "", opens_at: "", unlocked: false, title: "", blurb: "", files: [] }
     ],
     extras: [],
+    /* named, typed values other elements (right now, just the student
+       dashboard's progress bar) can bind to, see renderVariables() below
+       and app/db.py's DEFAULT_CONTENT["variables"] (same shape). type is
+       "string"/"number"/"boolean"/"datetime". "builtin" ones can be
+       renamed but never removed/retyped; "computed" ones have no
+       ta-editable value at all, "value" is overwritten server-side on
+       every load (see _refresh_computed_variables() in app/db.py). */
+    variables: [
+      {
+        key: "total_days", name: "Total days", type: "number", value: 10,
+        description: "\"__ of TOTAL days unlocked\" progress bar on student dashboard",
+        builtin: true, computed: false
+      },
+      {
+        key: "days_progressed", name: "Days progressed", type: "number", value: 0,
+        description: "The day number the workshop is currently on (count of unlocked days), calculated automatically",
+        builtin: true, computed: true
+      }
+    ],
     timer_mode: "tentative", /* tentative | actual */
     timer_target: "",
     join_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
@@ -131,7 +149,14 @@ function seed() {
     dark_colors: {},
     dark_text_color: {},
     dark_fill: {},
-    dark_border: {}
+    dark_border: {},
+    /* "progress" custom element's two colors (fill, track), same paired
+       light/dark shape as colors/dark_colors above, see js/main.js's
+       resolveThemedColor()/applyProgressBindings() */
+    progress_fill: {},
+    dark_progress_fill: {},
+    progress_track: {},
+    dark_progress_track: {}
   };
 }
 
@@ -246,7 +271,17 @@ function normalizeState() {
   if (STATE.apply_tooltip === undefined) {
     STATE.apply_tooltip = "Applications open once the workshop dates are confirmed, check back soon.";
   }
-  if (!STATE.total_days) STATE.total_days = 10;
+  /* a blob saved before variables existed gets the full seeded pair; one
+     that already has some (even just custom ones a ta added) still needs
+     either builtin backfilled in if somehow missing, same "never let an
+     old save crash on a since-added field" stance as everything above */
+  if (!Array.isArray(STATE.variables)) {
+    STATE.variables = seed().variables;
+  } else {
+    seed().variables.forEach(function (sv) {
+      if (!STATE.variables.some(function (v) { return v.key === sv.key; })) STATE.variables.push(sv);
+    });
+  }
   if (STATE.hero_video_url === undefined) STATE.hero_video_url = "assets/cover-video.mp4";
   if (!STATE.home_images || typeof STATE.home_images !== "object") STATE.home_images = {};
   STATE.home_images = Object.assign({}, HOME_IMAGE_DEFAULTS, STATE.home_images);
@@ -274,6 +309,10 @@ function normalizeState() {
   if (!STATE.dark_text_color || typeof STATE.dark_text_color !== "object") STATE.dark_text_color = {};
   if (!STATE.dark_fill || typeof STATE.dark_fill !== "object") STATE.dark_fill = {};
   if (!STATE.dark_border || typeof STATE.dark_border !== "object") STATE.dark_border = {};
+  if (!STATE.progress_fill || typeof STATE.progress_fill !== "object") STATE.progress_fill = {};
+  if (!STATE.dark_progress_fill || typeof STATE.dark_progress_fill !== "object") STATE.dark_progress_fill = {};
+  if (!STATE.progress_track || typeof STATE.progress_track !== "object") STATE.progress_track = {};
+  if (!STATE.dark_progress_track || typeof STATE.dark_progress_track !== "object") STATE.dark_progress_track = {};
   /* footer contact line used to be its own field, edited from a dedicated
      input in this section; now it's click-to-edit like the rest of the
      landing page copy, so fold any already-saved value in once and stop
@@ -716,6 +755,117 @@ function gateCheck() {
   if (app) app.style.display = ok ? "block" : "none";
   if (gate) gate.style.display = ok ? "none" : "block";
   return ok;
+}
+
+/**
+ * Picks a key for a freshly-added variable that doesn't collide with any
+ * existing one: the base word, or base_2/base_3/... the first time it
+ * would. A key is the stable, typeable identifier a formula/binding refers
+ * to (see the Variables section's "easy to name" ask) - unlike "name" (the
+ * freely-renameable display label a ta edits directly), it's never
+ * hand-typed, just picked once here and left alone.
+ * @param base a starting key (plain lowercase word, no spaces)
+ * @return a key not already used by any STATE.variables entry
+ */
+function uniqueVariableKey(base) {
+  var existing = STATE.variables.map(function (v) { return v.key; });
+  if (existing.indexOf(base) === -1) return base;
+  var n = 2;
+  while (existing.indexOf(base + "_" + n) !== -1) n++;
+  return base + "_" + n;
+}
+
+/**
+ * Renders every named variable into #variablesList and wires up its
+ * controls - name/description/type/value all write straight back into the
+ * matching STATE.variables[i] entry, same "the input already IS the state"
+ * pattern renderPanels() uses for day panels just below. A builtin's type
+ * can't be changed (it's load-bearing for whatever's already bound to it,
+ * eg the progress bar's Current/Total selects, see js/main.js) and only a
+ * non-builtin can be removed at all. A computed one has no editable value
+ * at all - shows its live, server-calculated number instead of an input,
+ * see _refresh_computed_variables() in app/db.py.
+ */
+function renderVariables() {
+  var list = document.getElementById("variablesList");
+  if (!list) return;
+  var html = "";
+
+  STATE.variables.forEach(function (v, i) {
+    var typeOptions = ["string", "number", "boolean", "datetime"].map(function (t) {
+      return '<option value="' + t + '"' + (v.type === t ? " selected" : "") + '>' +
+        t.charAt(0).toUpperCase() + t.slice(1) + '</option>';
+    }).join("");
+
+    var valueField;
+    if (v.computed) {
+      valueField = '<div class="field"><label>Value</label>' +
+        '<p class="muted" style="margin:6px 0 0">' +
+        (v.value === null || v.value === undefined ? "0" : v.value) +
+        ' &middot; calculated automatically</p></div>';
+    } else if (v.type === "boolean") {
+      valueField = '<div class="field"><label class="ta-radio">' +
+        '<input type="checkbox" class="v-value-bool"' + (v.value ? " checked" : "") + '> On</label></div>';
+    } else if (v.type === "datetime") {
+      valueField = '<div class="field"><label>Value</label>' +
+        '<input type="datetime-local" class="v-value-input" value="' + (v.value || "") + '"></div>';
+    } else if (v.type === "number") {
+      valueField = '<div class="field"><label>Value</label>' +
+        '<input type="number" class="v-value-input" value="' + (v.value === undefined || v.value === null ? 0 : v.value) + '"></div>';
+    } else {
+      valueField = '<div class="field"><label>Value</label>' +
+        '<input type="text" class="v-value-input" value="' + (v.value || "") + '"></div>';
+    }
+
+    html +=
+      '<div class="ta-card ta-card-hl" data-i="' + i + '" style="margin-bottom:14px">' +
+        '<div class="ta-row">' +
+          '<div class="field"><label>Name</label>' +
+            '<input type="text" class="v-name" value="' + v.name + '"></div>' +
+          '<div class="field"><label>Type</label>' +
+            '<select class="v-type"' + (v.builtin ? " disabled" : "") + '>' + typeOptions + '</select></div>' +
+        '</div>' +
+        '<div class="field"><label>Description</label>' +
+          '<textarea class="v-desc" rows="2">' + (v.description || "") + '</textarea></div>' +
+        valueField +
+        (v.builtin ? "" : '<button class="btn btn-ghost v-del" type="button" style="margin-top:10px">Remove variable</button>') +
+      '</div>';
+  });
+
+  list.innerHTML = html;
+
+  list.querySelectorAll(".ta-card").forEach(function (card) {
+    var v = STATE.variables[+card.getAttribute("data-i")];
+
+    card.querySelector(".v-name").addEventListener("input", function () { v.name = this.value; });
+    card.querySelector(".v-desc").addEventListener("input", function () { v.description = this.value; });
+
+    if (!v.builtin) {
+      card.querySelector(".v-type").addEventListener("change", function () {
+        v.type = this.value;
+        v.value = v.type === "boolean" ? false : "";
+        renderVariables();
+      });
+    }
+
+    var boolInput = card.querySelector(".v-value-bool");
+    if (boolInput) boolInput.addEventListener("change", function () { v.value = this.checked; });
+    var valueInput = card.querySelector(".v-value-input");
+    if (valueInput) {
+      valueInput.addEventListener("input", function () {
+        v.value = v.type === "number" ? (+this.value || 0) : this.value;
+      });
+    }
+
+    var delBtn = card.querySelector(".v-del");
+    if (delBtn) {
+      delBtn.addEventListener("click", function () {
+        if (!confirm('Remove the "' + v.name + '" variable?')) return;
+        STATE.variables.splice(STATE.variables.indexOf(v), 1);
+        renderVariables();
+      });
+    }
+  });
 }
 
 /** Renders every day panel editor into #panelList and wires up its controls. */
@@ -1216,7 +1366,7 @@ function syncLanding() {
 
 /** Re-renders every editor section from STATE. */
 function renderAll() {
-  document.getElementById("totalDaysInput").value = STATE.total_days;
+  renderVariables();
   renderPanels();
   renderExtras();
   renderLogistics();
@@ -1887,8 +2037,13 @@ document.addEventListener("DOMContentLoaded", function () {
     backToLive();
   });
 
-  document.getElementById("totalDaysInput").addEventListener("input", function () {
-    STATE.total_days = +this.value || 1;
+  document.getElementById("addVariable").addEventListener("click", function () {
+    var key = uniqueVariableKey("variable");
+    STATE.variables.push({
+      key: key, name: "New variable", type: "string", value: "",
+      description: "", builtin: false, computed: false
+    });
+    renderVariables();
   });
 
   document.getElementById("addPanel").addEventListener("click", function () {

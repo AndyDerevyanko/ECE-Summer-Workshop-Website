@@ -62,10 +62,14 @@
         <h1>Let's get to work.</h1>
         <p class="muted">New content reveals every morning. Show up to see what's next!</p>
 
-        <div class="progress-wrap">
-          <div class="progress-bar"><i id="progFill"></i></div>
-          <div class="progress-label" id="progLabel">Loading your progress&hellip;</div>
-        </div>
+        <!-- reserved space for the placed "progress" custom element (see
+             app/db.py's _DASH_PROGRESS_ENTRY, js/main.js's applyElementAnchors()):
+             a ta can move/restyle/rebind it like any other visual-editor
+             element from the instructor portal's Visual editor > Student
+             dashboard tab, this spacer just keeps its default spot reserved
+             in normal document flow so re-anchoring on load/resize works
+             the same way the landing page's #learnReelAnchor does -->
+        <div class="dash-progress-anchor" id="dashProgressAnchor" style="min-height:12px;margin-top:18px" aria-hidden="true"></div>
       </div>
     </section>
 
@@ -97,6 +101,7 @@
 
   <script src="js/theme.js?v=3"></script>
   <script src="js/idle.js?v=3"></script>
+  <script src="js/main.js?v=4"></script>
   <script src="js/dashboard.js?v=3"></script>
 </body>
 </html>

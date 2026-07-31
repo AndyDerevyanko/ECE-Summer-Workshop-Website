@@ -1,7 +1,11 @@
 /* dashboard: renders day panels from content fetched off /api/content */
 
-/* full length of the workshop, drives the progress denominator. set from
-   /api/content (ta portal, "Total workshop days"), this is just the
+/* full length of the workshop, used to decide whether a trailing "next day"
+   locked card still needs to show once every real day panel is open (see
+   renderDays()). The live progress bar itself is a placed "progress"
+   custom element now (js/main.js's applyProgressBindings(), bound to the
+   same content.variables["total_days"] value), not driven from here
+   anymore. Set from /api/content ("Total days" variable), this is just the
    fallback if that's missing. */
 var TOTAL_DAYS = 10;
 
@@ -293,18 +297,6 @@ function renderDays() {
   return unlockedCount;
 }
 
-/**
- * Fills in the "N of TOTAL_DAYS days unlocked" progress bar.
- * @param unlockedCount how many day panels are unlocked
- */
-function renderProgress(unlockedCount) {
-  var fill = document.getElementById("progFill");
-  var label = document.getElementById("progLabel");
-  var pct = Math.round((unlockedCount / TOTAL_DAYS) * 100);
-  if (fill) setTimeout(function () { fill.style.width = pct + "%"; }, 150);
-  if (label) label.textContent = unlockedCount + " of " + TOTAL_DAYS + " days unlocked (" + pct + "%)";
-}
-
 /** Renders the "Extra attachments" list into #resList. */
 function renderExtras() {
   var list = document.getElementById("resList");
@@ -368,9 +360,9 @@ document.addEventListener("DOMContentLoaded", function () {
     .then(function (data) {
       DAYS = data.days;
       EXTRAS = data.extras;
-      TOTAL_DAYS = data.total_days || TOTAL_DAYS;
-      var unlocked = renderDays();
-      renderProgress(unlocked);
+      var totalDaysVar = (data.variables || []).filter(function (v) { return v.key === "total_days"; })[0];
+      TOTAL_DAYS = (totalDaysVar && +totalDaysVar.value) || TOTAL_DAYS;
+      renderDays();
       renderExtras();
     });
 });

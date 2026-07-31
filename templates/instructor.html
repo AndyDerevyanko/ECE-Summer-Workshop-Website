@@ -112,13 +112,22 @@
       <section class="section-sm" id="panels">
         <div class="wrap">
           <h2 style="font-size:1.4rem;margin-bottom:6px">Day panels</h2>
-          <div class="ta-card ta-card-hl" style="margin-bottom:28px">
-            <div class="field">
-              <label for="totalDaysInput">Total workshop days</label>
-              <input id="totalDaysInput" type="number" min="1">
-            </div>
-            <p class="muted" style="margin:6px 0 0">"__ of TOTAL days unlocked" progress bar on student dashboard</p>
+
+          <h3 style="font-size:1.1rem;margin:18px 0 6px">Variables</h3>
+          <p class="muted" style="margin-top:0;margin-bottom:14px">
+            Named values other elements (like the student dashboard's progress bar, from the Visual editor's
+            right-click "Add element" menu) can bind to. "Total days" and "Days progressed" always exist and
+            can't be removed - rename them however reads best, or add your own below.
+          </p>
+          <div id="variablesList" style="margin-bottom:18px">
+            <!-- filled in by ta.js -->
           </div>
+          <button class="btn btn-ghost" id="addVariable" type="button" style="margin-bottom:28px">
+            <svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+            New variable
+          </button>
+
           <div id="panelList">
             <!-- filled in by ta.js -->
           </div>

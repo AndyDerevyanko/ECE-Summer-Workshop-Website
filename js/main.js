@@ -2056,7 +2056,8 @@ function applyElementOpacity(el, value) {
    which calls it right after updateIcon(). */
 var THEMED_OVERRIDE_MAPS = {
   colors: {}, darkColors: {}, fill: {}, darkFill: {},
-  textColor: {}, darkTextColor: {}, border: {}, darkBorder: {}
+  textColor: {}, darkTextColor: {}, border: {}, darkBorder: {},
+  progressFill: {}, darkProgressFill: {}, progressTrack: {}, darkProgressTrack: {}
 };
 
 /**
@@ -2085,7 +2086,13 @@ function applyColorOverrides(colors, darkColors) {
     }
     var id = elId(el);
     var v = colors[id], dv = THEMED_OVERRIDE_MAPS.darkColors[id];
-    if ((!v && !dv) || elKind(el) === "img") return;
+    /* a "progress" element paints its own two colors (see
+       applyProgressBindings()), the generic Color row is hidden for it in
+       the style popover (toggleStyleMenu()) so content.colors should never
+       actually carry an entry for one, but skip it here too for safety -
+       painting a stray background on the outer track div would visually
+       clash with its own resolved track color */
+    if ((!v && !dv) || elKind(el) === "img" || el.hasAttribute("data-progress")) return;
     setElementColor(el, resolveThemedColor(v, dv));
   });
 }
@@ -2285,22 +2292,77 @@ function applyBorderOverrides(border, darkBorder) {
 }
 
 /**
- * Re-resolves every color/fill/text-color/border override already on the
- * page against whichever theme just became active, from the same maps the
- * last applyColorOverrides()/applyFillOverrides()/applyTextColorOverrides()/
- * applyBorderOverrides() pass cached (THEMED_OVERRIDE_MAPS) - a plain re-run
- * of those four rather than a full page reload, so a mid-session theme
- * toggle repaints every TA-set color immediately. Exposed on window so
- * js/theme.js's setTheme() can call it right after updateIcon() without a
- * circular file dependency (main.js already loads before theme.js on every
- * page, see templates/index.html's script order, but not guaranteed the
- * other way).
+ * Paints one "progress" element's live fill width (off its two bound
+ * variables, VARIABLES/variableNumericValue()) and its two theme-paired
+ * colors (THEMED_OVERRIDE_MAPS.progress*). Split out from
+ * applyProgressBindings() so a single element can be repainted right away -
+ * just after it's placed (finishAddedElement()), after its Current/Total
+ * bindings change, or after a fill/track color edit - without re-scanning
+ * every progress element on the page for one change.
+ * @param el the element (data-progress)
+ * @param d its custom-element descriptor ({varCurrent, varTotal, ...})
+ */
+function paintProgressElement(el, d) {
+  var id = elId(el);
+  var cur = variableNumericValue(d.varCurrent);
+  var tot = variableNumericValue(d.varTotal);
+  var pct = tot > 0 ? Math.max(0, Math.min(100, (cur / tot) * 100)) : 0;
+  var fillEl = el.querySelector(".progress-el-fill");
+  if (fillEl) {
+    /* stashed on the fill bar itself (not just computed on demand) so the
+       style popover's fill-color hover preview (see buildStyleMenu()) can
+       restore the real width after temporarily forcing a visible one,
+       without having to re-run this whole calc just to leave preview mode */
+    fillEl.dataset.pct = pct;
+    fillEl.style.width = pct + "%";
+  }
+  var trackColor = resolveThemedColor(THEMED_OVERRIDE_MAPS.progressTrack[id], THEMED_OVERRIDE_MAPS.darkProgressTrack[id]);
+  if (trackColor) el.style.background = trackColor;
+  var fillColor = resolveThemedColor(THEMED_OVERRIDE_MAPS.progressFill[id], THEMED_OVERRIDE_MAPS.darkProgressFill[id]);
+  if (fillColor && fillEl) fillEl.style.background = fillColor;
+}
+
+/**
+ * Applies every placed "progress" element's live state on top of whatever
+ * buildCustomElementNode() built it with by default. Runs on every load,
+ * live site included, right after renderCustomElements() has (re)built
+ * every progress element's DOM and VARIABLES has been refreshed from the
+ * same content payload - same "build with defaults, then apply overrides"
+ * two-pass shape every other kind/override here follows.
+ * @param fill content.progress_fill, {id: css color string}
+ * @param darkFill content.dark_progress_fill, {id: css color string}
+ * @param track content.progress_track, {id: css color string}
+ * @param darkTrack content.dark_progress_track, {id: css color string}
+ */
+function applyProgressBindings(fill, darkFill, track, darkTrack) {
+  THEMED_OVERRIDE_MAPS.progressFill = fill || {};
+  THEMED_OVERRIDE_MAPS.darkProgressFill = darkFill || {};
+  THEMED_OVERRIDE_MAPS.progressTrack = track || {};
+  THEMED_OVERRIDE_MAPS.darkProgressTrack = darkTrack || {};
+  document.querySelectorAll("[data-progress]").forEach(function (el) {
+    paintProgressElement(el, customElementById(elId(el)) || {});
+  });
+}
+
+/**
+ * Re-resolves every color/fill/text-color/border/progress override already
+ * on the page against whichever theme just became active, from the same
+ * maps the last applyColorOverrides()/applyFillOverrides()/
+ * applyTextColorOverrides()/applyBorderOverrides()/applyProgressBindings()
+ * pass cached (THEMED_OVERRIDE_MAPS) - a plain re-run of those five rather
+ * than a full page reload, so a mid-session theme toggle repaints every
+ * TA-set color immediately. Exposed on window so js/theme.js's setTheme()
+ * can call it right after updateIcon() without a circular file dependency
+ * (main.js already loads before theme.js on every page, see
+ * templates/index.html's script order, but not guaranteed the other way).
  */
 function reapplyThemedColors() {
   applyColorOverrides(THEMED_OVERRIDE_MAPS.colors, THEMED_OVERRIDE_MAPS.darkColors);
   applyFillOverrides(THEMED_OVERRIDE_MAPS.fill, THEMED_OVERRIDE_MAPS.darkFill);
   applyTextColorOverrides(THEMED_OVERRIDE_MAPS.textColor, THEMED_OVERRIDE_MAPS.darkTextColor);
   applyBorderOverrides(THEMED_OVERRIDE_MAPS.border, THEMED_OVERRIDE_MAPS.darkBorder);
+  applyProgressBindings(THEMED_OVERRIDE_MAPS.progressFill, THEMED_OVERRIDE_MAPS.darkProgressFill,
+    THEMED_OVERRIDE_MAPS.progressTrack, THEMED_OVERRIDE_MAPS.darkProgressTrack);
   repaintInlineTextColors();
 }
 window.reapplyThemedColors = reapplyThemedColors;
@@ -2363,6 +2425,15 @@ var STYLE_DARKCOLOR_BEFORE = "";
 var STYLE_DARKTEXTCOLOR_BEFORE = "";
 var STYLE_DARKFILL_BEFORE = "";
 var STYLE_DARKBORDER_BEFORE = "";
+/* same "value right before this popover session's edit" convention, for the
+   "progress" custom element's own Progress color/Bar color rows */
+var STYLE_PROGRESSFILL_BEFORE = "";
+var STYLE_DARKPROGRESSFILL_BEFORE = "";
+var STYLE_PROGRESSTRACK_BEFORE = "";
+var STYLE_DARKPROGRESSTRACK_BEFORE = "";
+/* a progress element's {varCurrent, varTotal} right before the current
+   popover-session edit, same idea as STYLE_DT_BEFORE for datetime */
+var STYLE_PROGRESSVAR_BEFORE = null;
 /* a datetime element's {target, format, strftime} right before the current
    popover-session edit, so format/pattern/target changes push one undo
    step each against the value they started from (see buildStyleMenu()) */
@@ -2420,6 +2491,40 @@ function buildStyleMenu() {
       '<label>Dark mode fill</label>' +
       '<input type="color" class="sm-fill-dark">' +
       '<button type="button" class="sm-fill-dark-reset" title="Reset to auto">×</button>' +
+    '</div>' +
+    '<div class="sm-row sm-progress-row sm-progress-current-row">' +
+      '<label>Current</label>' +
+      '<select class="sm-progress-current"></select>' +
+    '</div>' +
+    '<div class="sm-row sm-progress-row sm-progress-total-row">' +
+      '<label>Total</label>' +
+      '<select class="sm-progress-total"></select>' +
+    '</div>' +
+    '<div class="sm-row sm-progress-row sm-progress-fill-row">' +
+      '<label>Progress color</label>' +
+      '<input type="color" class="sm-progress-fill">' +
+      '<button type="button" class="sm-progress-fill-reset" title="Reset to default">×</button>' +
+    '</div>' +
+    '<div class="sm-row sm-dark-toggle-row sm-progress-row sm-progress-fill-toggle-row">' +
+      '<button type="button" class="sm-dark-toggle sm-progress-fill-dark-toggle"></button>' +
+    '</div>' +
+    '<div class="sm-row sm-dark-row sm-progress-row sm-progress-fill-dark-row">' +
+      '<label>Dark mode progress color</label>' +
+      '<input type="color" class="sm-progress-fill-dark">' +
+      '<button type="button" class="sm-progress-fill-dark-reset" title="Reset to auto">×</button>' +
+    '</div>' +
+    '<div class="sm-row sm-progress-row sm-progress-track-row">' +
+      '<label>Bar color</label>' +
+      '<input type="color" class="sm-progress-track">' +
+      '<button type="button" class="sm-progress-track-reset" title="Reset to default">×</button>' +
+    '</div>' +
+    '<div class="sm-row sm-dark-toggle-row sm-progress-row sm-progress-track-toggle-row">' +
+      '<button type="button" class="sm-dark-toggle sm-progress-track-dark-toggle"></button>' +
+    '</div>' +
+    '<div class="sm-row sm-dark-row sm-progress-row sm-progress-track-dark-row">' +
+      '<label>Dark mode bar color</label>' +
+      '<input type="color" class="sm-progress-track-dark">' +
+      '<button type="button" class="sm-progress-track-dark-reset" title="Reset to auto">×</button>' +
     '</div>' +
     '<div class="sm-row sm-tint-row">' +
       '<label>Tint</label>' +
@@ -2510,6 +2615,18 @@ function buildStyleMenu() {
   var fillDarkToggle = STYLE_MENU.querySelector(".sm-fill-dark-toggle");
   var fillDarkInput = STYLE_MENU.querySelector(".sm-fill-dark");
   var fillDarkReset = STYLE_MENU.querySelector(".sm-fill-dark-reset");
+  var progressCurrent = STYLE_MENU.querySelector(".sm-progress-current");
+  var progressTotal = STYLE_MENU.querySelector(".sm-progress-total");
+  var progressFillInput = STYLE_MENU.querySelector(".sm-progress-fill");
+  var progressFillReset = STYLE_MENU.querySelector(".sm-progress-fill-reset");
+  var progressFillDarkToggle = STYLE_MENU.querySelector(".sm-progress-fill-dark-toggle");
+  var progressFillDarkInput = STYLE_MENU.querySelector(".sm-progress-fill-dark");
+  var progressFillDarkReset = STYLE_MENU.querySelector(".sm-progress-fill-dark-reset");
+  var progressTrackInput = STYLE_MENU.querySelector(".sm-progress-track");
+  var progressTrackReset = STYLE_MENU.querySelector(".sm-progress-track-reset");
+  var progressTrackDarkToggle = STYLE_MENU.querySelector(".sm-progress-track-dark-toggle");
+  var progressTrackDarkInput = STYLE_MENU.querySelector(".sm-progress-track-dark");
+  var progressTrackDarkReset = STYLE_MENU.querySelector(".sm-progress-track-dark-reset");
   var tintInput = STYLE_MENU.querySelector(".sm-tint");
   var tintReset = STYLE_MENU.querySelector(".sm-tint-reset");
   var shadeInput = STYLE_MENU.querySelector(".sm-shade");
@@ -2535,6 +2652,9 @@ function buildStyleMenu() {
   [colorInput, colorReset, colorDarkToggle, colorDarkInput, colorDarkReset,
    textColorInput, textColorReset, textColorDarkToggle, textColorDarkInput, textColorDarkReset,
    fillInput, fillReset, fillDarkToggle, fillDarkInput, fillDarkReset,
+   progressCurrent, progressTotal,
+   progressFillInput, progressFillReset, progressFillDarkToggle, progressFillDarkInput, progressFillDarkReset,
+   progressTrackInput, progressTrackReset, progressTrackDarkToggle, progressTrackDarkInput, progressTrackDarkReset,
    tintInput, tintReset, shadeInput, radiusInput, borderW, borderColor,
    borderDarkToggle, borderColorDark, borderDarkReset,
    shadowInput, opacityInput, dtFont, dtFormat, dtPattern, dtTarget, themeIconBtn].forEach(function (el) {
@@ -2565,7 +2685,33 @@ function buildStyleMenu() {
   wireDarkToggle(colorDarkToggle, STYLE_MENU.querySelector(".sm-color-row"), STYLE_MENU.querySelector(".sm-color-dark-row"));
   wireDarkToggle(textColorDarkToggle, STYLE_MENU.querySelector(".sm-textcolor-row"), STYLE_MENU.querySelector(".sm-textcolor-dark-row"));
   wireDarkToggle(fillDarkToggle, STYLE_MENU.querySelector(".sm-fill-row"), STYLE_MENU.querySelector(".sm-fill-dark-row"));
+  wireDarkToggle(progressFillDarkToggle, STYLE_MENU.querySelector(".sm-progress-fill-row"), STYLE_MENU.querySelector(".sm-progress-fill-dark-row"));
+  wireDarkToggle(progressTrackDarkToggle, STYLE_MENU.querySelector(".sm-progress-track-row"), STYLE_MENU.querySelector(".sm-progress-track-dark-row"));
   wireDarkToggle(borderDarkToggle, STYLE_MENU.querySelector(".sm-border-color"), STYLE_MENU.querySelector(".sm-border-dark-row"));
+
+  /**
+   * Previews the progress bar's fill at a visible, non-zero width while a ta
+   * is choosing its color - at 0% (or a low %) the color swatch's own
+   * choice is otherwise invisible on the actual bar, exactly the gap the
+   * "let a ta see the fill color in action" ask calls out. Purely a visual
+   * preview: the real width (stashed on the fill bar's own dataset by
+   * paintProgressElement()) is restored on mouseleave, no data changes.
+   * @param input the row's own <input type=color> (light or dark side)
+   */
+  function wireProgressFillHoverPreview(input) {
+    input.addEventListener("mouseenter", function () {
+      var el = STYLE_MENU_ID && styleMenuElById(STYLE_MENU_ID);
+      var fillEl = el && el.querySelector(".progress-el-fill");
+      if (fillEl) fillEl.style.width = "60%";
+    });
+    input.addEventListener("mouseleave", function () {
+      var el = STYLE_MENU_ID && styleMenuElById(STYLE_MENU_ID);
+      var fillEl = el && el.querySelector(".progress-el-fill");
+      if (fillEl) fillEl.style.width = (fillEl.dataset.pct || 0) + "%";
+    });
+  }
+  wireProgressFillHoverPreview(progressFillInput);
+  wireProgressFillHoverPreview(progressFillDarkInput);
   STYLE_MENU.querySelectorAll(".sm-dt-fs-dn, .sm-dt-fs-up, .sm-dt-align").forEach(function (btn) {
     btn.addEventListener("mousedown", function (e) { e.stopPropagation(); });
   });
@@ -2787,6 +2933,136 @@ function buildStyleMenu() {
     }
     STYLE_DARKFILL_BEFORE = "";
   });
+
+  /**
+   * Commits a Current/Total variable-select change: updates the element's
+   * own descriptor (varCurrent/varTotal live on it directly, like a
+   * datetime element's target/format - see addCustomElement()), repersists
+   * CUSTOM_ELEMENTS, and repaints just this element's fill ratio.
+   * @param selectEl the "sm-progress-current"/"sm-progress-total" <select>
+   * @param field "varCurrent" or "varTotal"
+   */
+  function wireProgressVarSelect(selectEl, field) {
+    selectEl.addEventListener("change", function () {
+      if (!STYLE_MENU_ID) return;
+      var d = customElementById(STYLE_MENU_ID);
+      var el = styleMenuEl();
+      if (!d || !el) return;
+      var before = { varCurrent: d.varCurrent, varTotal: d.varTotal };
+      d[field] = selectEl.value;
+      saveCustomElements(CUSTOM_ELEMENTS);
+      paintProgressElement(el, d);
+      var after = { varCurrent: d.varCurrent, varTotal: d.varTotal };
+      if (before[field] !== after[field]) {
+        EDIT_UNDO.push({ type: "progressvar", id: STYLE_MENU_ID, before: before, after: after });
+        EDIT_REDO.length = 0;
+      }
+      STYLE_PROGRESSVAR_BEFORE = after;
+    });
+  }
+  wireProgressVarSelect(progressCurrent, "varCurrent");
+  wireProgressVarSelect(progressTotal, "varTotal");
+
+  /**
+   * Wires one "progress" themed color row's input/change/reset for both its
+   * light and dark swatches - the fill/darkFill wiring just above's
+   * generic twin, factored since progress adds two such rows (fill, track)
+   * at once rather than incrementally like fill/border/etc were. Unlike a
+   * plain background color there's no single setElementColor()-style
+   * setter for a two-color composite element, so every branch repaints via
+   * paintProgressElement() instead.
+   * @param lightInput/lightReset/darkInput/darkReset the row's four controls
+   * @param mapKey/darkMapKey THEMED_OVERRIDE_MAPS.progress* keys for this row
+   * @param saveFn/saveDarkFn the row's saveEditedProgress*()/
+   *   saveEditedDarkProgress*() persistence functions
+   * @param type/darkType EDIT_UNDO "type" strings for this row
+   * @param readCurrentFn (el) -> hex, reads the live rendered color back
+   *   after a reset (currentProgressFillValue or currentProgressTrackValue)
+   * @param getBefore/setBefore/getDarkBefore/setDarkBefore accessors for
+   *   this row's pair of STYLE_PROGRESS*_BEFORE/STYLE_DARKPROGRESS*_BEFORE
+   *   session-baseline globals
+   */
+  function wireProgressColorRow(lightInput, lightReset, darkInput, darkReset,
+      mapKey, darkMapKey, saveFn, saveDarkFn, type, darkType, readCurrentFn,
+      getBefore, setBefore, getDarkBefore, setDarkBefore) {
+    lightInput.addEventListener("input", function () {
+      if (!STYLE_MENU_ID) return;
+      var el = styleMenuEl();
+      if (!el) return;
+      THEMED_OVERRIDE_MAPS[mapKey][STYLE_MENU_ID] = lightInput.value;
+      paintProgressElement(el, customElementById(STYLE_MENU_ID) || {});
+      saveFn(STYLE_MENU_ID, lightInput.value);
+    });
+    lightInput.addEventListener("change", function () {
+      if (!STYLE_MENU_ID) return;
+      var after = lightInput.value;
+      if (after !== getBefore()) {
+        EDIT_UNDO.push({ type: type, id: STYLE_MENU_ID, before: getBefore(), after: after });
+        EDIT_REDO.length = 0;
+      }
+      setBefore(after);
+    });
+    lightReset.addEventListener("click", function () {
+      if (!STYLE_MENU_ID) return;
+      var el = styleMenuEl();
+      if (!el) return;
+      var before = getBefore();
+      THEMED_OVERRIDE_MAPS[mapKey][STYLE_MENU_ID] = "";
+      saveFn(STYLE_MENU_ID, "");
+      paintProgressElement(el, customElementById(STYLE_MENU_ID) || {});
+      var after = readCurrentFn(el);
+      lightInput.value = isDarkThemeActive() ? autoDarkVariant(after) : after;
+      if (before !== "") {
+        EDIT_UNDO.push({ type: type, id: STYLE_MENU_ID, before: before, after: "" });
+        EDIT_REDO.length = 0;
+      }
+      setBefore("");
+    });
+
+    darkInput.addEventListener("input", function () {
+      if (!STYLE_MENU_ID) return;
+      var el = styleMenuEl();
+      if (!el) return;
+      THEMED_OVERRIDE_MAPS[darkMapKey][STYLE_MENU_ID] = darkInput.value;
+      paintProgressElement(el, customElementById(STYLE_MENU_ID) || {});
+      saveDarkFn(STYLE_MENU_ID, darkInput.value);
+    });
+    darkInput.addEventListener("change", function () {
+      if (!STYLE_MENU_ID) return;
+      var after = darkInput.value;
+      if (after !== getDarkBefore()) {
+        EDIT_UNDO.push({ type: darkType, id: STYLE_MENU_ID, before: getDarkBefore(), after: after });
+        EDIT_REDO.length = 0;
+      }
+      setDarkBefore(after);
+    });
+    darkReset.addEventListener("click", function () {
+      if (!STYLE_MENU_ID) return;
+      var el = styleMenuEl();
+      if (!el) return;
+      var before = getDarkBefore();
+      THEMED_OVERRIDE_MAPS[darkMapKey][STYLE_MENU_ID] = "";
+      saveDarkFn(STYLE_MENU_ID, "");
+      paintProgressElement(el, customElementById(STYLE_MENU_ID) || {});
+      var after = autoDarkVariant(lightInput.value);
+      darkInput.value = after;
+      if (before !== "") {
+        EDIT_UNDO.push({ type: darkType, id: STYLE_MENU_ID, before: before, after: "" });
+        EDIT_REDO.length = 0;
+      }
+      setDarkBefore("");
+    });
+  }
+  wireProgressColorRow(progressFillInput, progressFillReset, progressFillDarkInput, progressFillDarkReset,
+    "progressFill", "darkProgressFill", saveEditedProgressFill, saveEditedDarkProgressFill,
+    "progressfill", "darkprogressfill", currentProgressFillValue,
+    function () { return STYLE_PROGRESSFILL_BEFORE; }, function (v) { STYLE_PROGRESSFILL_BEFORE = v; },
+    function () { return STYLE_DARKPROGRESSFILL_BEFORE; }, function (v) { STYLE_DARKPROGRESSFILL_BEFORE = v; });
+  wireProgressColorRow(progressTrackInput, progressTrackReset, progressTrackDarkInput, progressTrackDarkReset,
+    "progressTrack", "darkProgressTrack", saveEditedProgressTrack, saveEditedDarkProgressTrack,
+    "progresstrack", "darkprogresstrack", currentProgressTrackValue,
+    function () { return STYLE_PROGRESSTRACK_BEFORE; }, function (v) { STYLE_PROGRESSTRACK_BEFORE = v; },
+    function () { return STYLE_DARKPROGRESSTRACK_BEFORE; }, function (v) { STYLE_DARKPROGRESSTRACK_BEFORE = v; });
 
   tintInput.addEventListener("input", function () {
     if (!STYLE_MENU_ID) return;
@@ -3257,6 +3533,29 @@ function currentFillValue(el) {
 }
 
 /**
+ * Reads a "progress" element's current fill-bar color as a hex string,
+ * "#ffffff" if unparseable - same convention as currentFillValue(), just
+ * pointed at the inner .progress-el-fill rather than el itself.
+ * @param el the progress element (data-progress)
+ * @return a "#rrggbb" string
+ */
+function currentProgressFillValue(el) {
+  var fillEl = el.querySelector(".progress-el-fill");
+  return (fillEl && rgbToHex(getComputedStyle(fillEl).backgroundColor)) || "#ffffff";
+}
+
+/**
+ * Reads a "progress" element's current track/background color as a hex
+ * string, "#ffffff" if unparseable - same convention as currentFillValue(),
+ * just for its own background rather than a textbox's.
+ * @param el the progress element (data-progress)
+ * @return a "#rrggbb" string
+ */
+function currentProgressTrackValue(el) {
+  return rgbToHex(getComputedStyle(el).backgroundColor) || "#ffffff";
+}
+
+/**
  * Reads a button's current text color (see the style popover's Text color
  * row, buttons only) as a hex string, "#ffffff" if it's unparseable (an
  * <input type=color> has no real "unset" state of its own, same convention
@@ -3428,17 +3727,39 @@ function primeStyleMenuThemedRows(el) {
   var isImg = kind === "img";
   var isIcon = kind === "icon";
   var isDatetime = el.hasAttribute("data-datetime");
+  var isProgress = el.hasAttribute("data-progress");
   var isText = colorTarget(el) === "text";
   var isBtn = isButtonEl(el);
   var shapeDisplay = (isIcon || isDatetime) ? "none" : "";
 
-  if (!isImg) {
+  if (!isImg && !isProgress) {
     var colorBefore = primeThemedColorRow(currentColorValue(el),
       STYLE_MENU.querySelector(".sm-color"), STYLE_MENU.querySelector(".sm-color-dark"),
       STYLE_MENU.querySelector(".sm-color-row"), STYLE_MENU.querySelector(".sm-color-dark-row"),
       STYLE_MENU.querySelector(".sm-color-dark-toggle"), THEMED_OVERRIDE_MAPS.colors, THEMED_OVERRIDE_MAPS.darkColors, "color");
     STYLE_COLOR_BEFORE = colorBefore.lightBefore;
     STYLE_DARKCOLOR_BEFORE = colorBefore.darkBefore;
+  }
+
+  if (isProgress) {
+    var d = customElementById(STYLE_MENU_ID) || {};
+    populateProgressVarSelect(STYLE_MENU.querySelector(".sm-progress-current"), d.varCurrent || "");
+    populateProgressVarSelect(STYLE_MENU.querySelector(".sm-progress-total"), d.varTotal || "");
+    STYLE_PROGRESSVAR_BEFORE = { varCurrent: d.varCurrent, varTotal: d.varTotal };
+
+    var pFillBefore = primeThemedColorRow(currentProgressFillValue(el),
+      STYLE_MENU.querySelector(".sm-progress-fill"), STYLE_MENU.querySelector(".sm-progress-fill-dark"),
+      STYLE_MENU.querySelector(".sm-progress-fill-row"), STYLE_MENU.querySelector(".sm-progress-fill-dark-row"),
+      STYLE_MENU.querySelector(".sm-progress-fill-dark-toggle"), THEMED_OVERRIDE_MAPS.progressFill, THEMED_OVERRIDE_MAPS.darkProgressFill, "progress color");
+    STYLE_PROGRESSFILL_BEFORE = pFillBefore.lightBefore;
+    STYLE_DARKPROGRESSFILL_BEFORE = pFillBefore.darkBefore;
+
+    var pTrackBefore = primeThemedColorRow(currentProgressTrackValue(el),
+      STYLE_MENU.querySelector(".sm-progress-track"), STYLE_MENU.querySelector(".sm-progress-track-dark"),
+      STYLE_MENU.querySelector(".sm-progress-track-row"), STYLE_MENU.querySelector(".sm-progress-track-dark-row"),
+      STYLE_MENU.querySelector(".sm-progress-track-dark-toggle"), THEMED_OVERRIDE_MAPS.progressTrack, THEMED_OVERRIDE_MAPS.darkProgressTrack, "bar color");
+    STYLE_PROGRESSTRACK_BEFORE = pTrackBefore.lightBefore;
+    STYLE_DARKPROGRESSTRACK_BEFORE = pTrackBefore.darkBefore;
   }
 
   if (isText) {
@@ -3538,12 +3859,17 @@ function toggleStyleMenu(anchorEl) {
   var isImg = kind === "img";
   var isIcon = kind === "icon";
   var isDatetime = el.hasAttribute("data-datetime");
+  var isProgress = el.hasAttribute("data-progress");
   var isText = colorTarget(el) === "text";
   var isBtn = isButtonEl(el);
   var isThemeToggle = el.hasAttribute("data-theme-toggle");
-  STYLE_MENU.querySelector(".sm-color-row").style.display = isImg ? "none" : "";
-  STYLE_MENU.querySelector(".sm-color-dark-row").style.display = isImg ? "none" : "";
-  STYLE_MENU.querySelector(".sm-color-toggle-row").style.display = isImg ? "none" : "";
+  /* a progress element paints its own Progress color/Bar color rows
+     instead of the generic Color row (see colorTarget(), which would
+     otherwise call it a plain "bg" target) */
+  STYLE_MENU.querySelector(".sm-color-row").style.display = (isImg || isProgress) ? "none" : "";
+  STYLE_MENU.querySelector(".sm-color-dark-row").style.display = (isImg || isProgress) ? "none" : "";
+  STYLE_MENU.querySelector(".sm-color-toggle-row").style.display = (isImg || isProgress) ? "none" : "";
+  STYLE_MENU.querySelectorAll(".sm-progress-row").forEach(function (row) { row.style.display = isProgress ? "" : "none"; });
   /* for every other bg-target element "Color" is the only surface control
      there is, but a button also gets its own separate Text color row right
      below, so it's worth spelling out which one this now is */
@@ -3604,6 +3930,11 @@ function toggleStyleMenu(anchorEl) {
   }
 
   if (!isIcon && !isDatetime) {
+    /* a progress bar is usually short and wide (eg 14px tall), so reaching
+       a full pill shape needs a radius well past the 60px ceiling that's
+       plenty for a normal card/tile; bump it just for this kind rather than
+       raising the shared default for everything else too */
+    radiusInput.max = isProgress ? 200 : 60;
     var rad = currentRadiusValue(el);
     radiusInput.value = rad;
     radiusVal.textContent = rad + "px";
@@ -4083,6 +4414,61 @@ function pushGroupMoveUndo(moves) {
    content.custom_elements exactly (see renderCustomElements()) */
 var CUSTOM_ELEMENTS = [];
 
+/* content.variables, refreshed from the same content payload as
+   CUSTOM_ELEMENTS on every load (see applyProgressBindings()): named, typed
+   values a "progress" custom element's Current/Total selects bind to by
+   key, see variableByKey()/variableNumericValue(). */
+var VARIABLES = [];
+
+/**
+ * Looks up one variable by its stable key (see app/db.py's
+ * DEFAULT_CONTENT["variables"]).
+ * @param key a variable's "key"
+ * @return the variable {key, name, type, value, ...}, or null if unknown
+ */
+function variableByKey(key) {
+  for (var i = 0; i < VARIABLES.length; i++) {
+    if (VARIABLES[i].key === key) return VARIABLES[i];
+  }
+  return null;
+}
+
+/**
+ * Reads a variable's current value as a number, for the "progress" custom
+ * element's fill-ratio math - a string/boolean/datetime-typed variable (or
+ * an unknown key, eg one that's since been deleted) just reads as 0 rather
+ * than throwing, same "never crash the page over a stale reference" stance
+ * customElementById()/elByAnyId() already take elsewhere in this file.
+ * @param key a variable's "key"
+ * @return a number, 0 if unset/unparseable
+ */
+function variableNumericValue(key) {
+  var v = variableByKey(key);
+  var n = v ? parseFloat(v.value) : NaN;
+  return isNaN(n) ? 0 : n;
+}
+
+/**
+ * Fills a "progress" element's style-popover Current/Total <select> with
+ * every number-typed variable (a progress bar's fill ratio is only ever
+ * meaningful between two numbers - string/boolean/datetime variables just
+ * don't show up as options here), built with real DOM nodes rather than an
+ * innerHTML string since a variable's ta-typed "name" isn't escaped
+ * anywhere else in this file.
+ * @param selectEl the "sm-progress-current"/"sm-progress-total" <select>
+ * @param selectedKey the element's current d.varCurrent/d.varTotal
+ */
+function populateProgressVarSelect(selectEl, selectedKey) {
+  selectEl.textContent = "";
+  VARIABLES.filter(function (v) { return v.type === "number"; }).forEach(function (v) {
+    var opt = document.createElement("option");
+    opt.value = v.key;
+    opt.textContent = v.name || v.key;
+    selectEl.appendChild(opt);
+  });
+  selectEl.value = selectedKey;
+}
+
 /* the nav's real theme toggle (#themeBtn, templates/index.html)'s own sun/
    moon pair, verbatim: a placed "theme" custom element (buildCustomElement())
    starts out with this same auto day/night swap (css [data-theme] rule,
@@ -4446,6 +4832,35 @@ function buildCustomElementNode(d) {
     el.setAttribute("data-resize-id", d.id);
     el.setAttribute("data-datetime", "1");
     renderDatetimeContent(el, d);
+  } else if (d.kind === "progress") {
+    /* the outer div (data-resize-id) IS the track/background rectangle:
+       applyRadiusOverrides()/applyBorderOverrides()/the opacity slider all
+       already work generically on any data-resize-id div (see
+       toggleStyleMenu()'s isProgress handling for the one exception, the
+       generic Color row, which this has its own replacement for), so
+       rounding it into a pill or adding a border needs no new plumbing.
+       overflow:hidden clips the inner fill bar to whatever shape the radius
+       slider picks. Its own two colors (this div's background is the
+       track, the child's is the fill) are independent from the generic
+       Color row - see colorTarget()/applyColorOverrides(), both skip
+       data-progress elements - and get painted, along with the live fill
+       width off the two bound variables (d.varCurrent/d.varTotal), by
+       applyProgressBindings()/paintProgressElement(), not here: this only
+       builds the static structure with placeholder default colors, same
+       two-pass "build with defaults, then apply overrides" shape every
+       other kind here follows. */
+    el = document.createElement("div");
+    el.setAttribute("data-resize-id", d.id);
+    el.setAttribute("data-progress", "1");
+    el.style.position = "relative";
+    el.style.overflow = "hidden";
+    el.style.background = "var(--surface-2)";
+    el.style.width = "280px";
+    el.style.height = "14px";
+    var progressFillEl = document.createElement("i");
+    progressFillEl.className = "progress-el-fill";
+    progressFillEl.style.cssText = "position:absolute;left:0;top:0;bottom:0;width:0;display:block;background:var(--accent);transition:width 1s ease;";
+    el.appendChild(progressFillEl);
   } else if (d.kind === "theme") {
     /* a real, functional light/dark toggle (not a decorative copy): clicking
        it anywhere it's placed calls the exact same setTheme() the nav's own
@@ -4813,7 +5228,7 @@ function copyDuplicateOverrides(pairs) {
   try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   var snap;
   try { snap = raw ? JSON.parse(raw) : {}; } catch (e) { snap = {}; }
-  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "shade", "radius", "border", "links", "text_color", "theme_icons", "dark_colors", "dark_text_color", "dark_fill", "dark_border"];
+  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "shade", "radius", "border", "links", "text_color", "theme_icons", "dark_colors", "dark_text_color", "dark_fill", "dark_border", "progress_fill", "dark_progress_fill", "progress_track", "dark_progress_track"];
   pairs.forEach(function (p) {
     plainMaps.forEach(function (m) {
       if (snap[m] && snap[m][p.old] !== undefined) {
@@ -5060,6 +5475,13 @@ function finishAddedElement(el, d, kind, extra) {
        explicit w/h does (see _learn_reel_overlay() in app/db.py). */
     window.initReel(el);
   }
+  if (kind === "progress") {
+    /* paints its real fill width/colors off the two just-defaulted variable
+       bindings right away - VARIABLES is already populated from the initial
+       page load by the time a ta can interactively add one, so there's no
+       need to wait for the next full reload's applyProgressBindings() pass */
+    paintProgressElement(el, d);
+  }
   if (kind === "theme") {
     /* the button itself only carries data-resize-id; its nested ".tic-label"
        is the actual data-edit-id field, so it needs its own wireTextField()
@@ -5114,6 +5536,14 @@ function addCustomElement(kind, x, y, extra) {
     d.target = extra.target || new Date(Date.now() + 30 * 86400000).toISOString();
     d.format = extra.format || "countdown";
     d.strftime = extra.strftime || "";
+  }
+  if (kind === "progress") {
+    /* binds to the two builtin variables by default (see
+       DEFAULT_CONTENT["variables"] in app/db.py); re-bindable afterward from
+       the style popover's Current/Total selects, same "sensible defaults,
+       configure from the popover after" pattern as datetime just above. */
+    d.varCurrent = extra.varCurrent || "days_progressed";
+    d.varTotal = extra.varTotal || "total_days";
   }
   if (kind === "reel") {
     d.orientation = extra.orientation === "vertical" ? "vertical" : "horizontal";
@@ -5254,7 +5684,7 @@ function placeObject(objData, x, y) {
   });
   snap.custom_elements = (snap.custom_elements || []).concat(newParts);
 
-  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "shade", "radius", "border", "links", "text_color", "theme_icons", "dark_colors", "dark_text_color", "dark_fill", "dark_border"];
+  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "shade", "radius", "border", "links", "text_color", "theme_icons", "dark_colors", "dark_text_color", "dark_fill", "dark_border", "progress_fill", "dark_progress_fill", "progress_track", "dark_progress_track"];
   plainMaps.forEach(function (m) {
     if (!objData[m]) return;
     snap[m] = snap[m] || {};
@@ -5446,6 +5876,7 @@ function renderCtxMenuRoot() {
     '<button type="button" data-add="icon">Icon</button>' +
     '<button type="button" data-add="button">Button</button>' +
     '<button type="button" data-add="datetime">Date/time</button>' +
+    '<button type="button" data-add="progress">Progress bar</button>' +
     '<button type="button" data-add="object">Object...</button>';
   CTX_MENU.querySelectorAll("button[data-add]").forEach(function (btn) {
     btn.addEventListener("click", function () { handleCtxAdd(btn.getAttribute("data-add")); });
@@ -7139,6 +7570,58 @@ function applyHistoryAction(action, side) {
     }
     return;
   }
+  if (action.type === "progressvar") {
+    var pvD = customElementById(action.id);
+    if (!pvD) return;
+    pvD.varCurrent = val.varCurrent;
+    pvD.varTotal = val.varTotal;
+    var pvEl = elByAnyId(action.id);
+    if (pvEl) paintProgressElement(pvEl, pvD);
+    saveCustomElements(CUSTOM_ELEMENTS);
+    if (STYLE_MENU_ID === action.id && STYLE_MENU && STYLE_MENU.classList.contains("show")) {
+      STYLE_MENU.querySelector(".sm-progress-current").value = pvD.varCurrent;
+      STYLE_MENU.querySelector(".sm-progress-total").value = pvD.varTotal;
+      STYLE_PROGRESSVAR_BEFORE = { varCurrent: pvD.varCurrent, varTotal: pvD.varTotal };
+    }
+    return;
+  }
+  if (action.type === "progressfill" || action.type === "progresstrack") {
+    var pcEl = styleMenuElById(action.id);
+    if (!pcEl) return;
+    var pcMapKey = action.type === "progressfill" ? "progressFill" : "progressTrack";
+    var pcDarkMapKey = action.type === "progressfill" ? "darkProgressFill" : "darkProgressTrack";
+    var pcSaveFn = action.type === "progressfill" ? saveEditedProgressFill : saveEditedProgressTrack;
+    THEMED_OVERRIDE_MAPS[pcMapKey][action.id] = val || "";
+    pcSaveFn(action.id, val || "");
+    paintProgressElement(pcEl, customElementById(action.id) || {});
+    if (STYLE_MENU_ID === action.id) {
+      var pcReadFn = action.type === "progressfill" ? currentProgressFillValue : currentProgressTrackValue;
+      var pcSel = action.type === "progressfill" ? ".sm-progress-fill" : ".sm-progress-track";
+      STYLE_MENU.querySelector(pcSel).value = pcReadFn(pcEl);
+      if (action.type === "progressfill") STYLE_PROGRESSFILL_BEFORE = val || "";
+      else STYLE_PROGRESSTRACK_BEFORE = val || "";
+    }
+    return;
+  }
+  if (action.type === "darkprogressfill" || action.type === "darkprogresstrack") {
+    var dpcEl = styleMenuElById(action.id);
+    if (!dpcEl) return;
+    var dpcMapKey = action.type === "darkprogressfill" ? "darkProgressFill" : "darkProgressTrack";
+    var dpcSaveFn = action.type === "darkprogressfill" ? saveEditedDarkProgressFill : saveEditedDarkProgressTrack;
+    THEMED_OVERRIDE_MAPS[dpcMapKey][action.id] = val || "";
+    dpcSaveFn(action.id, val || "");
+    paintProgressElement(dpcEl, customElementById(action.id) || {});
+    if (STYLE_MENU_ID === action.id) {
+      var dpcLightMapKey = action.type === "darkprogressfill" ? "progressFill" : "progressTrack";
+      var dpcLightVal = THEMED_OVERRIDE_MAPS[dpcLightMapKey][action.id] ||
+        (action.type === "darkprogressfill" ? currentProgressFillValue(dpcEl) : currentProgressTrackValue(dpcEl));
+      var dpcSel = action.type === "darkprogressfill" ? ".sm-progress-fill-dark" : ".sm-progress-track-dark";
+      STYLE_MENU.querySelector(dpcSel).value = val || autoDarkVariant(dpcLightVal);
+      if (action.type === "darkprogressfill") STYLE_DARKPROGRESSFILL_BEFORE = val || "";
+      else STYLE_DARKPROGRESSTRACK_BEFORE = val || "";
+    }
+    return;
+  }
   if (action.type === "textcolor") {
     var textColorEl = styleMenuElById(action.id);
     if (!textColorEl) return;
@@ -7542,6 +8025,62 @@ function saveEditedDarkFill(id, value) {
 }
 
 /**
+ * Persists a value into one flat, id-keyed map of the preview snapshot,
+ * deleting the key entirely when cleared - the shared body every
+ * saveEdited*() function above hand-wrote per map; factored here only for
+ * the four new progress-color maps (saveEditedProgressFill() etc. just
+ * below) rather than retrofitted onto the older ones, to keep this change
+ * from touching code it doesn't need to.
+ * @param mapKey the snapshot's top-level key, eg "progress_fill"
+ * @param id the element's data-resize-id
+ * @param value any truthy value to store, or "" to delete the key
+ */
+function saveEditedMapValue(mapKey, id, value) {
+  var raw;
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  if (!snapshot[mapKey] || typeof snapshot[mapKey] !== "object") snapshot[mapKey] = {};
+  if (!value) delete snapshot[mapKey][id];
+  else snapshot[mapKey][id] = value;
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
+ * Persists a "progress" element's fill-color pick from the style popover's
+ * Progress color row into the preview snapshot, the same draft everything
+ * else here uses.
+ * @param id the element's data-resize-id
+ * @param value a css color string, or "" to clear back to the default
+ */
+function saveEditedProgressFill(id, value) { saveEditedMapValue("progress_fill", id, value); }
+
+/**
+ * Persists a dark-mode override for the row above (the "dark mode progress
+ * color" toggle), same idea as saveEditedDarkColor() but for
+ * content.dark_progress_fill.
+ * @param id the element's data-resize-id
+ * @param value a css color string, or "" to clear back to the auto variant
+ */
+function saveEditedDarkProgressFill(id, value) { saveEditedMapValue("dark_progress_fill", id, value); }
+
+/**
+ * Persists a "progress" element's track/background color pick from the
+ * style popover's Bar color row into the preview snapshot.
+ * @param id the element's data-resize-id
+ * @param value a css color string, or "" to clear back to the default
+ */
+function saveEditedProgressTrack(id, value) { saveEditedMapValue("progress_track", id, value); }
+
+/**
+ * Persists a dark-mode override for the row above, same idea as
+ * saveEditedDarkColor() but for content.dark_progress_track.
+ * @param id the element's data-resize-id
+ * @param value a css color string, or "" to clear back to the auto variant
+ */
+function saveEditedDarkProgressTrack(id, value) { saveEditedMapValue("dark_progress_track", id, value); }
+
+/**
  * Persists a button's text-color change from the style popover's Text
  * color control into the preview snapshot, the same draft everything else
  * here uses. Separate map from content.colors since a button's "Color" row
@@ -7748,6 +8287,83 @@ function updatePortalLink() {
 }
 
 /**
+ * The shared tail of a real page's (as opposed to the object mini editor's
+ * blank canvas, see initObjectCanvas()) content load: every generic
+ * apply*Overrides() pass plus the edit-mode-gated wiring, factored out so
+ * templates/index.html and templates/dashboard.html's DOMContentLoaded
+ * handlers (see initDashboardPage()) run the exact same pipeline instead of
+ * two copies that could quietly drift apart. Landing-page-only concerns
+ * (hero countdown/logistics/video, home images, join url/tooltip) stay in
+ * each page's own handler, called before this.
+ * @param data the fetched content dict
+ * @param textMap click-to-edit overrides to apply, defaults to data.text -
+ *   index.html passes its own merged copy (see the footer.contact fallback
+ *   in its DOMContentLoaded handler below), dashboard has no such fallback
+ *   to merge so it just lets this default
+ */
+function applySharedEditorOverrides(data, textMap) {
+  renderCustomElements(data.custom_elements);
+  renderDuplicates(data.duplicates);
+  applyTextOverrides(textMap !== undefined ? textMap : (data.text || {}));
+  repaintInlineTextColors();
+  applyThemeIconOverrides(data.theme_icons);
+  if (window.refreshThemeToggles) window.refreshThemeToggles();
+  applySizeOverrides(data.sizes);
+  applyFontSizeOverrides(data.font_sizes);
+  applyTextStyleOverrides(data.text_styles);
+  applyPositionOverrides(data.positions);
+  applyColorOverrides(data.colors, data.dark_colors);
+  applyFillOverrides(data.fill, data.dark_fill);
+  applyTextColorOverrides(data.text_color, data.dark_text_color);
+  applyTintOverrides(data.tint);
+  applyShadeOverrides(data.shade);
+  applyRadiusOverrides(data.radius);
+  applyBorderOverrides(data.border, data.dark_border);
+  VARIABLES = data.variables || [];
+  applyProgressBindings(data.progress_fill, data.dark_progress_fill, data.progress_track, data.dark_progress_track);
+  applyShadowOverrides(data.shadow);
+  applyOpacityOverrides(data.opacity);
+  applyHiddenOverrides(data.hidden);
+  setFixedElements(data.fixed_elements);
+  setLockedElements(data.locked);
+  setLinks(data.links);
+  applyGroups(data.groups);
+  applyLayerOrder(data.layers);
+  applyFixedHighlight();
+  applyLinkHighlight();
+  applyLockHighlight();
+  applyElementAnchors();
+  if (window.initAllReels) window.initAllReels();
+  if (isPreviewMode() && isEditMode()) {
+    wireResizable();
+    wireClickToEdit();
+    wireAddElementMenu();
+    /* fire-and-forget: only needed once a ta actually opens the right-click
+       menu's "Object..." picker, not before the editor can be used at all */
+    fetchObjectsLibrary().then(function (list) { OBJECTS_LIBRARY = list; });
+  }
+}
+
+/**
+ * Boots the shared visual-editor engine on the student dashboard
+ * (templates/dashboard.html, identified by its #dashProgressAnchor spacer -
+ * see applySharedEditorOverrides()/applyElementAnchors()). Unlike the
+ * landing page there's no hardcoded countdown/logistics/hero markup to
+ * hydrate here - the days/extras lists stay js/dashboard.js's own separate,
+ * hand-rolled rendering, entirely untouched by this file - this only wires
+ * up the generic override pipeline every custom-placed element (right now,
+ * just the migrated progress bar) needs, gated into edit affordances the
+ * exact same isPreviewMode() && isEditMode() way index.html's own pipeline
+ * is, so a real student loading this page directly never sees drag handles
+ * or a right-click menu, only the rendered result.
+ */
+function initDashboardPage() {
+  fetchContent()
+    .then(function (data) { applySharedEditorOverrides(data); })
+    .catch(function () {});
+}
+
+/**
  * Boots the reusable-object mini editor's blank canvas
  * (templates/object-editor.html, ?object=1&edit=1): no landing-page markup
  * to render (no countdown/logistics/hero video/nav), so this skips straight
@@ -7778,6 +8394,8 @@ function initObjectCanvas() {
     applyShadeOverrides(data.shade);
     applyRadiusOverrides(data.radius);
     applyBorderOverrides(data.border, data.dark_border);
+    VARIABLES = data.variables || [];
+    applyProgressBindings(data.progress_fill, data.dark_progress_fill, data.progress_track, data.dark_progress_track);
     applyShadowOverrides(data.shadow);
     applyOpacityOverrides(data.opacity);
     applyHiddenOverrides(data.hidden);
@@ -7813,7 +8431,14 @@ document.addEventListener("DOMContentLoaded", function () {
 
   var slot = document.getElementById("heroCountdown");
   var grid = document.getElementById("logisticsGrid");
-  if (!slot) return;
+  if (!slot) {
+    /* not the landing page - the only other page this file's shared editor
+       engine is wired onto right now is the student dashboard, identified
+       by its #dashProgressAnchor spacer (see initDashboardPage()); anything
+       else (gallery.html, login.html, ...) just isn't wired up yet */
+    if (document.getElementById("dashProgressAnchor")) initDashboardPage();
+    return;
+  }
 
   function renderTiles(list) {
     if (!grid) return;
@@ -7880,45 +8505,7 @@ document.addEventListener("DOMContentLoaded", function () {
       if (textMap["footer.contact"] === undefined && data.contact_text) {
         textMap["footer.contact"] = data.contact_text;
       }
-      renderCustomElements(data.custom_elements);
-      renderDuplicates(data.duplicates);
-      applyTextOverrides(textMap);
-      repaintInlineTextColors();
-      applyThemeIconOverrides(data.theme_icons);
-      if (window.refreshThemeToggles) window.refreshThemeToggles();
-      applySizeOverrides(data.sizes);
-      applyFontSizeOverrides(data.font_sizes);
-      applyTextStyleOverrides(data.text_styles);
-      applyPositionOverrides(data.positions);
-      applyColorOverrides(data.colors, data.dark_colors);
-      applyFillOverrides(data.fill, data.dark_fill);
-      applyTextColorOverrides(data.text_color, data.dark_text_color);
-      applyTintOverrides(data.tint);
-      applyShadeOverrides(data.shade);
-      applyRadiusOverrides(data.radius);
-      applyBorderOverrides(data.border, data.dark_border);
-      applyShadowOverrides(data.shadow);
-      applyOpacityOverrides(data.opacity);
-      applyHiddenOverrides(data.hidden);
-      setFixedElements(data.fixed_elements);
-      setLockedElements(data.locked);
-      setLinks(data.links);
-      applyGroups(data.groups);
-      applyLayerOrder(data.layers);
-      applyFixedHighlight();
-      applyLinkHighlight();
-      applyLockHighlight();
-      applyElementAnchors();
-      if (window.initAllReels) window.initAllReels();
-      if (isPreviewMode() && isEditMode()) {
-        wireResizable();
-        wireClickToEdit();
-        wireAddElementMenu();
-        /* fire-and-forget: only needed once a ta actually opens the
-           right-click menu's "Object..." picker, not before the editor can
-           be used at all */
-        fetchObjectsLibrary().then(function (list) { OBJECTS_LIBRARY = list; });
-      }
+      applySharedEditorOverrides(data, textMap);
     })
     .catch(function () {
       slot.innerHTML = CD_TBA_HTML;

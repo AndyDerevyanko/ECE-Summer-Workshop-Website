@@ -808,7 +808,18 @@ function renderVariables() {
     }).join("");
 
     var valueField;
-    if (v.computed) {
+    if (v.computed && v.key === "days_progressed") {
+      /* the one computed variable that's also ta-editable: typing a number
+         here is a shortcut for opening/closing days 1..N in bulk (see the
+         .v-days-progressed handler below) rather than a second, disconnected
+         value - v.value itself stays fully server-recomputed from
+         STATE.days on every save/load (_refresh_computed_variables() in
+         app/db.py), same as it always has. */
+      valueField = '<div class="field"><label>Value</label>' +
+        '<input type="number" min="0" max="' + STATE.days.length + '" class="v-days-progressed" ' +
+        'value="' + (v.value === null || v.value === undefined ? 0 : v.value) + '">' +
+        '<p class="muted" style="margin:6px 0 0">Opens/closes days 1..N to match, same as each day\'s own Open/Close button.</p></div>';
+    } else if (v.computed) {
       valueField = '<div class="field"><label>Value</label>' +
         '<p class="muted" style="margin:6px 0 0">' +
         (v.value === null || v.value === undefined ? "0" : v.value) +
@@ -864,6 +875,15 @@ function renderVariables() {
     if (valueInput) {
       valueInput.addEventListener("input", function () {
         v.value = v.type === "number" ? (+this.value || 0) : this.value;
+      });
+    }
+    var daysProgressedInput = card.querySelector(".v-days-progressed");
+    if (daysProgressedInput) {
+      daysProgressedInput.addEventListener("change", function () {
+        var n = Math.max(0, Math.min(STATE.days.length, +this.value || 0));
+        STATE.days.forEach(function (d) { d.unlocked = d.day <= n; });
+        renderPanels();
+        renderVariables();
       });
     }
 
@@ -2058,7 +2078,14 @@ document.addEventListener("DOMContentLoaded", function () {
 
   document.getElementById("addPanel").addEventListener("click", function () {
     var next = STATE.days.length ? STATE.days[STATE.days.length - 1].day + 1 : 1;
-    STATE.days.push({ day: next, date: "", opens_at: "", unlocked: false, title: "", blurb: "", files: [] });
+    /* id/children: same "durable key for js/main.js's tile-binding area"
+       reasoning as newExtraId()/an extras entry's own id, see its doc
+       comment - assigned right away rather than waiting on the next
+       server round trip's backfill (app/db.py's _backfill_days_ids()) */
+    STATE.days.push({
+      day: next, date: "", opens_at: "", unlocked: false, title: "", blurb: "", files: [],
+      id: newExtraId(), children: []
+    });
     renderPanels();
   });
 

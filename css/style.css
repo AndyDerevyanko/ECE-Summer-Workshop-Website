@@ -945,6 +945,23 @@ h1, h2, h3 {
   position: relative;
   overflow: hidden;
 }
+/* the rect layer a ta can independently select/restyle/delete, an absolute-
+   fill sibling kept separate from .day-card's own background/border/padding
+   (left untouched, same "dead code once the rect sibling paints over it"
+   technique as .extras-tile-rect) rather than baked into the card itself -
+   see js/dashboard.js's renderDays(). Shared by both the locked and open
+   templates (data-days-role="locked.rect"/"open.rect"), matches .day-card's
+   own default look 1:1 so adding it is a visual no-op until a ta restyles
+   one of the two roles. */
+.day-tile-rect {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.day-card > *:not(.day-tile-rect) { position: relative; z-index: 1; }
 .day-card .daytag {
   font-family: var(--font-mono);
   font-size: .75rem;

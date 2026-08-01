@@ -75,10 +75,16 @@
 
     <section class="section-sm" id="days">
       <div class="wrap">
-        <h2 style="font-size:1.4rem;margin-bottom:18px">The days</h2>
-        <div class="grid grid-3" id="dayGrid">
-          <!-- filled in by dashboard.js -->
-        </div>
+        <h2 style="font-size:1.4rem;margin-bottom:18px" data-edit-id="dash.days.heading">The days</h2>
+        <!-- reserved space for the placed "daysArea" custom element (see
+             app/db.py's _DASH_DAYS_AREA_ENTRY, js/main.js's
+             applyElementAnchors()): a ta can move/resize it like any other
+             visual-editor element; js/dashboard.js's renderDays() finds it
+             by data-resize-id and renders the actual day tile grid inside it -
+             see the window.renderDays hook in applySharedEditorOverrides() -
+             this spacer just keeps its default spot reserved in normal
+             document flow, same as #dashExtrasAreaAnchor below -->
+        <div class="dash-days-area-anchor" id="dashDaysAreaAnchor" style="min-height:40px" aria-hidden="true"></div>
       </div>
     </section>
 

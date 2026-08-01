@@ -828,29 +828,34 @@ function commitPosition(el) {
 function commitSize(el) {
   var s = getSize(el);
   saveEditedSize(elId(el), { w: Math.round(s.w), h: Math.round(s.h) });
-  mirrorExtrasTileStyle(el);
+  mirrorTiledRoleStyle(el);
 }
 
 /**
- * Mirrors an attachments tile's rect/icon/text/button role element's live
- * inline style onto every other tile's same-role element (every rendered
- * tile shares one data-resize-id/data-edit-id per role, so a style edit to
- * any single tile is meant to apply to the shared template - see js/
- * dashboard.js's buildExtrasTileHtml()). applyColorOverrides()/
+ * Mirrors an attachments/day tile's rect/icon/text/button role element's
+ * live inline style onto every other tile's same-role element (every
+ * rendered tile shares one data-resize-id/data-edit-id per role, so a style
+ * edit to any single tile is meant to apply to the shared template - see
+ * js/dashboard.js's buildExtrasTileHtml()/renderDays()). Checks both
+ * data-extras-role (attachments tiles) and data-days-role (day tiles, two
+ * independent templates - locked and open never mirror into each other
+ * since they carry different role values). applyColorOverrides()/
  * applySizeOverrides()/etc. already repaint every matching id from the saved
  * maps on the NEXT load; this only covers the live, same-session gap, since
  * those inputs otherwise only ever touch styleMenuEl()'s single match (see
  * buildStyleMenu()'s colorInput/radiusInput/etc. handlers) and a resize drag
  * only ever touches the one dragged element. A no-op for every element
- * outside the attachments area.
+ * outside a tiled area.
  * @param el a just-edited element, any kind
  */
-function mirrorExtrasTileStyle(el) {
-  var role = el.getAttribute("data-extras-role");
-  if (!role) return;
+function mirrorTiledRoleStyle(el) {
+  var attr = el.hasAttribute("data-extras-role") ? "data-extras-role"
+    : el.hasAttribute("data-days-role") ? "data-days-role" : null;
+  if (!attr) return;
+  var role = el.getAttribute(attr);
   var cssText = el.style.cssText;
   var opColor = el.dataset.opColor, opAlpha = el.dataset.opAlpha, baseColor = el.dataset.baseColor;
-  document.querySelectorAll('[data-extras-role="' + role + '"]').forEach(function (other) {
+  document.querySelectorAll('[' + attr + '="' + role + '"]').forEach(function (other) {
     if (other === el) return;
     other.style.cssText = cssText;
     if (opColor === undefined) delete other.dataset.opColor; else other.dataset.opColor = opColor;
@@ -2630,15 +2635,15 @@ function buildStyleMenu() {
   document.body.appendChild(STYLE_MENU);
 
   /* covers every color/radius/border/shadow/opacity/fill control below in
-     one place, rather than hooking mirrorExtrasTileStyle() into each row's
+     one place, rather than hooking mirrorTiledRoleStyle() into each row's
      own handler individually: fires after the row's own handler already
      repainted styleMenuElById(STYLE_MENU_ID) (bubbles up from the control),
      so the mirror always sees the freshly-committed style. A no-op for
-     every element outside the attachments area (see mirrorExtrasTileStyle()). */
+     every element outside a tiled area (see mirrorTiledRoleStyle()). */
   ["input", "change", "click"].forEach(function (evt) {
     STYLE_MENU.addEventListener(evt, function () {
       var el = STYLE_MENU_ID && styleMenuElById(STYLE_MENU_ID);
-      if (el) mirrorExtrasTileStyle(el);
+      if (el) mirrorTiledRoleStyle(el);
     });
   });
 
@@ -3770,7 +3775,7 @@ function primeStyleMenuThemedRows(el) {
   var isIcon = kind === "icon";
   var isDatetime = el.hasAttribute("data-datetime");
   var isProgress = el.hasAttribute("data-progress");
-  var isExtrasArea = el.hasAttribute("data-extras-area");
+  var isExtrasArea = el.hasAttribute("data-extras-area") || el.hasAttribute("data-days-area");
   var isText = colorTarget(el) === "text";
   var isBtn = isButtonEl(el);
   var shapeDisplay = (isIcon || isDatetime) ? "none" : "";
@@ -3903,15 +3908,15 @@ function toggleStyleMenu(anchorEl) {
   var isIcon = kind === "icon";
   var isDatetime = el.hasAttribute("data-datetime");
   var isProgress = el.hasAttribute("data-progress");
-  var isExtrasArea = el.hasAttribute("data-extras-area");
+  var isExtrasArea = el.hasAttribute("data-extras-area") || el.hasAttribute("data-days-area");
   var isText = colorTarget(el) === "text";
   var isBtn = isButtonEl(el);
   var isThemeToggle = el.hasAttribute("data-theme-toggle");
   /* a progress element paints its own Progress color/Bar color rows
      instead of the generic Color row (see colorTarget(), which would
-     otherwise call it a plain "bg" target); the extras-area container is
-     deliberately always transparent - a background belongs on the tile
-     rect underneath each attachment, not on the layout box around them */
+     otherwise call it a plain "bg" target); the extras/days-area container
+     is deliberately always transparent - a background belongs on the tile
+     rect underneath each attachment/day, not on the layout box around them */
   STYLE_MENU.querySelector(".sm-color-row").style.display = (isImg || isProgress || isExtrasArea) ? "none" : "";
   STYLE_MENU.querySelector(".sm-color-dark-row").style.display = (isImg || isProgress || isExtrasArea) ? "none" : "";
   STYLE_MENU.querySelector(".sm-color-toggle-row").style.display = (isImg || isProgress || isExtrasArea) ? "none" : "";
@@ -4097,14 +4102,16 @@ function startResizeDrag(e) {
   /* a reel tile can't detachFromFlow() without breaking the flex track it
      lives in - this only ever fires from the ring's own (already CSS-hidden
      for a tile, see positionRing()) handle buttons, so it's defense in
-     depth, not the real gate. Same reasoning for an attachments tile's rect
-     (fills the tile via inset:0, a fixed size makes no sense) and its
-     filename text (sized by its own content); the icon/button roles are
-     deliberately NOT included here - those two stay resizable, see
-     buildExtrasTileHtml() in js/dashboard.js. */
+     depth, not the real gate. Same reasoning for an attachments/day tile's
+     rect (fills the tile via inset:0, a fixed size makes no sense) and its
+     filename/title/daytag text (sized by its own content); the icon/badge/
+     button roles are deliberately NOT included here - those stay resizable,
+     see buildExtrasTileHtml()/renderDays() in js/dashboard.js. */
   if (!RING_EL || RING_EL.hasAttribute("data-reel-tile")) return;
   var xRole = RING_EL.getAttribute("data-extras-role");
   if (xRole === "rect" || xRole === "text") return;
+  var dRole = RING_EL.getAttribute("data-days-role");
+  if (dRole && /(^|\.)(rect|title|daytag)$/.test(dRole)) return;
   e.preventDefault();
   e.stopPropagation();
   var el = RING_EL;
@@ -4169,11 +4176,11 @@ function startResizeDrag(e) {
  * @param e the handle's mousedown
  */
 function startMoveDrag(e) {
-  /* every attachments-tile role (rect/icon/text/button) is laid out by
-     shared CSS across every rendered tile, not individually placed - moving
-     one would only fight that layout on the next render, see
-     buildExtrasTileHtml() in js/dashboard.js */
-  if (!RING_EL || isLocked(elId(RING_EL)) || RING_EL.hasAttribute("data-reel-tile") || RING_EL.hasAttribute("data-extras-role")) return;
+  /* every attachments/day tile role (rect/icon/text/button/badge) is laid
+     out by shared CSS across every rendered tile, not individually placed -
+     moving one would only fight that layout on the next render, see
+     buildExtrasTileHtml()/renderDays() in js/dashboard.js */
+  if (!RING_EL || isLocked(elId(RING_EL)) || RING_EL.hasAttribute("data-reel-tile") || RING_EL.hasAttribute("data-extras-role") || RING_EL.hasAttribute("data-days-role")) return;
   e.preventDefault();
   e.stopPropagation();
   var el = RING_EL;
@@ -4280,11 +4287,12 @@ function deleteElement(el) {
      ring's own trash handle AND the Delete/Backspace keydown handler
      (see wireResizable()), since both call this one function */
   if (el.hasAttribute("data-reel-tile")) return;
-  /* the download button and icon inside an attachments tile are the one
-     deliberate exception besides a reel tile: everything else about a tile
-     (its rect, its filename text) stays normally deletable, see
-     buildExtrasTileHtml() in js/dashboard.js */
-  if (el.hasAttribute("data-extras-fixed")) return;
+  /* the download button and icon inside an attachments tile, and the
+     icon/badge inside a day tile, are the one deliberate exception besides a
+     reel tile: everything else about a tile (its rect, its filename/title/
+     daytag text) stays normally deletable, see buildExtrasTileHtml()/
+     renderDays() in js/dashboard.js */
+  if (el.hasAttribute("data-extras-fixed") || el.hasAttribute("data-days-fixed")) return;
   var id = elId(el);
   if (!id) return;
   /* a grouped element (see groupOf()) takes every other member down with
@@ -4713,6 +4721,65 @@ function insertExtrasFilenameChip(tile) {
   commitTextFieldChange(field, before, field.innerHTML);
 }
 
+/**
+ * A day tile's local chip variants (day-number/day-date/day-locked): same
+ * "resolves off whichever tile it's rendered inside" idea as the filename
+ * chip above (data-fx-local, closest("[data-days-tile]")'s own dataset)
+ * rather than a content.variables lookup, so none of these show up in
+ * js/ta.js's variables list either. day-locked reads as plain "Yes"/"No",
+ * same convention formulaChipText() already uses for a real boolean
+ * variable's "value" formula chip - no boolean-variable machinery had to
+ * change, this is just a third local source feeding the same display rule.
+ * @param local "day-number", "day-date", or "day-locked"
+ * @param label the chip's placeholder text before it resolves
+ * @return an HTML string for a single <span class="fx-chip">
+ */
+function buildDaysChipHtml(local, label) {
+  return '<span class="fx-chip" contenteditable="false" data-fx-local="' + local + '">' + label + '</span>';
+}
+
+/**
+ * Repaints every day-tile local chip off the tile it's actually rendered
+ * inside right now, same "undo mirrorEditedField()'s blind copy" reasoning
+ * as repaintExtrasFilenameChips(). data-days-date is already the tile's
+ * pre-formatted display date (see js/dashboard.js's renderDays()), not a
+ * raw ISO string, so no date formatting is duplicated here.
+ */
+function repaintDaysChips() {
+  document.querySelectorAll('.fx-chip[data-fx-local="day-number"]').forEach(function (chip) {
+    var tile = chip.closest("[data-days-tile]");
+    chip.textContent = (tile && tile.dataset.daysNumber) ? ("Day " + tile.dataset.daysNumber) : "";
+  });
+  document.querySelectorAll('.fx-chip[data-fx-local="day-date"]').forEach(function (chip) {
+    var tile = chip.closest("[data-days-tile]");
+    chip.textContent = (tile && tile.dataset.daysDate) || "";
+  });
+  document.querySelectorAll('.fx-chip[data-fx-local="day-locked"]').forEach(function (chip) {
+    var tile = chip.closest("[data-days-tile]");
+    chip.textContent = tile && tile.dataset.daysLocked === "1" ? "Yes" : "No";
+  });
+}
+
+/**
+ * Handles the day tile area's right-click "Insert day number"/"Insert
+ * unlock date"/"Insert locked-state text" actions (see renderCtxMenuRoot()'s
+ * data-days-add-* buttons): restores the given local chip into whichever
+ * chip-eligible text field (the locked template's title, or the open
+ * template's daytag) exists on the tile the context menu was opened on -
+ * same commitTextFieldChange()/mirrorEditedField() path a normal typed edit
+ * takes, so undo and cross-tile mirroring both work identically.
+ * @param tile the [data-days-tile] the context menu was opened on
+ * @param local "day-number", "day-date", or "day-locked"
+ */
+function insertDaysChip(tile, local) {
+  var field = tile.querySelector('[data-days-role="locked.title"], [data-days-role="open.daytag"]');
+  if (!field) return;
+  var labels = { "day-number": "Day #", "day-date": "date", "day-locked": "locked" };
+  var before = field.innerHTML;
+  field.innerHTML = before + (before ? " " : "") + buildDaysChipHtml(local, labels[local] || local);
+  commitTextFieldChange(field, before, field.innerHTML);
+}
+
 /* the nav's real theme toggle (#themeBtn, templates/index.html)'s own sun/
    moon pair, verbatim: a placed "theme" custom element (buildCustomElement())
    starts out with this same auto day/night swap (css [data-theme] rule,
@@ -5056,6 +5123,22 @@ function buildCustomElementNode(d) {
     el.setAttribute("data-extras-area", "1");
     el.style.width = "100%";
     el.style.minHeight = "40px";
+  } else if (d.kind === "daysArea") {
+    /* transparent layout container for the student dashboard's "The days"
+       tile grid (see app/db.py's _DASH_DAYS_AREA_ENTRY) - js/dashboard.js's
+       renderDays() finds it by data-resize-id and renders the actual
+       per-day tiles inside; this only builds the empty shell. Same shape as
+       the "extrasArea" kind just above, see its doc comment for why height
+       isn't left resize-tracked in practice. className carries over the old
+       static #dayGrid's own "grid grid-3" (css/style.css), the exact 3-
+       column layout (with its existing responsive breakpoints) students
+       already see today, rather than duplicating that in a new selector. */
+    el = document.createElement("div");
+    el.setAttribute("data-resize-id", d.id);
+    el.setAttribute("data-days-area", "1");
+    el.className = "grid grid-3";
+    el.style.width = "100%";
+    el.style.minHeight = "40px";
   } else if (d.kind === "image" && d.url) {
     el = document.createElement("img");
     el.src = d.url;
@@ -5359,6 +5442,38 @@ function saveCustomElements(list) {
   var snapshot;
   try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
   snapshot.custom_elements = list;
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
+ * Persists the whole extras list into the shared snapshot, same merge-one-
+ * field-in shape as saveCustomElements() just above - needed so a bound
+ * child added onto an attachments tile (see addBoundElement()) survives
+ * Apply/reload, since content.extras otherwise isn't a field this file ever
+ * writes to (it's js/dashboard.js's/js/ta.js's own domain the rest of the
+ * time).
+ * @param list js/dashboard.js's EXTRAS array
+ */
+function saveExtras(list) {
+  var raw;
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  snapshot.extras = list;
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
+ * Persists the whole days list into the shared snapshot, the day-tile
+ * equivalent of saveExtras() just above.
+ * @param list js/dashboard.js's DAYS array
+ */
+function saveDays(list) {
+  var raw;
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  snapshot.days = list;
   try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
 }
 
@@ -5677,33 +5792,45 @@ var REEL_DEFAULT_HIT_SIZE = { box: [160, 100], image: [240, 180], video: [320, 2
    like anything. */
 var REEL_DEFAULT_TILE_COUNT = 4;
 
+/* every kind of "bind a new element into whichever tile it lands on"
+   container, checked in this priority order by findBoundTileHit() (first
+   match wins - a nested case, e.g. a days tile's attachment rendered via
+   the extras tile template, is possible in principle but each element only
+   ever needs one owner, and the more specific/innermost selector should
+   generally come first). See addBoundElement() for how the owning content
+   array is resolved once a tile element is found. */
+var BOUND_TILE_SELECTORS = ['[data-reel-tile="1"]', '[data-extras-tile="1"]', '[data-days-tile="1"]'];
+
 /**
- * Finds the reel tile (if any) that a new element being placed at document
- * (x, y) should bind into instead of landing as an independent page
- * element (see addCustomElement()/addBoundElement()): the drop point
- * itself, OR - for kinds with a known fixed placed size (box/image/video,
- * see REEL_DEFAULT_HIT_SIZE) - the element's own about-to-be-placed hitbox,
- * either one touching a tracked reel-tile's box. Cursor alone is the
- * fallback for every other kind, since text/button/icon/datetime/theme all
- * size themselves from their own content/default rather than a fixed box,
- * so there's nothing to hit-test until after they're already built.
+ * Finds the tile (reel, attachments, or day - see BOUND_TILE_SELECTORS)
+ * that a new element being placed at document (x, y) should bind into
+ * instead of landing as an independent page element (see
+ * addCustomElement()/addBoundElement()): the drop point itself, OR - for
+ * kinds with a known fixed placed size (box/image/video, see
+ * REEL_DEFAULT_HIT_SIZE) - the element's own about-to-be-placed hitbox,
+ * either one touching a tracked tile's box. Cursor alone is the fallback
+ * for every other kind, since text/button/icon/datetime/theme all size
+ * themselves from their own content/default rather than a fixed box, so
+ * there's nothing to hit-test until after they're already built.
  * @param x drop point left, document px
  * @param y drop point top, document px
  * @param kind the element kind being added
  * @return the hit tile element, or null if neither the cursor nor the
- *   hitbox touches any tracked reel tile
+ *   hitbox touches any tracked tile
  */
-function findReelTileHit(x, y, kind) {
+function findBoundTileHit(x, y, kind) {
   var size = REEL_DEFAULT_HIT_SIZE[kind];
-  var tiles = document.querySelectorAll('[data-reel-tile="1"]');
-  for (var i = 0; i < tiles.length; i++) {
-    var r = tiles[i].getBoundingClientRect();
-    var left = r.left + window.scrollX, top = r.top + window.scrollY;
-    var right = left + r.width, bottom = top + r.height;
-    if (x >= left && x <= right && y >= top && y <= bottom) return tiles[i];
-    if (size) {
-      var ex2 = x + size[0], ey2 = y + size[1];
-      if (!(x > right || ex2 < left || y > bottom || ey2 < top)) return tiles[i];
+  for (var s = 0; s < BOUND_TILE_SELECTORS.length; s++) {
+    var tiles = document.querySelectorAll(BOUND_TILE_SELECTORS[s]);
+    for (var i = 0; i < tiles.length; i++) {
+      var r = tiles[i].getBoundingClientRect();
+      var left = r.left + window.scrollX, top = r.top + window.scrollY;
+      var right = left + r.width, bottom = top + r.height;
+      if (x >= left && x <= right && y >= top && y <= bottom) return tiles[i];
+      if (size) {
+        var ex2 = x + size[0], ey2 = y + size[1];
+        if (!(x > right || ex2 < left || y > bottom || ey2 < top)) return tiles[i];
+      }
     }
   }
   return null;
@@ -5816,7 +5943,7 @@ function addCustomElement(kind, x, y, extra) {
     }
   }
 
-  var tileHit = kind === "reel" ? null : findReelTileHit(x, y, kind);
+  var tileHit = kind === "reel" ? null : findBoundTileHit(x, y, kind);
   if (tileHit) return addBoundElement(tileHit, kind, d, extra);
 
   var el = buildCustomElement(d);
@@ -5840,33 +5967,81 @@ function addCustomElement(kind, x, y, extra) {
 }
 
 /**
- * The "drop landed on a reel tile" branch of addCustomElement(): builds the
- * same descriptor via the same buildCustomElementNode(), but appends it
+ * Resolves which content array actually owns tileEl (see
+ * BOUND_TILE_SELECTORS/findBoundTileHit()), so addBoundElement() can push a
+ * new bound child onto it and persist it back to the shared snapshot
+ * regardless of which kind of tile it is:
+ * - a reel tile's owner is its reel entry's own tiles[].children (nested
+ *   inside content.custom_elements, see buildReelElement()'s doc comment)
+ * - an attachments tile's owner is the matching content.extras[] entry's
+ *   own children (js/dashboard.js's EXTRAS, keyed by data-extras-id)
+ * - a day tile's owner is the matching content.days[] entry's own children
+ *   (js/dashboard.js's DAYS, keyed by data-days-id)
+ * Either of the last two only exist as globals on the student dashboard
+ * page (js/dashboard.js isn't loaded anywhere else), which is also the only
+ * place their tile selectors ever match, so referencing them here is safe.
+ * @param tileEl a tile matching one of BOUND_TILE_SELECTORS
+ * @return {children, persist()}, or null if no matching owner is found
+ */
+function findBoundTileOwner(tileEl) {
+  var tileId = elId(tileEl);
+  if (tileEl.hasAttribute("data-reel-tile")) {
+    for (var i = 0; i < CUSTOM_ELEMENTS.length; i++) {
+      if (CUSTOM_ELEMENTS[i].kind !== "reel") continue;
+      var found = (CUSTOM_ELEMENTS[i].tiles || []).filter(function (t) { return t.id === tileId; })[0];
+      if (found) return { children: found.children, persist: function () { saveCustomElements(CUSTOM_ELEMENTS); } };
+    }
+    return null;
+  }
+  if (tileEl.hasAttribute("data-extras-tile")) {
+    /* an attachments tile renders both as a top-level content.extras[] entry
+       AND, using the exact same shared "extras.tile.*" template/markup, as
+       one of a day's own files[] (see js/dashboard.js's renderDays()) - so
+       the owning entry might live in either array. */
+    var eid = tileEl.getAttribute("data-extras-id");
+    var eEntry = (window.EXTRAS || []).filter(function (f) { return f && f.id === eid; })[0];
+    if (!eEntry) {
+      (window.DAYS || []).some(function (day) {
+        eEntry = (day.files || []).filter(function (f) { return f && f.id === eid; })[0];
+        return !!eEntry;
+      });
+    }
+    if (!eEntry) return null;
+    if (!eEntry.children) eEntry.children = [];
+    return { children: eEntry.children, persist: function () { saveExtras(window.EXTRAS); saveDays(window.DAYS); } };
+  }
+  if (tileEl.hasAttribute("data-days-tile")) {
+    var did = tileEl.getAttribute("data-days-id");
+    var dEntry = (window.DAYS || []).filter(function (dd) { return dd.id === did; })[0];
+    if (!dEntry) return null;
+    if (!dEntry.children) dEntry.children = [];
+    return { children: dEntry.children, persist: function () { saveDays(window.DAYS); } };
+  }
+  return null;
+}
+
+/**
+ * The "drop landed on a tracked tile" branch of addCustomElement(): builds
+ * the same descriptor via the same buildCustomElementNode(), but appends it
  * into tileEl (see placeInTile()) instead of document.body, and persists it
- * nested inside the owning reel's own tiles[].children array instead of as
- * a new top-level content.custom_elements entry - this is what makes bound
- * content travel with its tile once js/learn-reel.js starts scrolling it
- * (see buildReelElement()'s doc comment). Falls back to the normal unbound
- * path if the owning reel entry can't be found for some reason (shouldn't
- * happen - findReelTileHit() only ever returns a live tracked tile - but a
- * silently dropped element would be a worse failure mode than a stray
- * top-level one).
- * @param tileEl the hit reel-tile DOM node (see findReelTileHit())
+ * nested inside the owning tile's own children array (see
+ * findBoundTileOwner()) instead of as a new top-level content.custom_elements
+ * entry - this is what makes bound content travel with its tile (reel
+ * scrolling, or an attachments/day tile's shared-template re-render). Falls
+ * back to the normal unbound path if no owner can be found for some reason
+ * (shouldn't happen - findBoundTileHit() only ever returns a live tracked
+ * tile - but a silently dropped element would be a worse failure mode than
+ * a stray top-level one).
+ * @param tileEl the hit tile DOM node (see findBoundTileHit())
  * @param kind the element kind being added
  * @param d its descriptor, left/top still in page coordinates at this point
  * @param extra see addCustomElement()
  * @return the built, bound (or, on fallback, unbound) element
  */
 function addBoundElement(tileEl, kind, d, extra) {
-  var tileId = elId(tileEl);
-  var reelD = null, tileD = null;
-  for (var i = 0; i < CUSTOM_ELEMENTS.length && !tileD; i++) {
-    if (CUSTOM_ELEMENTS[i].kind !== "reel") continue;
-    var found = (CUSTOM_ELEMENTS[i].tiles || []).filter(function (t) { return t.id === tileId; })[0];
-    if (found) { reelD = CUSTOM_ELEMENTS[i]; tileD = found; }
-  }
+  var owner = findBoundTileOwner(tileEl);
 
-  if (!tileD) {
+  if (!owner) {
     var fallbackEl = buildCustomElement(d);
     freezeFreeElement(fallbackEl);
     d.w = parseFloat(fallbackEl.dataset.natW);
@@ -5892,13 +6067,57 @@ function addBoundElement(tileEl, kind, d, extra) {
   d.w = parseFloat(childEl.dataset.natW);
   d.h = parseFloat(childEl.dataset.natH);
 
-  tileD.children.push(d);
-  saveCustomElements(CUSTOM_ELEMENTS);
+  owner.children.push(d);
+  owner.persist();
   finishAddedElement(childEl, d, kind, extra);
   EDIT_UNDO.push({ type: "add", id: d.id });
   EDIT_REDO.length = 0;
   return childEl;
 }
+
+/**
+ * Rebuilds every bound child inside tileEl (see findBoundTileOwner()) from
+ * its saved descriptor array, the attachments/day tile equivalent of what
+ * buildReelElement() already does for a reel tile's own children on every
+ * render. Called by js/dashboard.js's renderExtras()/renderDays() right
+ * after a tile's own shared-template pieces (rect/icon/text/button, or the
+ * locked/open template) are built, since those functions fully rebuild the
+ * tile's innerHTML from scratch on every call - any previously-rendered
+ * bound children need rebuilding right along with it. Re-runs the same
+ * generic override sweeps (color/size/radius/text/position/hidden) a second
+ * time afterward: extras/days tiles render AFTER applySharedEditorOverrides()'s
+ * own sweep pass already ran once (see its window.renderExtras hook), so a
+ * bound child's own saved style overrides would otherwise never get
+ * repainted - those sweeps are plain document-wide queries, safe and cheap
+ * to re-run, exactly the same "sweep instead of single match" reasoning
+ * mirrorTiledRoleStyle() already relies on for the tile roles themselves.
+ * @param tileEl a tile matching one of BOUND_TILE_SELECTORS
+ * @param children the tile's own saved children array (may be empty/undefined)
+ * @param data the full content blob (for the override maps), or omitted to
+ *   skip the repaint pass (eg when children is known to be empty)
+ */
+function renderTileChildren(tileEl, children, data) {
+  tileEl.querySelectorAll(":scope > .free-wrap").forEach(function (w) { w.remove(); });
+  (children || []).forEach(function (d) {
+    var el = buildCustomElementNode(d);
+    placeInTile(tileEl, el, d.left || 0, d.top || 0);
+    if (d.w) el.style.width = d.w + "px";
+    if (d.h) el.style.height = d.h + "px";
+    if ((d.kind === "text" || d.kind === "button") && isPreviewMode() && isEditMode()) wireTextField(el);
+    if (d.kind === "progress") paintProgressElement(el, d);
+    if (d.kind === "button" && d.id && LINKS[d.id]) applyOneLink(el, LINKS[d.id]);
+  });
+  if (!children || !children.length || !data) return;
+  applyTextOverrides(data.text || {});
+  applySizeOverrides(data.sizes);
+  applyFontSizeOverrides(data.font_sizes);
+  applyTextStyleOverrides(data.text_styles);
+  applyPositionOverrides(data.positions);
+  applyColorOverrides(data.colors, data.dark_colors);
+  applyRadiusOverrides(data.radius);
+  applyHiddenOverrides(data.hidden);
+}
+window.renderTileChildren = renderTileChildren;
 
 /**
  * Drops a saved object (see the right-click "Add element" > "Object"
@@ -6114,13 +6333,19 @@ function renderCtxMenuRoot() {
     var isExtrasFixed = CTX_TARGET_EL && CTX_TARGET_EL.hasAttribute("data-extras-fixed");
     var isExtrasRole = CTX_TARGET_EL && CTX_TARGET_EL.hasAttribute("data-extras-role");
     var extrasTile = CTX_TARGET_EL && CTX_TARGET_EL.closest && CTX_TARGET_EL.closest("[data-extras-tile]");
-    var isSpecial = isDatetime || isTile || isExtrasFixed || CTX_TARGET_ID.indexOf("logistics.") === 0 || CTX_TARGET_ID.indexOf("countdown.") === 0 ||
+    var isDaysFixed = CTX_TARGET_EL && CTX_TARGET_EL.hasAttribute("data-days-fixed");
+    var isDaysRole = CTX_TARGET_EL && CTX_TARGET_EL.hasAttribute("data-days-role");
+    var daysTile = CTX_TARGET_EL && CTX_TARGET_EL.closest && CTX_TARGET_EL.closest("[data-days-tile]");
+    var isSpecial = isDatetime || isTile || isExtrasFixed || isDaysFixed || CTX_TARGET_ID.indexOf("logistics.") === 0 || CTX_TARGET_ID.indexOf("countdown.") === 0 ||
       (CTX_TARGET_EL && CTX_TARGET_EL.querySelector && CTX_TARGET_EL.querySelector("#heroCountdown, #logisticsGrid"));
     toggleHtml =
       '<div class="ctx-title">This element</div>' +
-      ((isSpecial || isExtrasRole) ? "" : '<button type="button" data-dup="1">Duplicate</button>') +
+      ((isSpecial || isExtrasRole || isDaysRole) ? "" : '<button type="button" data-dup="1">Duplicate</button>') +
       (isSpecial ? "" : '<button type="button" data-delete="1">Delete</button>') +
       (extrasTile ? '<button type="button" data-extras-add-filename="1">Create textbox with filename variable</button>' : "") +
+      (daysTile ? '<button type="button" data-days-add-number="1">Insert day number</button>' +
+        '<button type="button" data-days-add-date="1">Insert unlock date</button>' +
+        '<button type="button" data-days-add-locked="1">Insert locked-state text</button>' : "") +
       '<button type="button" data-link-edit="1">' +
       (LINKS[CTX_TARGET_ID] ? "Edit link" : "Add link") +
       '</button>' +
@@ -6173,6 +6398,15 @@ function renderCtxMenuRoot() {
       hideCtxMenu();
     });
   }
+  [["data-days-add-number", "day-number"], ["data-days-add-date", "day-date"], ["data-days-add-locked", "day-locked"]].forEach(function (pair) {
+    var btn = CTX_MENU.querySelector("[" + pair[0] + "]");
+    if (!btn) return;
+    btn.addEventListener("click", function () {
+      var tile = CTX_TARGET_EL && CTX_TARGET_EL.closest && CTX_TARGET_EL.closest("[data-days-tile]");
+      if (tile) insertDaysChip(tile, pair[1]);
+      hideCtxMenu();
+    });
+  });
   var linkEditBtn = CTX_MENU.querySelector("[data-link-edit]");
   if (linkEditBtn) {
     linkEditBtn.addEventListener("click", function () { renderCtxMenuLinkEditor(); });
@@ -6948,7 +7182,7 @@ function wireResizable() {
   document.addEventListener("keydown", function (e) {
     var d = ARROW_DELTAS[e.key];
     if (!d) return;
-    if (!RING_EL || isLocked(elId(RING_EL)) || RING_EL.hasAttribute("data-reel-tile") || RING_EL.hasAttribute("data-extras-role")) return;
+    if (!RING_EL || isLocked(elId(RING_EL)) || RING_EL.hasAttribute("data-reel-tile") || RING_EL.hasAttribute("data-extras-role") || RING_EL.hasAttribute("data-days-role")) return;
     var active = document.activeElement;
     if (active && (active.isContentEditable || active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT")) return;
     e.preventDefault();
@@ -7876,6 +8110,7 @@ function mirrorEditedField(id, html, editedEl) {
     if (el !== editedEl) el.innerHTML = html;
   });
   repaintExtrasFilenameChips();
+  repaintDaysChips();
 }
 
 /** Reverts the most recent click-to-edit commit, moving it onto the redo stack. */
@@ -8860,14 +9095,15 @@ function applySharedEditorOverrides(data, textMap) {
   applyLockHighlight();
   applyElementAnchors();
   if (window.initAllReels) window.initAllReels();
-  /* js/dashboard.js's own renderExtras() also runs off its own independent
-     fetchContent() call (see initDashboardPage()'s doc comment) and races
-     this one - whichever finishes second is the one that actually has
-     somewhere to render into (this function is what builds the "extrasArea"
-     custom element renderExtras() renders tiles inside), so both sides
-     trigger a render attempt and the earlier one just no-ops, same
-     window.-gated cross-script pattern as window.initAllReels above */
+  /* js/dashboard.js's own renderExtras()/renderDays() also run off its own
+     independent fetchContent() call (see initDashboardPage()'s doc comment)
+     and race this one - whichever finishes second is the one that actually
+     has somewhere to render into (this function is what builds the
+     "extrasArea"/"daysArea" custom elements those render tiles inside), so
+     both sides trigger a render attempt and the earlier one just no-ops,
+     same window.-gated cross-script pattern as window.initAllReels above */
   if (window.renderExtras) window.renderExtras();
+  if (window.renderDays) window.renderDays();
   if (isPreviewMode() && isEditMode()) {
     wireResizable();
     wireClickToEdit();

@@ -23,6 +23,12 @@ var EXTRAS = [];
    separately-raced fetch alike, see initDashboardPage()'s doc comment. */
 var EXTRAS_CONTENT = null;
 
+/* same idea as EXTRAS_CONTENT, for renderDays() - both point at the same
+   fetched content object, kept as two named globals just so each render
+   function's own doc comments/reads stay obviously scoped to their own
+   section. */
+var DAYS_CONTENT = null;
+
 /* the shared template default for a tile's filename text field - just the
    local filename chip (js/main.js's buildExtrasFilenameChipHtml(), a
    per-tile-resolved variant of the formula chip that deliberately never
@@ -258,28 +264,164 @@ function gateCheck() {
 }
 
 /**
- * Builds a locked "available soon" day card.
- * @param dayNum the day number to show on the card
- * @return the card's html
+ * Reads the shared "extras.tile.*" template's style overrides off a content
+ * blob - the exact same lookup renderExtras() needs for the main Extra
+ * attachments tiles, and renderDays() needs again for a day's own files[],
+ * since both render through the identical buildExtrasTileHtml() template
+ * (see its doc comment - a day's attachment tiles and the main section's
+ * are meant to restyle together, not independently). Factored out once
+ * rather than duplicated so there's exactly one place reading these keys.
+ * @param data a content blob (EXTRAS_CONTENT/DAYS_CONTENT)
+ * @return {rectColor, rectDarkColor, rectRadius, iconSize, buttonSize}
  */
-function soonCard(dayNum) {
-  return '<div class="day-card soon">' +
-    '<span class="soon-lock">' + LOCK_SVG + '</span>' +
-    '<h3>Day ' + dayNum + '</h3>' +
-    '<p class="muted">This module will be available soon</p>' +
-    '<span class="badge locked">' + LOCK_SVG + 'Locked</span>' +
-  '</div>';
+function extrasTileStyleFrom(data) {
+  var colors = data.colors || {}, darkColors = data.dark_colors || {}, radius = data.radius || {}, sizes = data.sizes || {};
+  return {
+    rectColor: colors["extras.tile.rect"], rectDarkColor: darkColors["extras.tile.rect"],
+    rectRadius: radius["extras.tile.rect"],
+    iconSize: sizes["extras.tile.icon"], buttonSize: sizes["extras.tile.button"]
+  };
+}
+
+/* the shared template defaults for a day tile's chip-eligible text fields -
+   local "day-number"/"day-date" chips (js/main.js's buildDaysChipHtml(), the
+   day-tile equivalent of the filename chip), same "computed once, main.js
+   is guaranteed to have already run" reasoning as DEFAULT_EXTRAS_TEXT_HTML. */
+var DEFAULT_DAYS_LOCKED_TITLE_HTML = buildDaysChipHtml("day-number", "Day #");
+var DEFAULT_DAYS_OPEN_DAYTAG_HTML =
+  buildDaysChipHtml("day-number", "Day #") + ' &middot; ' + buildDaysChipHtml("day-date", "date");
+
+/**
+ * Builds one LOCKED day tile's markup: a shared template rendered once per
+ * still-locked day (plus, per allOpen below, one trailing synthetic "next
+ * day" instance with no backing content.days[] entry) - same "one style
+ * edit applies to every instance" shared-template idea as
+ * buildExtrasTileHtml(), using its own independent set of ids
+ * ("days.locked.*") so restyling a locked tile never touches an open one
+ * (the two states are deliberately separate templates, not one template
+ * that swaps pieces). The big lock icon and the "Locked" badge are
+ * data-days-fixed (stylable/resizable, never deletable); the rect and the
+ * title text are ordinary deletable elements, restorable via right-click
+ * (see js/main.js's insertDaysChip()).
+ * @param dayId the day's own stable id, or "" for the trailing synthetic card
+ * @param dayNum the day number to show
+ * @param style {rectColor, rectDarkColor, rectRadius} (reads "days.locked.*"
+ *   keys, independent from the open template's own style)
+ * @param titleHtml content.text["days.locked.title"], or undefined for the
+ *   shared default (just the day-number chip)
+ * @param badgeHtml content.text["days.locked.badge"], or undefined for "Locked"
+ * @return an HTML string for one locked tile
+ */
+function buildDayLockedTileHtml(dayId, dayNum, style, titleHtml, badgeHtml) {
+  var rectStyle = "";
+  if (style.rectColor || style.rectDarkColor) {
+    rectStyle += "background-color:" + resolveThemedColor(style.rectColor, style.rectDarkColor) + ";";
+  }
+  if (style.rectRadius) rectStyle += "border-radius:" + style.rectRadius + "px;";
+  var iconStyle = style.iconSize ? ("width:" + style.iconSize.w + "px;height:" + style.iconSize.h + "px;") : "";
+  return (
+    '<div class="day-card soon" data-days-tile="1" data-days-id="' + escapeHtml(dayId) +
+      '" data-days-locked="1" data-days-number="' + dayNum + '">' +
+      '<div class="day-tile-rect" data-resize-id="days.locked.rect" data-days-role="locked.rect" aria-hidden="true"' +
+        (rectStyle ? ' style="' + rectStyle + '"' : "") + '></div>' +
+      '<span class="soon-lock" data-resize-id="days.locked.icon" data-days-role="locked.icon" data-days-fixed="1"' +
+        (iconStyle ? ' style="' + iconStyle + '"' : "") + '>' + LOCK_SVG + '</span>' +
+      '<h3 data-edit-id="days.locked.title" data-days-role="locked.title" ' +
+        'data-default-html="' + escapeHtml(DEFAULT_DAYS_LOCKED_TITLE_HTML) + '">' +
+        (titleHtml !== undefined ? titleHtml : DEFAULT_DAYS_LOCKED_TITLE_HTML) +
+      '</h3>' +
+      '<p class="muted">This module will be available soon</p>' +
+      '<span class="badge locked" data-edit-id="days.locked.badge" data-days-role="locked.badge" data-days-fixed="1" ' +
+        'data-default-html="Locked">' + LOCK_SVG + (badgeHtml !== undefined ? badgeHtml : "Locked") +
+      '</span>' +
+    '</div>'
+  );
 }
 
 /**
- * Renders every day panel into #dayGrid: unlocked panels with their
- * content, locked ones as a "soon" card, plus one trailing locked card for
- * the next day once everything so far is open.
+ * Builds one OPEN day tile's markup: same shared-template idea as
+ * buildDayLockedTileHtml(), its own independent "days.open.*" ids. Title/
+ * blurb are NOT part of the shared template - they're real, per-day content
+ * a ta types in the content manager's day panel (STATE.days[i].title/blurb),
+ * so they're inserted as plain escaped text here, same as they always have
+ * been, with no chip/mirroring involved. The attachment list reuses
+ * buildExtrasTileHtml() verbatim (js/main.js's findBoundTileOwner() already
+ * knows to look inside a day's own files[] too), so a day's attachments and
+ * the main Extra attachments section's tiles restyle together as one shared
+ * template everywhere they appear.
+ * @param day one DAYS entry (id, day, date, title, blurb, files, children)
+ * @param style {rectColor, rectDarkColor, rectRadius} (reads "days.open.*" keys)
+ * @param daytagHtml content.text["days.open.daytag"], or undefined for the
+ *   shared default (day-number chip &middot; day-date chip)
+ * @param badgeHtml content.text["days.open.badge"], or undefined for "Open"
+ * @param extrasStyle see extrasTileStyleFrom() - shared with renderExtras()
+ * @param extrasTextHtml content.text["extras.tile.text"], or undefined
+ * @param extrasButtonHtml content.text["extras.tile.button"], or undefined
+ * @return an HTML string for one open tile
+ */
+function buildDayOpenTileHtml(day, style, daytagHtml, badgeHtml, extrasStyle, extrasTextHtml, extrasButtonHtml) {
+  var rectStyle = "";
+  if (style.rectColor || style.rectDarkColor) {
+    rectStyle += "background-color:" + resolveThemedColor(style.rectColor, style.rectDarkColor) + ";";
+  }
+  if (style.rectRadius) rectStyle += "border-radius:" + style.rectRadius + "px;";
+  var chips = (day.files || []).map(function (f) {
+    return buildExtrasTileHtml(f, extrasStyle, extrasTextHtml, extrasButtonHtml);
+  }).join("");
+  return (
+    '<div class="day-card" data-days-tile="1" data-days-id="' + escapeHtml(day.id || "") +
+      '" data-days-locked="0" data-days-number="' + day.day +
+      '" data-days-date="' + escapeHtml(day.date ? fmtDate(day.date) : "") + '">' +
+      '<div class="day-tile-rect" data-resize-id="days.open.rect" data-days-role="open.rect" aria-hidden="true"' +
+        (rectStyle ? ' style="' + rectStyle + '"' : "") + '></div>' +
+      '<div style="display:flex;justify-content:space-between;align-items:center">' +
+        '<span class="daytag" data-edit-id="days.open.daytag" data-days-role="open.daytag" ' +
+          'data-default-html="' + escapeHtml(DEFAULT_DAYS_OPEN_DAYTAG_HTML) + '">' +
+          (daytagHtml !== undefined ? daytagHtml : DEFAULT_DAYS_OPEN_DAYTAG_HTML) +
+        '</span>' +
+        '<span class="badge open" data-edit-id="days.open.badge" data-days-role="open.badge" data-days-fixed="1" ' +
+          'data-default-html="Open">' + UNLOCK_SVG + (badgeHtml !== undefined ? badgeHtml : "Open") +
+        '</span>' +
+      '</div>' +
+      '<h3>' + escapeHtml(day.title || "") + '</h3>' +
+      '<p class="muted">' + escapeHtml(day.blurb || "") + '</p>' +
+      (chips ? '<div class="res-list extras-tile-list" style="margin-top:14px">' + chips + '</div>' : "") +
+    '</div>'
+  );
+}
+
+/**
+ * Renders "The days" tile grid's live area: every day as either its locked
+ * or open tile (see buildDayLockedTileHtml()/buildDayOpenTileHtml()), plus
+ * one trailing locked card for the next day once everything so far is open
+ * - same behavior as before this was a live editor area, just built through
+ * the two shared templates now. Rebuilds the whole area's innerHTML from
+ * DAYS_CONTENT every time it runs, same "no incremental diffing, this
+ * section is small" reasoning as renderExtras(). Called via the
+ * window.renderDays hook from js/main.js's applySharedEditorOverrides() AND
+ * from this file's own DOMContentLoaded handler below - see
+ * EXTRAS_CONTENT's doc comment for why both call it and why that's safe.
  * @return how many day panels are currently unlocked
  */
 function renderDays() {
-  var grid = document.getElementById("dayGrid");
-  if (!grid) return 0;
+  if (!DAYS_CONTENT) return 0;
+  var host = document.querySelector('[data-days-area="1"]');
+  if (!host) return 0;
+  var data = DAYS_CONTENT;
+  var radius = data.radius || {}, colors = data.colors || {}, darkColors = data.dark_colors || {};
+  var lockedStyle = {
+    rectColor: colors["days.locked.rect"], rectDarkColor: darkColors["days.locked.rect"],
+    rectRadius: radius["days.locked.rect"]
+  };
+  var openStyle = {
+    rectColor: colors["days.open.rect"], rectDarkColor: darkColors["days.open.rect"],
+    rectRadius: radius["days.open.rect"]
+  };
+  var text = data.text || {};
+  var extrasStyle = extrasTileStyleFrom(data);
+  var extrasTextHtml = text["extras.tile.text"];
+  var extrasButtonHtml = text["extras.tile.button"];
+
   var html = "";
   var unlockedCount = 0;
   var allOpen = true;
@@ -287,34 +429,45 @@ function renderDays() {
   DAYS.forEach(function (day) {
     if (!day.unlocked) {
       allOpen = false;
-      html += soonCard(day.day);
+      html += buildDayLockedTileHtml(day.id || "", day.day, lockedStyle, text["days.locked.title"], text["days.locked.badge"]);
       return;
     }
     unlockedCount++;
-    var chips = day.files.map(function (f) {
-      return '<a class="chip" href="' + itemHref(f) + '" target="_blank" rel="noopener">' + itemIcon(f) + ' ' + itemLabel(f) + '</a>';
-    }).join("");
-    html +=
-      '<div class="day-card">' +
-        '<div style="display:flex;justify-content:space-between;align-items:center">' +
-          '<span class="daytag">Day ' + day.day +
-            (day.date ? ' &middot; ' + fmtDate(day.date) : '') + '</span>' +
-          '<span class="badge open">' + UNLOCK_SVG + 'Open</span>' +
-        '</div>' +
-        '<h3>' + day.title + '</h3>' +
-        '<p class="muted">' + day.blurb + '</p>' +
-        '<div class="links">' + chips + '</div>' +
-      '</div>';
+    html += buildDayOpenTileHtml(day, openStyle, text["days.open.daytag"], text["days.open.badge"], extrasStyle, extrasTextHtml, extrasButtonHtml);
   });
 
-  /* once every panel is open, one locked card trails for the next day */
+  /* once every panel is open, one locked card trails for the next day - no
+     backing content.days[] entry, so no id/bound children, same as before */
   if (allOpen && DAYS.length < TOTAL_DAYS) {
-    html += soonCard(DAYS.length + 1);
+    html += buildDayLockedTileHtml("", DAYS.length + 1, lockedStyle, text["days.locked.title"], text["days.locked.badge"]);
   }
 
-  grid.innerHTML = html;
+  host.innerHTML = html;
+
+  (data.hidden || []).forEach(function (id) {
+    if (!/^(days\.(locked|open)\.rect|days\.(locked|open)\.title|days\.open\.daytag|extras\.tile\.(rect|text))$/.test(id)) return;
+    host.querySelectorAll('[data-resize-id="' + id + '"], [data-edit-id="' + id + '"]').forEach(function (el) {
+      setHiddenVisual(el, true);
+    });
+  });
+
+  repaintDaysChips();
+  repaintExtrasFilenameChips();
+
+  var wireText = isPreviewMode() && isEditMode();
+  host.querySelectorAll('[data-days-tile]').forEach(function (tileEl) {
+    var day = DAYS.filter(function (d) { return d.id && d.id === tileEl.getAttribute("data-days-id"); })[0];
+    if (window.renderTileChildren) window.renderTileChildren(tileEl, day && day.children, data);
+    if (wireText) {
+      tileEl.querySelectorAll('[data-edit-id="days.locked.title"], [data-edit-id="days.locked.badge"], ' +
+        '[data-edit-id="days.open.daytag"], [data-edit-id="days.open.badge"], [data-edit-id="extras.tile.text"], [data-edit-id="extras.tile.button"]')
+        .forEach(wireTextField);
+    }
+  });
+
   return unlockedCount;
 }
+window.renderDays = renderDays;
 
 /**
  * Builds one attachment tile's markup: a plain, untracked flex wrapper
@@ -405,13 +558,8 @@ function renderExtras() {
   var host = document.querySelector('[data-extras-area="1"]');
   if (!host) return;
   var data = EXTRAS_CONTENT;
-  var colors = data.colors || {}, darkColors = data.dark_colors || {}, radius = data.radius || {}, sizes = data.sizes || {};
   var text = data.text || {};
-  var style = {
-    rectColor: colors["extras.tile.rect"], rectDarkColor: darkColors["extras.tile.rect"],
-    rectRadius: radius["extras.tile.rect"],
-    iconSize: sizes["extras.tile.icon"], buttonSize: sizes["extras.tile.button"]
-  };
+  var style = extrasTileStyleFrom(data);
   var textHtml = text["extras.tile.text"];
   var buttonHtml = text["extras.tile.button"];
   var emptyHtml = text["dash.extras.empty"] !== undefined ? text["dash.extras.empty"] : DEFAULT_EXTRAS_EMPTY_HTML;
@@ -442,6 +590,13 @@ function renderExtras() {
   if (isPreviewMode() && isEditMode()) {
     host.querySelectorAll('[data-edit-id="dash.extras.empty"], [data-edit-id="extras.tile.text"], [data-edit-id="extras.tile.button"]')
       .forEach(wireTextField);
+  }
+
+  if (window.renderTileChildren) {
+    host.querySelectorAll('[data-extras-tile]').forEach(function (tileEl) {
+      var f = EXTRAS.filter(function (item) { return item && item.id === tileEl.getAttribute("data-extras-id"); })[0];
+      window.renderTileChildren(tileEl, f && f.children, data);
+    });
   }
 }
 window.renderExtras = renderExtras;
@@ -488,6 +643,7 @@ document.addEventListener("DOMContentLoaded", function () {
       DAYS = data.days;
       EXTRAS = data.extras;
       EXTRAS_CONTENT = data;
+      DAYS_CONTENT = data;
       var totalDaysVar = (data.variables || []).filter(function (v) { return v.key === "total_days"; })[0];
       TOTAL_DAYS = (totalDaysVar && +totalDaysVar.value) || TOTAL_DAYS;
       renderDays();

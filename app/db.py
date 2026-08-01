@@ -424,6 +424,19 @@ _DASH_EXTRAS_AREA_ENTRY = {
 }
 DEFAULT_CONTENT["custom_elements"].append(_DASH_EXTRAS_AREA_ENTRY)
 
+# the student dashboard's "The days" tile grid, same treatment as
+# _DASH_EXTRAS_AREA_ENTRY just above: a real placed "daysArea" custom
+# element anchored to the days section's own reserved spacer
+# (#dashDaysAreaAnchor in templates/dashboard.html). js/dashboard.js's
+# renderDays() finds it by id and renders the locked/open tile templates
+# into it, same "window.renderDays" hook shape as renderExtras().
+_DASH_DAYS_AREA_ENTRY = {
+    "id": "seed.dashboard.days.area", "kind": "daysArea",
+    "anchor": "#dashDaysAreaAnchor", "left": 0, "top": 0,
+    "w": 1160, "h": 40,
+}
+DEFAULT_CONTENT["custom_elements"].append(_DASH_DAYS_AREA_ENTRY)
+
 # starter "objects" library entries (see the objects table below): reusable
 # element bundles a ta can drop onto the page from the visual editor's
 # right-click "Add element" > "Object" picker (see placeObject() in
@@ -790,6 +803,7 @@ def init_db():
     _migrate_learn_reel(conn)
     _migrate_dashboard_progress(conn)
     _migrate_dashboard_extras_area(conn)
+    _migrate_dashboard_days_area(conn)
     _migrate_progress_bar_object(conn)
     conn.close()
 
@@ -1193,6 +1207,44 @@ def _migrate_dashboard_extras_area(conn):
     conn.commit()
 
 
+def _migrate_dashboard_days_area(conn):
+    """one-time patch (same meta-flag trick as _migrate_dashboard_extras_area())
+    adding the migrated "daysArea" element (_DASH_DAYS_AREA_ENTRY) to every
+    already-existing content blob/profile that predates it, same reasoning:
+    the old static #dayGrid markup this replaces needs the anchor spacer
+    already in templates/dashboard.html, but an old saved blob still needs
+    this element patched into its own custom_elements list to actually
+    render anything into that spacer.
+    @param conn an open db connection
+    """
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO meta (key, value) VALUES ('dashboard_days_area_migrated', '1')"
+    )
+    conn.commit()
+    if cur.rowcount == 0:
+        return
+
+    def patch(data):
+        ids = [c.get("id") for c in data.get("custom_elements", [])]
+        if "seed.dashboard.days.area" in ids:
+            return data, False
+        data.setdefault("custom_elements", []).append(json.loads(json.dumps(_DASH_DAYS_AREA_ENTRY)))
+        return data, True
+
+    row = conn.execute("SELECT data FROM content WHERE id = 1").fetchone()
+    if row:
+        data, changed = patch(json.loads(row["data"]))
+        if changed:
+            conn.execute("UPDATE content SET data = ? WHERE id = 1", (json.dumps(data),))
+
+    for prow in conn.execute("SELECT id, data FROM profiles").fetchall():
+        data, changed = patch(json.loads(prow["data"]))
+        if changed:
+            conn.execute("UPDATE profiles SET data = ? WHERE id = ?", (json.dumps(data), prow["id"]))
+
+    conn.commit()
+
+
 def _migrate_progress_bar_object(conn):
     """one-time patch (same meta-flag trick as _migrate_learn_reel()) adding
     the "Progress bar" entry to an already-existing Objects library that
@@ -1256,6 +1308,7 @@ def get_content():
     for key, value in DEFAULT_CONTENT.items():
         data.setdefault(key, value)
     _backfill_extras_ids(data)
+    _backfill_days_ids(data)
     _refresh_computed_variables(data)
     return data
 
@@ -1268,6 +1321,20 @@ def _backfill_extras_ids(data):
     @param data the content dict being read (mutated in place)
     """
     for item in data.get("extras", []):
+        if isinstance(item, dict):
+            item.setdefault("id", uuid.uuid4().hex)
+            item.setdefault("children", [])
+
+
+def _backfill_days_ids(data):
+    """assigns a stable id (and empty children list) to any days entry that
+    predates the day-tile-binding feature, same reasoning/shape as
+    _backfill_extras_ids() just above - js/main.js's day-tile area needs
+    something durable to bind dropped elements to that survives a day being
+    reordered/removed, which a plain array index wouldn't.
+    @param data the content dict being read (mutated in place)
+    """
+    for item in data.get("days", []):
         if isinstance(item, dict):
             item.setdefault("id", uuid.uuid4().hex)
             item.setdefault("children", [])

@@ -5676,6 +5676,8 @@ function saveDuplicateEntry(sourceId, suffix) {
  * @param sourceEl the specific element node that was right-clicked (see
  *   CTX_TARGET_EL, not just its id, which a mirrored element can share
  *   with another node)
+ * @return the new copy's own live node (see buildDuplicateClone()'s
+ *   rootEl), so a caller like the Ctrl+C/Ctrl+V handler can select it
  */
 function duplicateElement(sourceEl) {
   var sourceId = elId(sourceEl);
@@ -5710,6 +5712,7 @@ function duplicateElement(sourceEl) {
   applyLockHighlight();
   EDIT_UNDO.push({ type: "add", id: rootNewId });
   EDIT_REDO.length = 0;
+  return built.rootEl;
 }
 
 /**
@@ -7227,6 +7230,65 @@ function wireResizable() {
     });
     pushGroupMoveUndo(moves);
   });
+
+  /* Ctrl/Cmd+C copies whatever the ring is currently on (same eligibility
+     rule the right-click menu's Duplicate button already applies, see
+     isDuplicatable() and renderCtxMenuRoot()'s doc comment - a reel tile,
+     an extras/days tile role, a datetime element, and the countdown/
+     logistics tiles all render from structured data a generic clone can't
+     carry over, so none of those are copyable here either); Ctrl/Cmd+V
+     duplicates that copy via duplicateElement(), same as clicking
+     Duplicate on it, and selects the fresh copy so it can be dragged into
+     place right away. Both are no-ops while a text field is mid-edit or
+     focus is sitting in a real form control, so normal text copy/paste
+     inside those still works untouched. */
+  var COPIED_EL = null;
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "c" && e.key !== "C" && e.key !== "v" && e.key !== "V") return;
+    if (!(e.ctrlKey || e.metaKey)) return;
+    var active = document.activeElement;
+    if (active && (active.isContentEditable || active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT")) return;
+    if (e.key === "c" || e.key === "C") {
+      if (!RING_EL || !isDuplicatable(RING_EL)) return;
+      COPIED_EL = RING_EL;
+      return;
+    }
+    /* paste: the copied node must still be attached (it can't have been
+       deleted, or removed by an undo, since it was copied) */
+    if (!COPIED_EL || !COPIED_EL.isConnected) return;
+    e.preventDefault();
+    var newEl = duplicateElement(COPIED_EL);
+    if (newEl) {
+      RING_EL = newEl;
+      positionRing();
+    }
+  });
+}
+
+/**
+ * Whether el is eligible for duplication: the same rule
+ * renderCtxMenuRoot() applies to show/hide its own "Duplicate" button
+ * (kept as a separate check here, rather than refactored to share code,
+ * since the two need different combinations of the same flags - Delete
+ * there only checks isSpecial, Duplicate checks isSpecial plus the tile-
+ * role flags). See renderCtxMenuRoot()'s doc comment for why each of
+ * these can't be safely cloned.
+ * @param el a tracked element (data-edit-id/data-resize-id), eg RING_EL
+ */
+function isDuplicatable(el) {
+  if (!el) return false;
+  var id = elId(el);
+  var targetData = id && customElementById(id);
+  var isDatetime = targetData && targetData.kind === "datetime";
+  var isTile = el.hasAttribute("data-reel-tile");
+  var isExtrasFixed = el.hasAttribute("data-extras-fixed");
+  var isExtrasRole = el.hasAttribute("data-extras-role");
+  var isDaysFixed = el.hasAttribute("data-days-fixed");
+  var isDaysRole = el.hasAttribute("data-days-role");
+  var isSpecial = isDatetime || isTile || isExtrasFixed || isDaysFixed ||
+    (id && (id.indexOf("logistics.") === 0 || id.indexOf("countdown.") === 0)) ||
+    (el.querySelector && el.querySelector("#heroCountdown, #logisticsGrid"));
+  return !(isSpecial || isExtrasRole || isDaysRole);
 }
 
 /* the one floating text toolbar, shared by every text field, shown above

@@ -6955,9 +6955,10 @@ function hideCtxMenu() {
  */
 function wireAddElementMenu() {
   document.addEventListener("contextmenu", function (e) {
-    /* mid-edit, leave the browser's own menu alone so right-click paste/
-       spellcheck still works while actually typing */
-    if (e.target.closest && e.target.closest("[contenteditable='true']")) return;
+    /* replaces the browser's own menu even mid-edit (contentEditable), since
+       right-clicking while typing is exactly how a chip (day number/date/
+       locked-state, filename, etc) gets re-inserted at the caret via this
+       same menu's "Insert ..." buttons */
     e.preventDefault();
     var t = resolveSelectableTarget(e.target);
     showCtxMenu(e.pageX, e.pageY, t ? elId(t) : null, t);

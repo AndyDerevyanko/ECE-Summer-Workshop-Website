@@ -1271,6 +1271,22 @@ function applyLockHighlight() {
 }
 
 /**
+ * True if el is the actual instance FIXED_SET's id refers to, not just any
+ * DOM node that happens to share that id. "Promote to navbar" (NAV_FIXED_IDS
+ * in app/db.py) is conceptually about the nav bar itself, but a handful of
+ * ids (eg "nav.brand", the wordmark) are shared with a mirrored copy
+ * elsewhere on the page - eg templates/index.html's footer reuses
+ * "nav.brand" so editing the brand name once updates both - and that
+ * second copy was never meant to inherit the nav's own fixed/z-boosted
+ * treatment just because it shares the same id.
+ * @param el the element
+ * @return true if el both has a fixed id AND actually sits inside <nav>
+ */
+function isFixedInstance(el) {
+  return isFixed(elId(el)) && !!(el.closest && el.closest("nav"));
+}
+
+/**
  * Paints the always-visible red "this is fixed" outline (see .edit-fixed in
  * css/style.css) onto every currently-rendered element in FIXED_SET, and
  * clears it off everything else. Only actually visible under body.edit-mode
@@ -1278,7 +1294,7 @@ function applyLockHighlight() {
  */
 function applyFixedHighlight() {
   document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
-    el.classList.toggle("edit-fixed", isFixed(elId(el)));
+    el.classList.toggle("edit-fixed", isFixedInstance(el));
   });
 }
 
@@ -1478,8 +1494,8 @@ function applyLayerOrder(layers) {
     var el = document.querySelector(HERO_MEDIA_IDS[id]);
     if (el) members.push({ el: el, id: id, assignZ: true });
   });
-  var nonFixed = members.filter(function (m) { return !isFixed(m.id); });
-  var fixed = members.filter(function (m) { return isFixed(m.id); });
+  var nonFixed = members.filter(function (m) { return !isFixedInstance(m.el); });
+  var fixed = members.filter(function (m) { return isFixedInstance(m.el); });
   var byRank = function (a, b) { return (rank[a.id] || 0) - (rank[b.id] || 0); };
   nonFixed.sort(byRank);
   fixed.sort(byRank);

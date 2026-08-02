@@ -336,6 +336,14 @@ DEFAULT_CONTENT = {
     # ids with the shared drop-shadow (style popover's Shadow checkbox)
     # turned on, a flat list, same shape as fixed_elements/locked.
     "shadow": [],
+    # ids with the style popover's Flip horizontal/Flip vertical toggle on
+    # (only ever set for icon/image/video/box elements, see toggleStyleMenu()
+    # in js/main.js), flat lists, same shape as shadow/locked.
+    "flip_h": [],
+    "flip_v": [],
+    # visual editor style popover's Rotate slider, keyed by data-edit-id/
+    # data-resize-id, a whole-number degrees value (-180 to 180).
+    "rotate": {},
     # right-click "Add link"/"Edit link" targets, keyed by data-edit-id/
     # data-resize-id, a url string. a real <a> (a button, the brand link)
     # gets a real href; anything else gets a navigate-on-click listener,

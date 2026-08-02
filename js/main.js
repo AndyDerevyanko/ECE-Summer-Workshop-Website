@@ -718,12 +718,31 @@ function nearestTrackedAncestorId(el) {
 }
 
 /**
+ * The style popover's Flip horizontal/Flip vertical/Rotate controls'
+ * contribution to el's transform, read off its own dataset (el.dataset.
+ * flipH/flipV/rotate - see applyFlipRotateOverrides()/toggleStyleMenu()),
+ * never el.style.transform directly since paintPos() is the only place
+ * allowed to write that (it composes this back in on every move/resize).
+ * @param el the element
+ * @return a transform fragment ("" if el has no flip/rotate override)
+ */
+function flipRotateTransform(el) {
+  var parts = [];
+  var deg = parseFloat(el.dataset.rotate) || 0;
+  if (deg) parts.push("rotate(" + deg + "deg)");
+  var sx = el.dataset.flipH === "1" ? -1 : 1;
+  var sy = el.dataset.flipV === "1" ? -1 : 1;
+  if (sx === -1 || sy === -1) parts.push("scale(" + sx + "," + sy + ")");
+  return parts.join(" ");
+}
+
+/**
  * Writes el's painted transform: its own move offset minus its tracked
- * ancestors' (see ancestorPos()). A translate is a purely paint-time
- * effect, so moving an element can never push or reflow anything else on
- * the page. An element with a stylesheet transform of its own (the scaled
- * brand logo, the flipped cta arrow) keeps it, composed after the
- * translate, instead of having it silently stomped by the inline style.
+ * ancestors' (see ancestorPos()), then any style popover Flip/Rotate
+ * override (see flipRotateTransform()), then whatever stylesheet transform
+ * el already had of its own (the scaled brand logo, the flipped cta
+ * arrow), composed after the first two - instead of having it silently
+ * stomped by the inline style.
  * @param el the element
  */
 function paintPos(el) {
@@ -735,6 +754,8 @@ function paintPos(el) {
   var anc = ancestorPos(el);
   var tx = own.tx - anc.tx, ty = own.ty - anc.ty;
   var xf = tx || ty ? "translate(" + tx + "px, " + ty + "px)" : "";
+  var ovXf = flipRotateTransform(el);
+  if (ovXf) xf = (xf ? xf + " " : "") + ovXf;
   if (el.dataset.baseXf) xf = (xf ? xf + " " : "") + el.dataset.baseXf;
   /* a naturally *inline* element (a plain <span>, eg. the hero title text)
      ignores transform entirely per spec until blockified, same reason a
@@ -2452,6 +2473,35 @@ function applyShadowOverrides(shadow) {
   });
 }
 
+/**
+ * Applies saved Flip horizontal/Flip vertical/Rotate overrides (style
+ * popover's Flip buttons and Rotate slider, icon/image/video/box elements
+ * only, see toggleStyleMenu()) on top of the page's own default (no
+ * transform). Runs on every load, live site included, same as
+ * applyRadiusOverrides()/applyOpacityOverrides(). Written onto el's own
+ * dataset rather than el.style.transform directly, since paintPos() is the
+ * only place allowed to write that (see flipRotateTransform()).
+ * @param flipH content.flip_h, a flat array of ids
+ * @param flipV content.flip_v, a flat array of ids
+ * @param rotate content.rotate, {id: degrees number}
+ */
+function applyFlipRotateOverrides(flipH, flipV, rotate) {
+  flipH = flipH || [];
+  flipV = flipV || [];
+  rotate = rotate || {};
+  document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
+    var id = elId(el);
+    var h = flipH.indexOf(id) !== -1;
+    var v = flipV.indexOf(id) !== -1;
+    var deg = rotate[id] || 0;
+    if (!h && !v && !deg) return;
+    if (h) el.dataset.flipH = "1"; else delete el.dataset.flipH;
+    if (v) el.dataset.flipV = "1"; else delete el.dataset.flipV;
+    if (deg) el.dataset.rotate = deg; else delete el.dataset.rotate;
+    paintPos(el);
+  });
+}
+
 /* the style (color/opacity) popover's own singleton, opened by the ring's
    .sth button. same "captured once at open time, stays open across
    interactions" pattern as the layer menu, since dialing in a color/opacity
@@ -2469,6 +2519,7 @@ var STYLE_TINT_BEFORE = "";
 var STYLE_SHADE_BEFORE = 0;
 var STYLE_RADIUS_BEFORE = "0";
 var STYLE_BORDER_BEFORE = { w: 0, color: "#000000" };
+var STYLE_ROTATE_BEFORE = "0";
 /* same "value right before this popover session's edit" convention as
    STYLE_COLOR_BEFORE etc. above, for each row's "dark mode color" sub-row */
 var STYLE_DARKCOLOR_BEFORE = "";
@@ -2609,6 +2660,16 @@ function buildStyleMenu() {
       '<label>Shadow</label>' +
       '<input type="checkbox" class="sm-shadow">' +
     '</div>' +
+    '<div class="sm-row sm-transform-row sm-flip-row">' +
+      '<label>Flip</label>' +
+      '<button type="button" class="sm-flip-h" title="Flip horizontal">' + FLIP_ICONS.h + '</button>' +
+      '<button type="button" class="sm-flip-v" title="Flip vertical">' + FLIP_ICONS.v + '</button>' +
+    '</div>' +
+    '<div class="sm-row sm-transform-row sm-rotate-row">' +
+      '<label>Rotate</label>' +
+      '<input type="range" class="sm-rotate" min="-180" max="180" step="1">' +
+      '<span class="sm-rotate-val">0°</span>' +
+    '</div>' +
     '<div class="sm-row sm-dt-row sm-dt-font-row">' +
       '<label>Font</label>' +
       '<select class="sm-dt-font">' +
@@ -2703,6 +2764,10 @@ function buildStyleMenu() {
   var borderColorDark = STYLE_MENU.querySelector(".sm-border-color-dark");
   var borderDarkReset = STYLE_MENU.querySelector(".sm-border-dark-reset");
   var shadowInput = STYLE_MENU.querySelector(".sm-shadow");
+  var flipHBtn = STYLE_MENU.querySelector(".sm-flip-h");
+  var flipVBtn = STYLE_MENU.querySelector(".sm-flip-v");
+  var rotateInput = STYLE_MENU.querySelector(".sm-rotate");
+  var rotateVal = STYLE_MENU.querySelector(".sm-rotate-val");
   var opacityInput = STYLE_MENU.querySelector(".sm-opacity");
   var opacityVal = STYLE_MENU.querySelector(".sm-opacity-val");
   var dtFont = STYLE_MENU.querySelector(".sm-dt-font");
@@ -2720,7 +2785,7 @@ function buildStyleMenu() {
    progressTrackInput, progressTrackReset, progressTrackDarkToggle, progressTrackDarkInput, progressTrackDarkReset,
    tintInput, tintReset, shadeInput, radiusInput, borderW, borderColor,
    borderDarkToggle, borderColorDark, borderDarkReset,
-   shadowInput, opacityInput, dtFont, dtFormat, dtPattern, dtTarget, themeIconBtn].forEach(function (el) {
+   shadowInput, flipHBtn, flipVBtn, rotateInput, opacityInput, dtFont, dtFormat, dtPattern, dtTarget, themeIconBtn].forEach(function (el) {
     el.addEventListener("mousedown", function (e) { e.stopPropagation(); });
   });
 
@@ -3294,6 +3359,43 @@ function buildStyleMenu() {
     saveEditedShadow(STYLE_MENU_ID, shadowInput.checked);
     EDIT_UNDO.push({ type: "shadow", id: STYLE_MENU_ID });
     EDIT_REDO.length = 0;
+  });
+
+  function toggleFlip(btn, dsKey, snapKey) {
+    btn.addEventListener("click", function () {
+      if (!STYLE_MENU_ID) return;
+      var el = styleMenuEl();
+      if (!el) return;
+      var on = el.dataset[dsKey] !== "1";
+      if (on) el.dataset[dsKey] = "1"; else delete el.dataset[dsKey];
+      paintPos(el);
+      btn.classList.toggle("active", on);
+      saveEditedFlip(STYLE_MENU_ID, snapKey, on);
+      EDIT_UNDO.push({ type: snapKey, id: STYLE_MENU_ID });
+      EDIT_REDO.length = 0;
+    });
+  }
+  toggleFlip(flipHBtn, "flipH", "flip_h");
+  toggleFlip(flipVBtn, "flipV", "flip_v");
+
+  rotateInput.addEventListener("input", function () {
+    if (!STYLE_MENU_ID) return;
+    var el = styleMenuEl();
+    if (!el) return;
+    var deg = parseInt(rotateInput.value, 10) || 0;
+    if (deg) el.dataset.rotate = deg; else delete el.dataset.rotate;
+    paintPos(el);
+    rotateVal.textContent = deg + "°";
+    saveEditedRotate(STYLE_MENU_ID, deg);
+  });
+  rotateInput.addEventListener("change", function () {
+    if (!STYLE_MENU_ID) return;
+    var after = rotateInput.value;
+    if (after !== STYLE_ROTATE_BEFORE) {
+      EDIT_UNDO.push({ type: "rotate", id: STYLE_MENU_ID, before: parseInt(STYLE_ROTATE_BEFORE, 10), after: parseInt(after, 10) });
+      EDIT_REDO.length = 0;
+    }
+    STYLE_ROTATE_BEFORE = after;
   });
 
   opacityInput.addEventListener("input", function () {
@@ -3957,6 +4059,14 @@ function toggleStyleMenu(anchorEl) {
   var shapeDisplay = (isIcon || isDatetime) ? "none" : "";
   STYLE_MENU.querySelectorAll(".sm-shape-row").forEach(function (row) { row.style.display = shapeDisplay; });
   STYLE_MENU.querySelectorAll(".sm-dt-row").forEach(function (row) { row.style.display = isDatetime ? "" : "none"; });
+  /* Flip/Rotate only make sense on a leaf shape a TA actually placed to look
+     a certain way - an icon, an image/video, or a plain "Box" shape - never
+     a structural container (card/section/nav/footer/button/countdown/...)
+     that just happens to share the same "box" resize kind (elKind()) */
+  var customData = customElementById(STYLE_MENU_ID);
+  var isPlainBox = !!(customData && customData.kind === "box");
+  var showTransform = isIcon || isImg || isPlainBox;
+  STYLE_MENU.querySelectorAll(".sm-transform-row").forEach(function (row) { row.style.display = showTransform ? "" : "none"; });
 
   var tintInput = STYLE_MENU.querySelector(".sm-tint");
   var shadeInput = STYLE_MENU.querySelector(".sm-shade");
@@ -3966,6 +4076,15 @@ function toggleStyleMenu(anchorEl) {
   var shadowInput = STYLE_MENU.querySelector(".sm-shadow");
   var opacityInput = STYLE_MENU.querySelector(".sm-opacity");
   var opacityVal = STYLE_MENU.querySelector(".sm-opacity-val");
+
+  if (showTransform) {
+    STYLE_MENU.querySelector(".sm-flip-h").classList.toggle("active", el.dataset.flipH === "1");
+    STYLE_MENU.querySelector(".sm-flip-v").classList.toggle("active", el.dataset.flipV === "1");
+    var rot = parseInt(el.dataset.rotate, 10) || 0;
+    STYLE_MENU.querySelector(".sm-rotate").value = rot;
+    STYLE_MENU.querySelector(".sm-rotate-val").textContent = rot + "°";
+    STYLE_ROTATE_BEFORE = String(rot);
+  }
 
   /* handles Color/Text color/Fill/Border color's light<->dark primary swap
      (see primeThemedColorRow()) - factored out so refreshStyleMenuTheme()
@@ -5620,7 +5739,8 @@ function copyDuplicateOverrides(pairs) {
   try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   var snap;
   try { snap = raw ? JSON.parse(raw) : {}; } catch (e) { snap = {}; }
-  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "shade", "radius", "border", "links", "text_color", "theme_icons", "dark_colors", "dark_text_color", "dark_fill", "dark_border", "progress_fill", "dark_progress_fill", "progress_track", "dark_progress_track"];
+  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "shade", "radius", "border", "links", "text_color", "theme_icons", "dark_colors", "dark_text_color", "dark_fill", "dark_border", "progress_fill", "dark_progress_fill", "progress_track", "dark_progress_track", "rotate"];
+  var flatLists = ["shadow", "flip_h", "flip_v"];
   pairs.forEach(function (p) {
     plainMaps.forEach(function (m) {
       if (snap[m] && snap[m][p.old] !== undefined) {
@@ -5632,9 +5752,11 @@ function copyDuplicateOverrides(pairs) {
       snap.text_styles = snap.text_styles || {};
       snap.text_styles[p.new] = Object.assign({}, snap.text_styles[p.old]);
     }
-    if (Array.isArray(snap.shadow) && snap.shadow.indexOf(p.old) !== -1 && snap.shadow.indexOf(p.new) === -1) {
-      snap.shadow.push(p.new);
-    }
+    flatLists.forEach(function (m) {
+      if (Array.isArray(snap[m]) && snap[m].indexOf(p.old) !== -1 && snap[m].indexOf(p.new) === -1) {
+        snap[m].push(p.new);
+      }
+    });
   });
   try { localStorage.setItem(snapshotKey(), JSON.stringify(snap)); } catch (e) {}
 }
@@ -6269,6 +6391,7 @@ function placeObject(objData, x, y) {
   applyBorderOverrides(snap.border, snap.dark_border);
   applyShadowOverrides(snap.shadow);
   applyOpacityOverrides(snap.opacity);
+  applyFlipRotateOverrides(snap.flip_h, snap.flip_v, snap.rotate);
   setLockedElements(snap.locked);
   setLinks(snap.links);
   applyGroups(snap.groups);
@@ -7370,6 +7493,17 @@ var ALIGN_ICONS = {
     '<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>'
 };
 
+/* the style popover's Flip horizontal/Flip vertical buttons (buildStyleMenu(),
+   icon/image/video/box elements only, see toggleStyleMenu()): two arrows
+   pointing away from a mirror axis, same minimal stroke-icon style as
+   ALIGN_ICONS just above. */
+var FLIP_ICONS = {
+  h: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+    '<path d="M12 3v18"/><path d="M17 8l3 4-3 4"/><path d="M7 8l-3 4 3 4"/></svg>',
+  v: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+    '<path d="M3 12h18"/><path d="M8 7l4-3 4 3"/><path d="M8 17l4 3 4-3"/></svg>'
+};
+
 /**
  * Applies a foreColor pick from the floating toolbar's ".tt-color" swatch to
  * the current selection inside fieldEl, then tags whichever span(s) now
@@ -8236,6 +8370,9 @@ function redoEdit() {
  *    the auto-computed variant (see resolveThemedColor()/autoDarkVariant())
  *  - "darkborder": same idea, a css color string or "" (only the color
  *    half of the Border row is theme-dependent, see applyBorderOverrides())
+ *  - "flip_h"/"flip_v": no before/after value, its own toggle is self-
+ *    inverse, same idea as "shadow"
+ *  - "rotate": a whole-number degrees value, or 0 for the template default
  * @param action the stack entry
  * @param side "before" or "after", which side of the action to restore
  */
@@ -8572,6 +8709,33 @@ function applyHistoryAction(action, side) {
     shEl.style.boxShadow = on ? BOX_SHADOW_VALUE : "none";
     saveEditedShadow(action.id, on);
     if (STYLE_MENU_ID === action.id) STYLE_MENU.querySelector(".sm-shadow").checked = on;
+    return;
+  }
+  if (action.type === "flip_h" || action.type === "flip_v") {
+    var flipEl = styleMenuElById(action.id);
+    if (!flipEl) return;
+    var dsKey = action.type === "flip_h" ? "flipH" : "flipV";
+    var flipOn = flipEl.dataset[dsKey] !== "1";
+    if (flipOn) flipEl.dataset[dsKey] = "1"; else delete flipEl.dataset[dsKey];
+    paintPos(flipEl);
+    saveEditedFlip(action.id, action.type, flipOn);
+    if (STYLE_MENU_ID === action.id) {
+      STYLE_MENU.querySelector(action.type === "flip_h" ? ".sm-flip-h" : ".sm-flip-v").classList.toggle("active", flipOn);
+    }
+    return;
+  }
+  if (action.type === "rotate") {
+    var rotEl = styleMenuElById(action.id);
+    if (!rotEl) return;
+    var deg = parseInt(val, 10) || 0;
+    if (deg) rotEl.dataset.rotate = deg; else delete rotEl.dataset.rotate;
+    paintPos(rotEl);
+    saveEditedRotate(action.id, deg);
+    if (STYLE_MENU_ID === action.id) {
+      STYLE_MENU.querySelector(".sm-rotate").value = deg;
+      STYLE_MENU.querySelector(".sm-rotate-val").textContent = deg + "°";
+      STYLE_ROTATE_BEFORE = String(deg);
+    }
     return;
   }
   if (action.type === "opacity") {
@@ -9082,6 +9246,44 @@ function saveEditedShadow(id, on) {
 }
 
 /**
+ * Persists the style popover's Flip horizontal/Flip vertical toggle into
+ * the preview snapshot, same shape/reasoning as saveEditedShadow() just
+ * above - a flat list of ids per axis.
+ * @param id the element's data-edit-id or data-resize-id
+ * @param key "flip_h" or "flip_v"
+ * @param on true to add the flip, false to remove it
+ */
+function saveEditedFlip(id, key, on) {
+  var raw;
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  if (!Array.isArray(snapshot[key])) snapshot[key] = [];
+  var idx = snapshot[key].indexOf(id);
+  if (on && idx === -1) snapshot[key].push(id);
+  else if (!on && idx !== -1) snapshot[key].splice(idx, 1);
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
+ * Persists a rotation change from the style popover's Rotate slider, same
+ * shape/reasoning as saveEditedRadius() - an id-keyed degrees map, cleared
+ * back to the template default (0) rather than stored as an explicit 0.
+ * @param id the element's data-edit-id or data-resize-id
+ * @param deg a whole-number degrees value, 0 to clear
+ */
+function saveEditedRotate(id, deg) {
+  var raw;
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  if (!snapshot.rotate || typeof snapshot.rotate !== "object") snapshot.rotate = {};
+  if (!deg) delete snapshot.rotate[id];
+  else snapshot.rotate[id] = deg;
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
  * Still logged in from a previous visit? Point the nav link back at your
  * portal and show a log out button, instead of always saying "Access
  * portal", which read as having been logged out. Skipped in preview mode:
@@ -9163,6 +9365,7 @@ function applySharedEditorOverrides(data, textMap) {
   repaintFormulaChips();
   applyShadowOverrides(data.shadow);
   applyOpacityOverrides(data.opacity);
+  applyFlipRotateOverrides(data.flip_h, data.flip_v, data.rotate);
   applyHiddenOverrides(data.hidden);
   setFixedElements(data.fixed_elements);
   setLockedElements(data.locked);
@@ -9248,6 +9451,7 @@ function initObjectCanvas() {
     repaintFormulaChips();
     applyShadowOverrides(data.shadow);
     applyOpacityOverrides(data.opacity);
+    applyFlipRotateOverrides(data.flip_h, data.flip_v, data.rotate);
     applyHiddenOverrides(data.hidden);
     setFixedElements(data.fixed_elements || []);
     setLockedElements(data.locked);

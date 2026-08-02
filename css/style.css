@@ -1809,6 +1809,33 @@ body.edit-mode .apply-bob { animation: none; }
 .ctx-menu .sm-dt-row button.active { background: var(--accent); color: #fff; }
 .ctx-menu .sm-dt-align svg { width: 15px; height: 15px; display: block; }
 
+/* Flip horizontal/vertical buttons (buildStyleMenu()'s .sm-flip-row, icon/
+   image/video/box elements only, see toggleStyleMenu()): same toggle-chip
+   look as the datetime Align buttons just above, its own selector since
+   .sm-dt-row is hidden/shown by a different condition (isDatetime) than
+   these are (showTransform) */
+.ctx-menu .sm-flip-row button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  justify-content: center;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  font-size: 12px;
+  line-height: 1;
+}
+.ctx-menu .sm-flip-row button.active { background: var(--accent); color: #fff; }
+.ctx-menu .sm-flip-row svg { width: 15px; height: 15px; display: block; }
+.ctx-menu .sm-rotate { flex: 1; }
+.ctx-menu .sm-rotate-val {
+  font-size: 12px;
+  color: var(--muted);
+  width: 34px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
 /* a datetime custom element (buildCustomElement()'s "datetime" branch): a
    plain text element, styled like the site's countdown digits by default
    but fully restyleable (font/size/color/align) via the style popover.

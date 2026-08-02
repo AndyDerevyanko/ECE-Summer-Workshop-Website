@@ -1066,6 +1066,9 @@ h1, h2, h3 {
   outline: none;
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
 }
+/* the Links list (renderLinks(), js/ta.js): unlike the fixed-width profile-
+   rename input above, a url needs the room .rmeta/.rname would otherwise get */
+.res-row .lk-url { flex: 1; min-width: 160px; width: auto; }
 
 /* the student dashboard's live "extra attachments" tile area (js/
    dashboard.js's renderExtras()/buildExtrasTileHtml(), js/main.js's

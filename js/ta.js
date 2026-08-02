@@ -898,6 +898,48 @@ function renderVariables() {
   });
 }
 
+/**
+ * Renders every element's right-click "Add link"/"Edit link" url (see
+ * LINKS/applyOneLink() in js/main.js) into #linksList, so a ta can see
+ * what's linked to what without hunting through the Visual editor element
+ * by element. Ids are whatever data-edit-id/data-resize-id/custom-element
+ * id the Visual editor's right-click menu attached the link to - not
+ * hand-typed here, just displayed and editable, same "the input already
+ * IS the state" pattern as everything else on this page. Future work (eg
+ * auto-linking a newly added back/forward button) will populate STATE.links
+ * from elsewhere and this list will simply reflect it.
+ */
+function renderLinks() {
+  var list = document.getElementById("linksList");
+  if (!list) return;
+  var ids = Object.keys(STATE.links).sort();
+  if (!ids.length) {
+    list.innerHTML = '<p class="muted"><strong>No links set yet.</strong> Right-click any element in the Visual editor and choose "Add link".</p>';
+    return;
+  }
+
+  list.innerHTML = ids.map(function (id) {
+    return '<div class="res-row" data-id="' + id + '">' +
+      '<span class="rname">' + id + '</span>' +
+      '<input type="url" class="lk-url pw-edit-input" value="' + STATE.links[id] + '" aria-label="Link URL for ' + id + '">' +
+      '<span class="racts"><button class="btn btn-ghost lk-del" type="button">Remove</button></span>' +
+      '</div>';
+  }).join("");
+
+  list.querySelectorAll(".res-row").forEach(function (row) {
+    var id = row.getAttribute("data-id");
+    row.querySelector(".lk-url").addEventListener("change", function () {
+      var v = this.value.trim();
+      if (v) STATE.links[id] = v;
+      else { delete STATE.links[id]; renderLinks(); }
+    });
+    row.querySelector(".lk-del").addEventListener("click", function () {
+      delete STATE.links[id];
+      renderLinks();
+    });
+  });
+}
+
 /** Renders every day panel editor into #panelList and wires up its controls. */
 function renderPanels() {
   var list = document.getElementById("panelList");
@@ -1397,6 +1439,7 @@ function syncLanding() {
 /** Re-renders every editor section from STATE. */
 function renderAll() {
   renderVariables();
+  renderLinks();
   renderPanels();
   renderExtras();
   renderLogistics();

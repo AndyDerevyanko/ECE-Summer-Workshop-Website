@@ -465,6 +465,22 @@ function renderDays() {
     }
   });
 
+  /* host is the always-100%-wide, auto-height grid div itself (see
+     js/main.js's buildCustomElement()'s isAutoHeightArea branch) - it just
+     grew/shrank to fit the tiles above, but its free-floating position is
+     still driven by #dashDaysAreaAnchor, a separate in-flow spacer
+     (templates/dashboard.html) that never automatically tracks it (the
+     real content lives in an absolutely-positioned sibling, out of flow,
+     so nothing pushes later page content down on its own). Grow the
+     spacer to match so the "Extra attachments" section/footer after it
+     get correct in-flow positions, then re-anchor everything once more so
+     any later anchored element (extrasArea) picks up its new, now-correct
+     rect - see applyElementAnchors()'s own doc comment for why this is
+     safe to call again. */
+  var daysAnchorEl = document.getElementById("dashDaysAreaAnchor");
+  if (daysAnchorEl) daysAnchorEl.style.minHeight = host.offsetHeight + "px";
+  if (window.applyElementAnchors) window.applyElementAnchors();
+
   return unlockedCount;
 }
 window.renderDays = renderDays;
@@ -598,6 +614,12 @@ function renderExtras() {
       window.renderTileChildren(tileEl, f && f.children, data);
     });
   }
+
+  /* same "grow the in-flow anchor spacer to match, then re-anchor
+     everything" reasoning as renderDays() - see its matching comment. */
+  var extrasAnchorEl = document.getElementById("dashExtrasAreaAnchor");
+  if (extrasAnchorEl) extrasAnchorEl.style.minHeight = host.offsetHeight + "px";
+  if (window.applyElementAnchors) window.applyElementAnchors();
 }
 window.renderExtras = renderExtras;
 

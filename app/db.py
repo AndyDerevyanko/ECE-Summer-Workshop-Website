@@ -132,6 +132,7 @@ def _learn_reel_overlay():
         colors[body_id] = "var(--muted)"
     entry = {
         "id": "learn.reel", "kind": "reel", "orientation": "horizontal",
+        "page": "index",
         "anchor": "#learnReelAnchor", "left": 80, "top": 1888,
         "tileW": 320, "tileH": 230,
         # explicit panel size, unlike a freshly-placed reel (which freezes
@@ -354,6 +355,14 @@ DEFAULT_CONTENT = {
     # (see colorTarget() in js/main.js), this is the separate control for
     # its label.
     "text_color": {},
+    # visual editor style popover's Hover color/Click color rows, buttons
+    # only, keyed by data-edit-id, a css color string. every button already
+    # gets a default hover/press darken effect with no override set (see
+    # .btn:hover/.btn:active in css/style.css) - these just let a ta pick an
+    # exact color for either state instead, see
+    # applyButtonStateColorOverrides() in js/main.js.
+    "hover_color": {},
+    "active_color": {},
     # visual editor style popover's "Change icon" row, theme toggles only
     # (the nav's own #themeBtn, or a placed "theme" custom element), keyed
     # by data-resize-id, raw <svg>/<img> markup. empty means "show the
@@ -370,6 +379,8 @@ DEFAULT_CONTENT = {
     "dark_text_color": {},
     "dark_fill": {},
     "dark_border": {},
+    "dark_hover_color": {},
+    "dark_active_color": {},
     # "progress" custom-element kind's two colors (the fill and the track/
     # background behind it), keyed by data-resize-id, a css color string.
     # same paired light/dark-override shape as colors/dark_colors above -
@@ -401,6 +412,7 @@ DEFAULT_CONTENT["colors"].update(_LEARN_REEL_COLORS)
 # text feature, not this one).
 _DASH_PROGRESS_ENTRY = {
     "id": "seed.dashboard.progress", "kind": "progress",
+    "page": "dashboard",
     "anchor": "#dashProgressAnchor", "left": 0, "top": 0,
     "w": 1160, "h": 12,
     "varCurrent": "days_progressed", "varTotal": "total_days",
@@ -427,6 +439,7 @@ DEFAULT_CONTENT["radius"]["seed.dashboard.progress"] = 999
 # hook in applySharedEditorOverrides().
 _DASH_EXTRAS_AREA_ENTRY = {
     "id": "seed.dashboard.extras.area", "kind": "extrasArea",
+    "page": "dashboard",
     "anchor": "#dashExtrasAreaAnchor", "left": 0, "top": 0,
     "w": 1160, "h": 40,
 }
@@ -440,6 +453,7 @@ DEFAULT_CONTENT["custom_elements"].append(_DASH_EXTRAS_AREA_ENTRY)
 # into it, same "window.renderDays" hook shape as renderExtras().
 _DASH_DAYS_AREA_ENTRY = {
     "id": "seed.dashboard.days.area", "kind": "daysArea",
+    "page": "dashboard",
     "anchor": "#dashDaysAreaAnchor", "left": 0, "top": 0,
     "w": 1160, "h": 40,
 }
@@ -812,6 +826,7 @@ def init_db():
     _migrate_dashboard_progress(conn)
     _migrate_dashboard_extras_area(conn)
     _migrate_dashboard_days_area(conn)
+    _migrate_custom_elements_page_scope(conn)
     _migrate_progress_bar_object(conn)
     conn.close()
 
@@ -1238,6 +1253,63 @@ def _migrate_dashboard_days_area(conn):
             return data, False
         data.setdefault("custom_elements", []).append(json.loads(json.dumps(_DASH_DAYS_AREA_ENTRY)))
         return data, True
+
+    row = conn.execute("SELECT data FROM content WHERE id = 1").fetchone()
+    if row:
+        data, changed = patch(json.loads(row["data"]))
+        if changed:
+            conn.execute("UPDATE content SET data = ? WHERE id = 1", (json.dumps(data),))
+
+    for prow in conn.execute("SELECT id, data FROM profiles").fetchall():
+        data, changed = patch(json.loads(prow["data"]))
+        if changed:
+            conn.execute("UPDATE profiles SET data = ? WHERE id = ?", (json.dumps(data), prow["id"]))
+
+    conn.commit()
+
+
+# ids that predate the "page" field (see buildCustomElement()/
+# renderCustomElements() in js/main.js) mapped to the page they actually
+# belong to - every entry that exists before this migration ships is one of
+# these; any future entry that's somehow still missing "page" falls back to
+# "index", the only page with a fully working "Add element" menu before this
+# fix shipped.
+_CUSTOM_ELEMENT_PAGE_BY_ID = {
+    "learn.reel": "index",
+    "seed.dashboard.progress": "dashboard",
+    "seed.dashboard.extras.area": "dashboard",
+    "seed.dashboard.days.area": "dashboard",
+}
+
+
+def _migrate_custom_elements_page_scope(conn):
+    """one-time patch (same meta-flag trick as _migrate_learn_reel()) stamping
+    a "page" field ("index"/"dashboard"/"gallery") onto every existing
+    custom_elements entry that predates it. Without this, js/main.js's
+    renderCustomElements() had no way to tell a landing-page-only element (eg
+    the "What You'll Learn" reel) from a dashboard-only one (eg the progress
+    bar), so EVERY custom element - anchored or freely placed - got built on
+    EVERY page that runs the shared editor pipeline: the reel rendered on the
+    student dashboard too, at its raw landing-page pixel offset, which on a
+    shorter page landed it far below the real content instead of nowhere.
+    See renderCustomElements()'s page filter and addCustomElement()'s "page"
+    stamping in js/main.js, the other half of this fix.
+    @param conn an open db connection
+    """
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO meta (key, value) VALUES ('custom_elements_page_scope_migrated', '1')"
+    )
+    conn.commit()
+    if cur.rowcount == 0:
+        return
+
+    def patch(data):
+        changed = False
+        for c in data.get("custom_elements", []):
+            if not c.get("page"):
+                c["page"] = _CUSTOM_ELEMENT_PAGE_BY_ID.get(c.get("id"), "index")
+                changed = True
+        return data, changed
 
     row = conn.execute("SELECT data FROM content WHERE id = 1").fetchone()
     if row:

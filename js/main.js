@@ -506,6 +506,31 @@ function isEditMode() {
 }
 
 /**
+ * Identifies which real page this document is, regardless of the shared
+ * ?preview=1/?edit=1 query params: "dashboard" if the student dashboard's
+ * own progress-bar anchor is present, "gallery" if the gallery's own
+ * year-picker marker is present, else "index" (the landing page - also the
+ * default for the reusable-object mini editor's blank canvas, since a saved
+ * object has no page of its own until it's actually dropped somewhere, see
+ * placeObject()).
+ * content.custom_elements is one shared, unscoped list across the whole
+ * site - every entry now carries a "page" it was created on (see
+ * addCustomElement()/placeObject()) so renderCustomElements() can build only
+ * the ones that belong here, instead of every page rendering every other
+ * page's placed elements too (a landing-page-only element, eg the reel,
+ * showing up on the dashboard at its raw landing-page pixel offset).
+ * @return "index", "dashboard", or "gallery"
+ */
+function currentPageKey() {
+  if (document.getElementById("dashProgressAnchor")) return "dashboard";
+  /* gallery.html's current year-picker marker; the gallery visual-editor
+     rewrite will replace this with its own anchor id - update this check
+     alongside that, see the gallery-parity plan */
+  if (document.getElementById("gvYears")) return "gallery";
+  return "index";
+}
+
+/**
  * Applies saved text overrides on top of the page's own hardcoded copy.
  * Every element carrying a data-edit-id keeps the template's default text
  * until a ta overrides it via click-to-edit; stashes that default in a
@@ -547,6 +572,70 @@ function applyTextOverrides(textMap) {
 var RESIZABLE_SEL = "[data-edit-id], [data-resize-id]";
 
 /**
+ * True for any element whose position is dictated entirely by shared
+ * template CSS/markup, never individually placed: a reel tile (breaks its
+ * flex track, see buildReelElement()), or ANY attachments/day tile role
+ * (rect/icon/text/badge/button - same data-resize-id/data-edit-id string
+ * repeats on every rendered tile, see buildExtrasTileHtml()/renderDays()
+ * in js/dashboard.js). Used both to gate a move drag from starting (see
+ * startMoveDrag(), the drag-anywhere handler in wireResizable()) AND to
+ * filter a stored position override before it's ever painted (see
+ * applyPositionOverrides()): since these ids aren't unique to one
+ * instance, a saved {tx,ty} for one would silently drag EVERY tile
+ * sharing that role sideways the moment the page loads, not just the one
+ * a ta thought they'd moved - the same "shared template" problem the
+ * paint-time filter has to defend against even after the drag-time gate
+ * closes it off going forward, since a stale override saved before that
+ * gate existed (or restored from an old undo/profile snapshot) would
+ * otherwise still be blindly reapplied forever.
+ * @param el the element
+ * @return true if el must never carry a position override
+ */
+function isMoveLockedTileRole(el) {
+  return el.hasAttribute("data-reel-tile") || el.hasAttribute("data-extras-role") || el.hasAttribute("data-days-role");
+}
+
+/**
+ * True for one of the student dashboard's two LIVE AREA containers - the
+ * "Extra attachments" tile list and "The days" tile grid (buildCustomElement()'s
+ * "extrasArea"/"daysArea" kinds, filled in by js/dashboard.js's renderExtras()/
+ * renderDays()). Unlike every other tracked element, a live area isn't a piece
+ * of content in its own right: it's the transparent box the tiles lie in, so
+ * it's always background-less in the style popover (see toggleStyleMenu()),
+ * always auto-height (see buildCustomElement()/applySizeOverrides()), and
+ * everything inside it belongs TO it rather than merely sitting on top of it
+ * (see ancestorPos()/freezeDescendants()).
+ * @param el the element
+ * @return true if el is an extrasArea/daysArea container
+ */
+function isLiveAreaEl(el) {
+  return !!(el.hasAttribute && (el.hasAttribute("data-extras-area") || el.hasAttribute("data-days-area")));
+}
+
+/**
+ * True for the narrower subset of isMoveLockedTileRole() that also can't
+ * be individually RESIZED: a reel tile (same flex-track reasoning), an
+ * attachments tile's rect (fills the tile via inset:0, a fixed size makes
+ * no sense) or text (sized by its own content), or a day tile's rect/
+ * title/daytag (same two reasons respectively). The icon/badge/button
+ * roles are deliberately NOT included - those stay individually resizable,
+ * see buildExtrasTileHtml()/renderDays() in js/dashboard.js. Used both to
+ * gate a resize drag from starting (see startResizeDrag()) and to filter
+ * a stored size override before it's painted (see applySizeOverrides()),
+ * same "close the gate AND filter stale data already past it" reasoning
+ * as isMoveLockedTileRole().
+ * @param el the element
+ * @return true if el must never carry a size override
+ */
+function isResizeLockedTileRole(el) {
+  if (el.hasAttribute("data-reel-tile")) return true;
+  var xRole = el.getAttribute("data-extras-role");
+  if (xRole === "rect" || xRole === "text") return true;
+  var dRole = el.getAttribute("data-days-role");
+  return !!(dRole && /(^|\.)(rect|title|daytag)$/.test(dRole));
+}
+
+/**
  * Reads the id an element's size/position overrides are keyed by.
  * @param el the element
  * @return its data-edit-id or data-resize-id
@@ -572,6 +661,17 @@ function elId(el) {
  * button leaves the label's own click-to-edit text entry untouched (see
  * wireTextField(), wired directly on the label and independent of
  * selection), it only changes what gets selected/right-clicked/styled.
+ *
+ * A live-area tile is the second place `closest()` alone lands wrong, for
+ * the mirror-image reason. Most of a tile's surface is UNTRACKED markup -
+ * a day card's own <h3> title and <p> blurb, plus the card's padding - with
+ * the only tracked thing behind it being the rect role that fills it (see
+ * .day-tile-rect/.extras-tile-rect in css/style.css). A click on any of
+ * that walked straight past the tile and selected the whole area container
+ * instead, so the tile's "underlay" was effectively unreachable except in
+ * the few gaps between its own text. Redirecting to the tile's own rect
+ * keeps a click on a tile selecting THAT tile, and leaves the container
+ * selectable exactly where it should be - the empty space around the tiles.
  * @param target the event's target (e.g. e.target)
  * @return the element to select, or null
  */
@@ -580,6 +680,16 @@ function resolveSelectableTarget(target) {
   if (el && el.classList.contains("tic-label")) {
     var toggle = el.closest("[data-theme-toggle], #themeBtn");
     if (toggle) return toggle;
+  }
+  /* only when the click landed on untracked tile markup: a hit on a real
+     role element (rect/icon/text/button, or an element bound onto the tile)
+     already resolved to itself just above, and that's the right answer */
+  var tile = target && target.closest ? target.closest("[data-extras-tile], [data-days-tile]") : null;
+  if (tile && (!el || !tile.contains(el))) {
+    /* the rect is deletable (unlike the icon/button), so it may genuinely
+       be gone - fall through to the container rather than swallow the click */
+    var rect = tile.querySelector('[data-extras-role="rect"], [data-days-role$=".rect"]');
+    if (rect) return rect;
   }
   return el;
 }
@@ -681,6 +791,22 @@ function getSize(el) {
  * parent is never treated as a cancel-worthy ancestor - the label is
  * supposed to move/resize as one piece with the button, exactly like the
  * plain (untracked) icon markup sitting right next to it.
+ *
+ * A live area container (see isLiveAreaEl()) is the OTHER exception, for the
+ * same reason one step up: nothing inside it is an independent element that
+ * merely happens to sit on top of it. Its whole contents - every tile's
+ * rect/icon/text/badge/button role, every element a ta has bound onto a tile
+ * (see renderTileChildren()), and the "nothing here yet" placeholder, which
+ * the spec explicitly wants to "stay grouped to the section" - are the
+ * area's own content, painted into it by renderDays()/renderExtras(). So the
+ * area is never a cancel-worthy ancestor: cancelling it out counter-
+ * translated every one of those pieces to its pre-drag SCREEN position while
+ * the tiles they belong to slid away underneath, tearing each card's
+ * background rect, day tag and attachment rows off the card itself and
+ * leaving the strays clipped by .day-card's own overflow:hidden - the "the
+ * second i move it, both tiles turn into nonsense" report. Returning zero
+ * here means they simply ride along with the container, which is what
+ * dragging a box of tiles is supposed to do.
  * @param el the element
  * @return {tx, ty}
  */
@@ -689,6 +815,7 @@ function ancestorPos(el) {
   var p = el.parentElement;
   while (p && p !== document.body) {
     if (p.matches && p.matches(RESIZABLE_SEL)) {
+      if (isLiveAreaEl(p)) return { tx: 0, ty: 0 };
       return { tx: parseFloat(p.dataset.ovTx) || 0, ty: parseFloat(p.dataset.ovTy) || 0 };
     }
     p = p.parentElement;
@@ -952,14 +1079,38 @@ function pushResizeUndo(id, before, after) {
  * outside the ta portal's editor, otherwise a visitor's page would reflow
  * around the resized element. Elements with no saved size are left
  * completely untouched, in flow, exactly as the template renders them.
+ * startResizeDrag() already refuses to CREATE a size override for an
+ * isResizeLockedTileRole() element, but that alone doesn't protect
+ * against one that's already sitting in a saved profile/draft from
+ * before that guard existed (or restored via undo) - since these ids
+ * repeat identically across every rendered tile, blindly reapplying a
+ * stale one here would inflate every tile sharing that role on load, not
+ * just the one a ta once (accidentally) resized. Filtered here too so
+ * this self-heals regardless of what's actually stored.
  * @param sizes content.sizes, {id: {w, h}}
  */
 function applySizeOverrides(sizes) {
   sizes = sizes || {};
   document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
     var s = sizes[elId(el)];
-    if (!s || s.w === undefined) return;
+    if (!s || s.w === undefined || isResizeLockedTileRole(el)) return;
     detachFromFlow(el);
+    /* an extrasArea/daysArea container (see buildCustomElement()'s
+       isAutoHeightArea branch) is only ever meant to be WIDTH-draggable -
+       js/dashboard.js's renderExtras()/renderDays() force its real height
+       from whatever tiles are actually painted into it on every render, a
+       stored height here is legacy/stale (nothing currently offers a way
+       to drag one, but an old saved value can still be sitting in a
+       profile/draft from before that was true) and would just fight that
+       auto-sizing: the container gets pinned to the stale px figure while
+       its tiles keep rendering at their own natural size, leaving a big
+       dead gap (stored height too tall) or clipping tiles (too short) the
+       instant this runs on load. */
+    if (isLiveAreaEl(el)) {
+      el.dataset.ovW = s.w;
+      el.style.width = s.w + "px";
+      return;
+    }
     setBox(el, s.w, s.h === undefined ? parseFloat(el.dataset.natH) : s.h);
   });
 }
@@ -1019,7 +1170,8 @@ function applyTextStyleOverrides(styles) {
  * first; a size override already forced that in applySizeOverrides()
  * (called before this), so this is a no-op for those. Two passes so every
  * element's cancel-out of its ancestors' offsets (see ancestorPos()) sees
- * those offsets already in place.
+ * those offsets already in place. Same "filter here too, not just at
+ * drag-start" reasoning as applySizeOverrides() - see isMoveLockedTileRole().
  * @param positions content.positions, {id: {tx, ty}}
  */
 function applyPositionOverrides(positions) {
@@ -1027,7 +1179,7 @@ function applyPositionOverrides(positions) {
   var els = document.querySelectorAll(RESIZABLE_SEL);
   els.forEach(function (el) {
     var p = positions[elId(el)];
-    if (p) {
+    if (p && !isMoveLockedTileRole(el)) {
       detachFromFlow(el);
       el.dataset.ovTx = p.tx;
       el.dataset.ovTy = p.ty;
@@ -1711,6 +1863,47 @@ function detachFromFlow(el, knownRect) {
      before detaching any of them, and pass those in here instead. */
   var preRect = knownRect || el.getBoundingClientRect();
 
+  /* an element that's already position:absolute via its OWN stylesheet
+     rule (eg. .day-tile-rect/.extras-tile-rect, an inset:0 background
+     layer that fills its position:relative tile without ever affecting
+     the tile's own flow height - see css/style.css) needs a completely
+     different path here: the normal wrap-in-flow logic below measures
+     el's CURRENT rendered size and turns that into a brand new IN-FLOW
+     block sized to match. For an inset:0 element that size IS its entire
+     parent tile, so that wrap becomes a phantom box as tall as the whole
+     tile, inserted right into the tile's own flow on top of all its real
+     content - inflating the card to a huge height and shoving everything
+     else down (this is what corrupted the day tiles when one of these
+     rects took even a tiny accidental drag). Since el was never part of
+     flow to begin with, its wrap shouldn't be either: give the wrap the
+     same absolute scheme, positioned to match el's current spot relative
+     to its own positioned ancestor, so it keeps contributing exactly zero
+     flow footprint, same as el always did. */
+  if (getComputedStyle(el).position === "absolute") {
+    var absAncestor = el.offsetParent || el.parentNode;
+    var absParentRect = absAncestor.getBoundingClientRect();
+    wrap = document.createElement("span");
+    wrap.className = "free-wrap";
+    wrap.style.position = "absolute";
+    wrap.style.left = (preRect.left - absParentRect.left) + "px";
+    wrap.style.top = (preRect.top - absParentRect.top) + "px";
+    wrap.style.width = preRect.width + "px";
+    wrap.style.height = preRect.height + "px";
+    el.parentNode.insertBefore(wrap, el);
+    wrap.appendChild(el);
+    el.dataset.natW = preRect.width;
+    el.dataset.natH = preRect.height;
+    el.style.position = "absolute";
+    el.style.top = "0";
+    el.style.left = "0";
+    el.style.margin = "0";
+    el.style.maxWidth = "none";
+    el.style.width = preRect.width + "px";
+    el.style.height = preRect.height + "px";
+    el.style.transition = "none";
+    return wrap;
+  }
+
   /* getBoundingClientRect keeps sub-pixel precision; offsetWidth/Height
      round to a whole css px, which is fine for a transformed element (its
      visual, scaled size shouldn't become its layout size) but for
@@ -1727,6 +1920,17 @@ function detachFromFlow(el, knownRect) {
     w = rect.width; h = rect.height;
   }
   var naturalDisplay = getComputedStyle(el).display;
+  /* any "inline-*" keyword (inline, inline-block, inline-flex, inline-grid,
+     inline-table) is still an inline-LEVEL box - it takes part in an inline
+     formatting context and its margin does NOT collapse with an adjacent
+     block sibling's margin. Forcing every non-"inline" value to a plain
+     "block" wrap (the old check) silently turned an inline-flex button's
+     wrap into a real block box, which DOES collapse margins with its
+     previous sibling (eg a paragraph's margin-bottom eating the button's
+     own margin-top down to whichever was larger), shrinking the shared
+     parent and reflowing everything below it even though nothing about
+     that sibling changed. */
+  var isInlineLevel = /^inline/.test(naturalDisplay);
   /* el's own margin becomes the gap flow siblings expect around its old
      slot; moved onto the wrap below so zeroing it on el (needed so its
      absolute box isn't shoved off (0,0) inside the wrap) doesn't collapse
@@ -1736,7 +1940,7 @@ function detachFromFlow(el, knownRect) {
 
   wrap = document.createElement("span");
   wrap.className = "free-wrap";
-  wrap.style.display = naturalDisplay === "inline" ? "inline-block" : "block";
+  wrap.style.display = isInlineLevel ? "inline-block" : "block";
   wrap.style.width = w + "px";
   wrap.style.height = h + "px";
   wrap.style.margin = mTop + " " + mRight + " " + mBottom + " " + mLeft;
@@ -1751,7 +1955,7 @@ function detachFromFlow(el, knownRect) {
      though nothing about them changed. Aligning to the line's top instead
      removes the wrap from that baseline calculation entirely, so detaching
      one inline span can't inflate the shared line/container it sits in. */
-  if (naturalDisplay === "inline") wrap.style.verticalAlign = "top";
+  if (isInlineLevel) wrap.style.verticalAlign = "top";
   el.parentNode.insertBefore(wrap, el);
   wrap.appendChild(el);
 
@@ -2128,7 +2332,8 @@ function applyElementOpacity(el, value) {
 var THEMED_OVERRIDE_MAPS = {
   colors: {}, darkColors: {}, fill: {}, darkFill: {},
   textColor: {}, darkTextColor: {}, border: {}, darkBorder: {},
-  progressFill: {}, darkProgressFill: {}, progressTrack: {}, darkProgressTrack: {}
+  progressFill: {}, darkProgressFill: {}, progressTrack: {}, darkProgressTrack: {},
+  hoverColor: {}, darkHoverColor: {}, activeColor: {}, darkActiveColor: {}
 };
 
 /**
@@ -2227,6 +2432,54 @@ function applyTextColorOverrides(colors, darkColors) {
     var v = colors[id], dv = THEMED_OVERRIDE_MAPS.darkTextColor[id];
     if (!v && !dv) return;
     el.style.color = resolveThemedColor(v, dv);
+  });
+}
+
+/**
+ * Applies saved button Hover color/Click color overrides (the style
+ * popover, buttons only) on top of the page's own default hover/press
+ * darken effect (.btn:hover/.btn:active in css/style.css, always on -
+ * see the "default behaviour" note on those rules). Unlike every other
+ * color override here, these can't just be painted as a plain inline
+ * style (there's no such thing as an inline :hover/:active) - instead each
+ * one is written as a css custom property, and a data-hover-override/
+ * data-active-override marker attribute flips the matching css rule
+ * (css/style.css) from the shared default filter over to that custom
+ * property, so a manual pick never doubles up with the default darken.
+ * Runs on every load, live site included, same as applyColorOverrides().
+ * @param hoverColor content.hover_color, {id: css color string}
+ * @param darkHoverColor content.dark_hover_color, {id: css color string}
+ * @param activeColor content.active_color, {id: css color string}
+ * @param darkActiveColor content.dark_active_color, {id: css color string}
+ */
+function applyButtonStateColorOverrides(hoverColor, darkHoverColor, activeColor, darkActiveColor) {
+  hoverColor = hoverColor || {};
+  darkHoverColor = darkHoverColor || {};
+  activeColor = activeColor || {};
+  darkActiveColor = darkActiveColor || {};
+  THEMED_OVERRIDE_MAPS.hoverColor = hoverColor;
+  THEMED_OVERRIDE_MAPS.darkHoverColor = darkHoverColor;
+  THEMED_OVERRIDE_MAPS.activeColor = activeColor;
+  THEMED_OVERRIDE_MAPS.darkActiveColor = darkActiveColor;
+  document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
+    if (!isButtonEl(el)) return;
+    var id = elId(el);
+    var hv = hoverColor[id], hdv = darkHoverColor[id];
+    if (hv || hdv) {
+      el.style.setProperty("--btn-hover-bg", resolveThemedColor(hv, hdv));
+      el.dataset.hoverOverride = "1";
+    } else {
+      el.style.removeProperty("--btn-hover-bg");
+      delete el.dataset.hoverOverride;
+    }
+    var av = activeColor[id], adv = darkActiveColor[id];
+    if (av || adv) {
+      el.style.setProperty("--btn-active-bg", resolveThemedColor(av, adv));
+      el.dataset.activeOverride = "1";
+    } else {
+      el.style.removeProperty("--btn-active-bg");
+      delete el.dataset.activeOverride;
+    }
   });
 }
 
@@ -2434,6 +2687,8 @@ function reapplyThemedColors() {
   applyBorderOverrides(THEMED_OVERRIDE_MAPS.border, THEMED_OVERRIDE_MAPS.darkBorder);
   applyProgressBindings(THEMED_OVERRIDE_MAPS.progressFill, THEMED_OVERRIDE_MAPS.darkProgressFill,
     THEMED_OVERRIDE_MAPS.progressTrack, THEMED_OVERRIDE_MAPS.darkProgressTrack);
+  applyButtonStateColorOverrides(THEMED_OVERRIDE_MAPS.hoverColor, THEMED_OVERRIDE_MAPS.darkHoverColor,
+    THEMED_OVERRIDE_MAPS.activeColor, THEMED_OVERRIDE_MAPS.darkActiveColor);
   repaintInlineTextColors();
 }
 window.reapplyThemedColors = reapplyThemedColors;
@@ -2514,6 +2769,8 @@ var STYLE_MENU_ID = null;
 var STYLE_COLOR_BEFORE = "";
 var STYLE_OPACITY_BEFORE = "";
 var STYLE_TEXTCOLOR_BEFORE = "";
+var STYLE_HOVERCOLOR_BEFORE = "";
+var STYLE_ACTIVECOLOR_BEFORE = "";
 var STYLE_FILL_BEFORE = "";
 var STYLE_TINT_BEFORE = "";
 var STYLE_SHADE_BEFORE = 0;
@@ -2524,6 +2781,8 @@ var STYLE_ROTATE_BEFORE = "0";
    STYLE_COLOR_BEFORE etc. above, for each row's "dark mode color" sub-row */
 var STYLE_DARKCOLOR_BEFORE = "";
 var STYLE_DARKTEXTCOLOR_BEFORE = "";
+var STYLE_DARKHOVERCOLOR_BEFORE = "";
+var STYLE_DARKACTIVECOLOR_BEFORE = "";
 var STYLE_DARKFILL_BEFORE = "";
 var STYLE_DARKBORDER_BEFORE = "";
 /* same "value right before this popover session's edit" convention, for the
@@ -2575,6 +2834,32 @@ function buildStyleMenu() {
       '<label>Dark mode text color</label>' +
       '<input type="color" class="sm-textcolor-dark">' +
       '<button type="button" class="sm-textcolor-dark-reset" title="Reset to auto">×</button>' +
+    '</div>' +
+    '<div class="sm-row sm-btnstate-row sm-hovercolor-row">' +
+      '<label>Hover color</label>' +
+      '<input type="color" class="sm-hovercolor">' +
+      '<button type="button" class="sm-hovercolor-reset" title="Reset to default">×</button>' +
+    '</div>' +
+    '<div class="sm-row sm-dark-toggle-row sm-btnstate-row sm-hovercolor-toggle-row">' +
+      '<button type="button" class="sm-dark-toggle sm-hovercolor-dark-toggle"></button>' +
+    '</div>' +
+    '<div class="sm-row sm-dark-row sm-btnstate-row sm-hovercolor-dark-row">' +
+      '<label>Dark mode hover color</label>' +
+      '<input type="color" class="sm-hovercolor-dark">' +
+      '<button type="button" class="sm-hovercolor-dark-reset" title="Reset to auto">×</button>' +
+    '</div>' +
+    '<div class="sm-row sm-btnstate-row sm-activecolor-row">' +
+      '<label>Click color</label>' +
+      '<input type="color" class="sm-activecolor">' +
+      '<button type="button" class="sm-activecolor-reset" title="Reset to default">×</button>' +
+    '</div>' +
+    '<div class="sm-row sm-dark-toggle-row sm-btnstate-row sm-activecolor-toggle-row">' +
+      '<button type="button" class="sm-dark-toggle sm-activecolor-dark-toggle"></button>' +
+    '</div>' +
+    '<div class="sm-row sm-dark-row sm-btnstate-row sm-activecolor-dark-row">' +
+      '<label>Dark mode click color</label>' +
+      '<input type="color" class="sm-activecolor-dark">' +
+      '<button type="button" class="sm-activecolor-dark-reset" title="Reset to auto">×</button>' +
     '</div>' +
     '<div class="sm-row sm-theme-row">' +
       '<label>Icon</label>' +
@@ -2734,6 +3019,16 @@ function buildStyleMenu() {
   var textColorDarkToggle = STYLE_MENU.querySelector(".sm-textcolor-dark-toggle");
   var textColorDarkInput = STYLE_MENU.querySelector(".sm-textcolor-dark");
   var textColorDarkReset = STYLE_MENU.querySelector(".sm-textcolor-dark-reset");
+  var hoverColorInput = STYLE_MENU.querySelector(".sm-hovercolor");
+  var hoverColorReset = STYLE_MENU.querySelector(".sm-hovercolor-reset");
+  var hoverColorDarkToggle = STYLE_MENU.querySelector(".sm-hovercolor-dark-toggle");
+  var hoverColorDarkInput = STYLE_MENU.querySelector(".sm-hovercolor-dark");
+  var hoverColorDarkReset = STYLE_MENU.querySelector(".sm-hovercolor-dark-reset");
+  var activeColorInput = STYLE_MENU.querySelector(".sm-activecolor");
+  var activeColorReset = STYLE_MENU.querySelector(".sm-activecolor-reset");
+  var activeColorDarkToggle = STYLE_MENU.querySelector(".sm-activecolor-dark-toggle");
+  var activeColorDarkInput = STYLE_MENU.querySelector(".sm-activecolor-dark");
+  var activeColorDarkReset = STYLE_MENU.querySelector(".sm-activecolor-dark-reset");
   var fillInput = STYLE_MENU.querySelector(".sm-fill");
   var fillReset = STYLE_MENU.querySelector(".sm-fill-reset");
   var fillDarkToggle = STYLE_MENU.querySelector(".sm-fill-dark-toggle");
@@ -2779,6 +3074,8 @@ function buildStyleMenu() {
 
   [colorInput, colorReset, colorDarkToggle, colorDarkInput, colorDarkReset,
    textColorInput, textColorReset, textColorDarkToggle, textColorDarkInput, textColorDarkReset,
+   hoverColorInput, hoverColorReset, hoverColorDarkToggle, hoverColorDarkInput, hoverColorDarkReset,
+   activeColorInput, activeColorReset, activeColorDarkToggle, activeColorDarkInput, activeColorDarkReset,
    fillInput, fillReset, fillDarkToggle, fillDarkInput, fillDarkReset,
    progressCurrent, progressTotal,
    progressFillInput, progressFillReset, progressFillDarkToggle, progressFillDarkInput, progressFillDarkReset,
@@ -2812,6 +3109,8 @@ function buildStyleMenu() {
   }
   wireDarkToggle(colorDarkToggle, STYLE_MENU.querySelector(".sm-color-row"), STYLE_MENU.querySelector(".sm-color-dark-row"));
   wireDarkToggle(textColorDarkToggle, STYLE_MENU.querySelector(".sm-textcolor-row"), STYLE_MENU.querySelector(".sm-textcolor-dark-row"));
+  wireDarkToggle(hoverColorDarkToggle, STYLE_MENU.querySelector(".sm-hovercolor-row"), STYLE_MENU.querySelector(".sm-hovercolor-dark-row"));
+  wireDarkToggle(activeColorDarkToggle, STYLE_MENU.querySelector(".sm-activecolor-row"), STYLE_MENU.querySelector(".sm-activecolor-dark-row"));
   wireDarkToggle(fillDarkToggle, STYLE_MENU.querySelector(".sm-fill-row"), STYLE_MENU.querySelector(".sm-fill-dark-row"));
   wireDarkToggle(progressFillDarkToggle, STYLE_MENU.querySelector(".sm-progress-fill-row"), STYLE_MENU.querySelector(".sm-progress-fill-dark-row"));
   wireDarkToggle(progressTrackDarkToggle, STYLE_MENU.querySelector(".sm-progress-track-row"), STYLE_MENU.querySelector(".sm-progress-track-dark-row"));
@@ -2992,6 +3291,118 @@ function buildStyleMenu() {
     }
     STYLE_DARKTEXTCOLOR_BEFORE = "";
   });
+
+  /**
+   * Wires one button-state color row (Hover color/Click color, each with
+   * its own light+dark pair) - same 6-listener shape (light input/change/
+   * reset, dark input/change/reset) every other themed color row in this
+   * popover already follows (see textColorInput's handlers just above),
+   * factored out since Hover/Click are otherwise identical but for which
+   * THEMED_OVERRIDE_MAPS entry/css custom property/data-attribute flag/undo
+   * type each one writes to. Unlike a plain color row there's no rendered
+   * "current" value a reset can read back (a hover/press color only ever
+   * paints during that pseudo-state, see applyButtonStateColorOverrides()),
+   * so light reset just clears to a neutral "#000000" swatch display.
+   * @param lightInput/lightReset/darkInput/darkReset/darkToggle the row's controls
+   * @param mapKey/darkMapKey THEMED_OVERRIDE_MAPS keys (eg "hoverColor"/"darkHoverColor")
+   * @param cssVar the custom property applyButtonStateColorOverrides() writes (eg "--btn-hover-bg")
+   * @param flagKey el.dataset key applyButtonStateColorOverrides() sets (eg "hoverOverride")
+   * @param saveFn/darkSaveFn the light/dark saveEdited*() persistence functions
+   * @param undoType/darkUndoType the EDIT_UNDO entry "type" strings for this row
+   * @param getBefore/setBefore/getDarkBefore/setDarkBefore accessors for this
+   *   row's own STYLE_*_BEFORE module vars (plain vars can't be passed by
+   *   reference, hence the get/set closures)
+   */
+  function wireButtonStateColorRow(lightInput, lightReset, darkInput, darkReset,
+      mapKey, darkMapKey, cssVar, flagKey, saveFn, darkSaveFn, undoType, darkUndoType,
+      getBefore, setBefore, getDarkBefore, setDarkBefore) {
+    function apply(el) {
+      var lv = THEMED_OVERRIDE_MAPS[mapKey][STYLE_MENU_ID];
+      var dv = THEMED_OVERRIDE_MAPS[darkMapKey][STYLE_MENU_ID];
+      if (lv || dv) {
+        el.style.setProperty(cssVar, resolveThemedColor(lv, dv));
+        el.dataset[flagKey] = "1";
+      } else {
+        el.style.removeProperty(cssVar);
+        delete el.dataset[flagKey];
+      }
+    }
+    lightInput.addEventListener("input", function () {
+      if (!STYLE_MENU_ID) return;
+      var el = styleMenuEl();
+      if (!el) return;
+      THEMED_OVERRIDE_MAPS[mapKey][STYLE_MENU_ID] = lightInput.value;
+      apply(el);
+      saveFn(STYLE_MENU_ID, lightInput.value);
+    });
+    lightInput.addEventListener("change", function () {
+      if (!STYLE_MENU_ID) return;
+      var after = lightInput.value;
+      if (after !== getBefore()) {
+        EDIT_UNDO.push({ type: undoType, id: STYLE_MENU_ID, before: getBefore(), after: after });
+        EDIT_REDO.length = 0;
+      }
+      setBefore(after);
+    });
+    lightReset.addEventListener("click", function () {
+      if (!STYLE_MENU_ID) return;
+      var el = styleMenuEl();
+      if (!el) return;
+      var before = getBefore();
+      THEMED_OVERRIDE_MAPS[mapKey][STYLE_MENU_ID] = "";
+      apply(el);
+      saveFn(STYLE_MENU_ID, "");
+      lightInput.value = "#000000";
+      if (before !== "") {
+        EDIT_UNDO.push({ type: undoType, id: STYLE_MENU_ID, before: before, after: "" });
+        EDIT_REDO.length = 0;
+      }
+      setBefore("");
+    });
+    darkInput.addEventListener("input", function () {
+      if (!STYLE_MENU_ID) return;
+      var el = styleMenuEl();
+      if (!el) return;
+      THEMED_OVERRIDE_MAPS[darkMapKey][STYLE_MENU_ID] = darkInput.value;
+      apply(el);
+      darkSaveFn(STYLE_MENU_ID, darkInput.value);
+    });
+    darkInput.addEventListener("change", function () {
+      if (!STYLE_MENU_ID) return;
+      var after = darkInput.value;
+      if (after !== getDarkBefore()) {
+        EDIT_UNDO.push({ type: darkUndoType, id: STYLE_MENU_ID, before: getDarkBefore(), after: after });
+        EDIT_REDO.length = 0;
+      }
+      setDarkBefore(after);
+    });
+    darkReset.addEventListener("click", function () {
+      if (!STYLE_MENU_ID) return;
+      var el = styleMenuEl();
+      if (!el) return;
+      var before = getDarkBefore();
+      THEMED_OVERRIDE_MAPS[darkMapKey][STYLE_MENU_ID] = "";
+      darkSaveFn(STYLE_MENU_ID, "");
+      apply(el);
+      var after = autoDarkVariant(lightInput.value);
+      darkInput.value = after;
+      if (before !== "") {
+        EDIT_UNDO.push({ type: darkUndoType, id: STYLE_MENU_ID, before: before, after: "" });
+        EDIT_REDO.length = 0;
+      }
+      setDarkBefore("");
+    });
+  }
+  wireButtonStateColorRow(hoverColorInput, hoverColorReset, hoverColorDarkInput, hoverColorDarkReset,
+    "hoverColor", "darkHoverColor", "--btn-hover-bg", "hoverOverride", saveEditedHoverColor, saveEditedDarkHoverColor,
+    "hovercolor", "darkhovercolor",
+    function () { return STYLE_HOVERCOLOR_BEFORE; }, function (v) { STYLE_HOVERCOLOR_BEFORE = v; },
+    function () { return STYLE_DARKHOVERCOLOR_BEFORE; }, function (v) { STYLE_DARKHOVERCOLOR_BEFORE = v; });
+  wireButtonStateColorRow(activeColorInput, activeColorReset, activeColorDarkInput, activeColorDarkReset,
+    "activeColor", "darkActiveColor", "--btn-active-bg", "activeOverride", saveEditedActiveColor, saveEditedDarkActiveColor,
+    "activecolor", "darkactivecolor",
+    function () { return STYLE_ACTIVECOLOR_BEFORE; }, function (v) { STYLE_ACTIVECOLOR_BEFORE = v; },
+    function () { return STYLE_DARKACTIVECOLOR_BEFORE; }, function (v) { STYLE_DARKACTIVECOLOR_BEFORE = v; });
 
   fillInput.addEventListener("input", function () {
     if (!STYLE_MENU_ID) return;
@@ -3893,7 +4304,7 @@ function primeStyleMenuThemedRows(el) {
   var isIcon = kind === "icon";
   var isDatetime = el.hasAttribute("data-datetime");
   var isProgress = el.hasAttribute("data-progress");
-  var isExtrasArea = el.hasAttribute("data-extras-area") || el.hasAttribute("data-days-area");
+  var isExtrasArea = isLiveAreaEl(el);
   var isText = colorTarget(el) === "text";
   var isBtn = isButtonEl(el);
   var shapeDisplay = (isIcon || isDatetime) ? "none" : "";
@@ -3944,6 +4355,24 @@ function primeStyleMenuThemedRows(el) {
       STYLE_MENU.querySelector(".sm-textcolor-dark-toggle"), THEMED_OVERRIDE_MAPS.textColor, THEMED_OVERRIDE_MAPS.darkTextColor, "text color");
     STYLE_TEXTCOLOR_BEFORE = textColorBefore.lightBefore;
     STYLE_DARKTEXTCOLOR_BEFORE = textColorBefore.darkBefore;
+
+    /* unlike color/text color/fill, hover/click have no rendered "live"
+       value at rest (they only ever paint during that pseudo-state, see
+       applyButtonStateColorOverrides()) - the closest equivalent is just
+       whatever's already in the override map, or a neutral black default */
+    var hoverColorBefore = primeThemedColorRow(THEMED_OVERRIDE_MAPS.hoverColor[STYLE_MENU_ID] || "#000000",
+      STYLE_MENU.querySelector(".sm-hovercolor"), STYLE_MENU.querySelector(".sm-hovercolor-dark"),
+      STYLE_MENU.querySelector(".sm-hovercolor-row"), STYLE_MENU.querySelector(".sm-hovercolor-dark-row"),
+      STYLE_MENU.querySelector(".sm-hovercolor-dark-toggle"), THEMED_OVERRIDE_MAPS.hoverColor, THEMED_OVERRIDE_MAPS.darkHoverColor, "hover color");
+    STYLE_HOVERCOLOR_BEFORE = hoverColorBefore.lightBefore;
+    STYLE_DARKHOVERCOLOR_BEFORE = hoverColorBefore.darkBefore;
+
+    var activeColorBefore = primeThemedColorRow(THEMED_OVERRIDE_MAPS.activeColor[STYLE_MENU_ID] || "#000000",
+      STYLE_MENU.querySelector(".sm-activecolor"), STYLE_MENU.querySelector(".sm-activecolor-dark"),
+      STYLE_MENU.querySelector(".sm-activecolor-row"), STYLE_MENU.querySelector(".sm-activecolor-dark-row"),
+      STYLE_MENU.querySelector(".sm-activecolor-dark-toggle"), THEMED_OVERRIDE_MAPS.activeColor, THEMED_OVERRIDE_MAPS.darkActiveColor, "click color");
+    STYLE_ACTIVECOLOR_BEFORE = activeColorBefore.lightBefore;
+    STYLE_DARKACTIVECOLOR_BEFORE = activeColorBefore.darkBefore;
   }
 
   if (!isIcon && !isDatetime) {
@@ -4026,7 +4455,7 @@ function toggleStyleMenu(anchorEl) {
   var isIcon = kind === "icon";
   var isDatetime = el.hasAttribute("data-datetime");
   var isProgress = el.hasAttribute("data-progress");
-  var isExtrasArea = el.hasAttribute("data-extras-area") || el.hasAttribute("data-days-area");
+  var isExtrasArea = isLiveAreaEl(el);
   var isText = colorTarget(el) === "text";
   var isBtn = isButtonEl(el);
   var isThemeToggle = el.hasAttribute("data-theme-toggle");
@@ -4046,6 +4475,9 @@ function toggleStyleMenu(anchorEl) {
   STYLE_MENU.querySelector(".sm-textcolor-row").style.display = isBtn ? "" : "none";
   STYLE_MENU.querySelector(".sm-textcolor-dark-row").style.display = isBtn ? "" : "none";
   STYLE_MENU.querySelector(".sm-textcolor-toggle-row").style.display = isBtn ? "" : "none";
+  /* Hover color/Click color, buttons only - primeStyleMenuThemedRows() below
+     handles which of each row's light/dark pair actually shows */
+  STYLE_MENU.querySelectorAll(".sm-btnstate-row").forEach(function (row) { row.style.display = isBtn ? "" : "none"; });
   STYLE_MENU.querySelector(".sm-theme-row").style.display = isThemeToggle ? "" : "none";
   /* a datetime element paints its own text color via the Color row, so its
      Fill row (a text field's background) would just be clutter; hide it */
@@ -4200,6 +4632,15 @@ function positionRing() {
  * @param el the element about to be resized
  */
 function freezeDescendants(el) {
+  /* a live area (see isLiveAreaEl()) is the one container whose contents are
+     MEANT to move when it resizes: the whole point of dragging its width is
+     that the tile grid reflows to the new width ("when tiles do appear, they
+     should be properly proportional to however the area has been resized").
+     Pinning each tile's rect/icon/text/button to a fixed offset inside it -
+     the exact opposite guarantee every other container wants - froze them at
+     their old spots while the tiles themselves reflowed out from under them,
+     the resize half of the same tearing ancestorPos() describes. */
+  if (isLiveAreaEl(el)) return;
   var wraps = [];
   el.querySelectorAll(RESIZABLE_SEL).forEach(function (d) {
     if (isThemeToggleLabel(d)) return;
@@ -4234,19 +4675,10 @@ function freezeDescendants(el) {
  * @param e the handle's mousedown
  */
 function startResizeDrag(e) {
-  /* a reel tile can't detachFromFlow() without breaking the flex track it
-     lives in - this only ever fires from the ring's own (already CSS-hidden
-     for a tile, see positionRing()) handle buttons, so it's defense in
-     depth, not the real gate. Same reasoning for an attachments/day tile's
-     rect (fills the tile via inset:0, a fixed size makes no sense) and its
-     filename/title/daytag text (sized by its own content); the icon/badge/
-     button roles are deliberately NOT included here - those stay resizable,
-     see buildExtrasTileHtml()/renderDays() in js/dashboard.js. */
-  if (!RING_EL || RING_EL.hasAttribute("data-reel-tile")) return;
-  var xRole = RING_EL.getAttribute("data-extras-role");
-  if (xRole === "rect" || xRole === "text") return;
-  var dRole = RING_EL.getAttribute("data-days-role");
-  if (dRole && /(^|\.)(rect|title|daytag)$/.test(dRole)) return;
+  /* this only ever fires from the ring's own (already CSS-hidden for a
+     locked-shape role, see positionRing()) handle buttons, so this is
+     defense in depth, not the real gate - see isResizeLockedTileRole(). */
+  if (!RING_EL || isResizeLockedTileRole(RING_EL)) return;
   e.preventDefault();
   e.stopPropagation();
   var el = RING_EL;
@@ -4311,11 +4743,8 @@ function startResizeDrag(e) {
  * @param e the handle's mousedown
  */
 function startMoveDrag(e) {
-  /* every attachments/day tile role (rect/icon/text/button/badge) is laid
-     out by shared CSS across every rendered tile, not individually placed -
-     moving one would only fight that layout on the next render, see
-     buildExtrasTileHtml()/renderDays() in js/dashboard.js */
-  if (!RING_EL || isLocked(elId(RING_EL)) || RING_EL.hasAttribute("data-reel-tile") || RING_EL.hasAttribute("data-extras-role") || RING_EL.hasAttribute("data-days-role")) return;
+  /* see isMoveLockedTileRole() */
+  if (!RING_EL || isLocked(elId(RING_EL)) || isMoveLockedTileRole(RING_EL)) return;
   e.preventDefault();
   e.stopPropagation();
   var el = RING_EL;
@@ -5206,7 +5635,14 @@ function buildCustomElement(d) {
   var el = buildCustomElementNode(d);
   placeFreeElement(el, d.left, d.top);
   if (d.w) { el.style.width = d.w + "px"; el.dataset.natW = d.w; }
-  if (d.h) { el.style.height = d.h + "px"; el.dataset.natH = d.h; }
+  /* extrasArea/daysArea (and galleryDirArea) are always auto-height, sized
+     by whatever tiles js/dashboard.js's renderExtras()/renderDays() paint
+     into them - their stored d.h is just a legacy/never-updated seed value
+     (nothing ever writes a new one back, height-resize isn't offered for
+     these), so applying it as a fixed inline height here silently clipped
+     every tile's content down to that seed's height on every load. */
+  var isAutoHeightArea = d.kind === "extrasArea" || d.kind === "daysArea";
+  if (d.h && !isAutoHeightArea) { el.style.height = d.h + "px"; el.dataset.natH = d.h; }
   return el;
 }
 
@@ -5499,11 +5935,19 @@ function buildReelElement(d) {
  * override on top of, the element itself has to be built from scratch
  * first. Called before every apply*Overrides() pass so they can find these
  * elements by id exactly like any template one.
+ *
+ * CUSTOM_ELEMENTS itself stays the FULL, unscoped list (every save path that
+ * reads it back out, eg saveCustomElements(), expects "the whole current
+ * list" - see that function's doc comment) - only the actual DOM building
+ * below is filtered to this page's own entries (see currentPageKey()), so a
+ * page never renders another page's placed elements, but also never drops
+ * them from what gets saved back.
  * @param list content.custom_elements
  */
 function renderCustomElements(list) {
   CUSTOM_ELEMENTS = (list || []).slice();
-  CUSTOM_ELEMENTS.forEach(buildCustomElement);
+  var page = currentPageKey();
+  CUSTOM_ELEMENTS.filter(function (d) { return !d.page || d.page === page; }).forEach(buildCustomElement);
 }
 
 /**
@@ -5547,6 +5991,19 @@ function applyElementAnchors() {
     var r = anchor.getBoundingClientRect();
     wrap.style.left = (r.left + window.scrollX) + "px";
     wrap.style.top = (r.top + window.scrollY) + "px";
+    /* a live area's WIDTH is anchor-driven too, not just its position. Its
+       seeded d.w is a hand-measured 1160 (see app/db.py's
+       _DASH_DAYS_AREA_ENTRY), but the spacer it anchors to is a real in-flow
+       child of the section's own .wrap, whose content width is whatever the
+       shared page column actually resolves to at this window size (1076 at a
+       1440px viewport). Pinning the tiles to the stale figure hung the whole
+       grid ~84px past the column its own heading lines up with, so the last
+       day tile overflowed the section. Only when a ta hasn't dragged a width
+       of their own - applySizeOverrides() records that as ovW, and an
+       explicit choice always wins over the column default. */
+    if (isLiveAreaEl(el) && el.dataset.ovW === undefined) {
+      el.style.width = anchor.getBoundingClientRect().width + "px";
+    }
   });
 }
 
@@ -5739,7 +6196,7 @@ function copyDuplicateOverrides(pairs) {
   try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   var snap;
   try { snap = raw ? JSON.parse(raw) : {}; } catch (e) { snap = {}; }
-  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "shade", "radius", "border", "links", "text_color", "theme_icons", "dark_colors", "dark_text_color", "dark_fill", "dark_border", "progress_fill", "dark_progress_fill", "progress_track", "dark_progress_track", "rotate"];
+  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "shade", "radius", "border", "links", "text_color", "theme_icons", "dark_colors", "dark_text_color", "dark_fill", "dark_border", "progress_fill", "dark_progress_fill", "progress_track", "dark_progress_track", "rotate", "hover_color", "dark_hover_color", "active_color", "dark_active_color"];
   var flatLists = ["shadow", "flip_h", "flip_v"];
   pairs.forEach(function (p) {
     plainMaps.forEach(function (m) {
@@ -6058,7 +6515,7 @@ function finishAddedElement(el, d, kind, extra) {
 function addCustomElement(kind, x, y, extra) {
   extra = extra || {};
   var uid = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  var d = { id: (kind === "icon" ? "icon.custom." : "custom." + kind + ".") + uid, kind: kind, left: Math.round(x), top: Math.round(y) };
+  var d = { id: (kind === "icon" ? "icon.custom." : "custom." + kind + ".") + uid, kind: kind, page: currentPageKey(), left: Math.round(x), top: Math.round(y) };
   if (kind === "icon") { d.icon = extra.icon; d.url = extra.url; }
   if (kind === "image" || kind === "video") d.url = extra.url;
   if (kind === "datetime") {
@@ -6296,9 +6753,11 @@ function placeObject(objData, x, y) {
   try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   try { snap = raw ? JSON.parse(raw) : {}; } catch (e) { snap = {}; }
 
+  var page = currentPageKey();
   var newParts = parts.map(function (p) {
     var np = Object.assign({}, p);
     np.id = idMap[p.id];
+    np.page = page;
     np.left = Math.round((p.left || 0) + dx);
     np.top = Math.round((p.top || 0) + dy);
     return np;
@@ -6385,6 +6844,7 @@ function placeObject(objData, x, y) {
   applyColorOverrides(snap.colors, snap.dark_colors);
   applyFillOverrides(snap.fill, snap.dark_fill);
   applyTextColorOverrides(snap.text_color, snap.dark_text_color);
+  applyButtonStateColorOverrides(snap.hover_color, snap.dark_hover_color, snap.active_color, snap.dark_active_color);
   applyTintOverrides(snap.tint);
   applyShadeOverrides(snap.shade);
   applyRadiusOverrides(snap.radius);
@@ -7212,6 +7672,21 @@ function wireResizable() {
        lives in (see buildReelElement()) - so it's selected and left at
        that, skipping the shift-click/drag-start logic below entirely */
     if (el.hasAttribute("data-reel-tile")) {
+      RING_EL = el;
+      positionRing();
+      return;
+    }
+    /* see isMoveLockedTileRole() - the ring's own dedicated move handle
+       (startMoveDrag()) already guards against this, but that's not the
+       only way to start a move: a plain click-drag anywhere on the
+       element itself normally moves it too (see this function's own doc
+       comment), so without this same guard here, a tiny accidental drag
+       while just trying to click-select a rect/icon/badge still detached
+       and corrupted it. Selected and left at that, same as a reel tile
+       just above (already covered by isMoveLockedTileRole() too, but kept
+       as its own branch above since a reel tile additionally skips the
+       shift-click/drag-start logic for a different reason). */
+    if (isMoveLockedTileRole(el)) {
       RING_EL = el;
       positionRing();
       return;
@@ -8373,6 +8848,8 @@ function redoEdit() {
  *  - "flip_h"/"flip_v": no before/after value, its own toggle is self-
  *    inverse, same idea as "shadow"
  *  - "rotate": a whole-number degrees value, or 0 for the template default
+ *  - "hovercolor"/"activecolor"/"darkhovercolor"/"darkactivecolor": a
+ *    button's Hover color/Click color rows, same idea as "fill"/"darkfill"
  * @param action the stack entry
  * @param side "before" or "after", which side of the action to restore
  */
@@ -8620,6 +9097,49 @@ function applyHistoryAction(action, side) {
     if (STYLE_MENU_ID === action.id) {
       STYLE_MENU.querySelector(".sm-textcolor-dark").value = val || autoDarkVariant(darkTextBase);
       STYLE_DARKTEXTCOLOR_BEFORE = val || "";
+    }
+    return;
+  }
+  if (action.type === "hovercolor" || action.type === "activecolor") {
+    var bscEl = styleMenuElById(action.id);
+    if (!bscEl) return;
+    var bscMapKey = action.type === "hovercolor" ? "hoverColor" : "activeColor";
+    var bscDarkMapKey = action.type === "hovercolor" ? "darkHoverColor" : "darkActiveColor";
+    var bscCssVar = action.type === "hovercolor" ? "--btn-hover-bg" : "--btn-active-bg";
+    var bscFlagKey = action.type === "hovercolor" ? "hoverOverride" : "activeOverride";
+    var bscSaveFn = action.type === "hovercolor" ? saveEditedHoverColor : saveEditedActiveColor;
+    THEMED_OVERRIDE_MAPS[bscMapKey][action.id] = val || "";
+    bscSaveFn(action.id, val || "");
+    var bscLv = THEMED_OVERRIDE_MAPS[bscMapKey][action.id], bscDv = THEMED_OVERRIDE_MAPS[bscDarkMapKey][action.id];
+    if (bscLv || bscDv) { bscEl.style.setProperty(bscCssVar, resolveThemedColor(bscLv, bscDv)); bscEl.dataset[bscFlagKey] = "1"; }
+    else { bscEl.style.removeProperty(bscCssVar); delete bscEl.dataset[bscFlagKey]; }
+    if (STYLE_MENU_ID === action.id) {
+      var bscSel = action.type === "hovercolor" ? ".sm-hovercolor" : ".sm-activecolor";
+      STYLE_MENU.querySelector(bscSel).value = val || "#000000";
+      if (action.type === "hovercolor") STYLE_HOVERCOLOR_BEFORE = val || "";
+      else STYLE_ACTIVECOLOR_BEFORE = val || "";
+    }
+    return;
+  }
+  if (action.type === "darkhovercolor" || action.type === "darkactivecolor") {
+    var dbscEl = styleMenuElById(action.id);
+    if (!dbscEl) return;
+    var dbscMapKey = action.type === "darkhovercolor" ? "darkHoverColor" : "darkActiveColor";
+    var dbscLightMapKey = action.type === "darkhovercolor" ? "hoverColor" : "activeColor";
+    var dbscCssVar = action.type === "darkhovercolor" ? "--btn-hover-bg" : "--btn-active-bg";
+    var dbscFlagKey = action.type === "darkhovercolor" ? "hoverOverride" : "activeOverride";
+    var dbscSaveFn = action.type === "darkhovercolor" ? saveEditedDarkHoverColor : saveEditedDarkActiveColor;
+    THEMED_OVERRIDE_MAPS[dbscMapKey][action.id] = val || "";
+    dbscSaveFn(action.id, val || "");
+    var dbscLv = THEMED_OVERRIDE_MAPS[dbscLightMapKey][action.id], dbscDv = THEMED_OVERRIDE_MAPS[dbscMapKey][action.id];
+    if (dbscLv || dbscDv) { dbscEl.style.setProperty(dbscCssVar, resolveThemedColor(dbscLv, dbscDv)); dbscEl.dataset[dbscFlagKey] = "1"; }
+    else { dbscEl.style.removeProperty(dbscCssVar); delete dbscEl.dataset[dbscFlagKey]; }
+    if (STYLE_MENU_ID === action.id) {
+      var dbscSel = action.type === "darkhovercolor" ? ".sm-hovercolor-dark" : ".sm-activecolor-dark";
+      var dbscBase = dbscLv || "#000000";
+      STYLE_MENU.querySelector(dbscSel).value = val || autoDarkVariant(dbscBase);
+      if (action.type === "darkhovercolor") STYLE_DARKHOVERCOLOR_BEFORE = val || "";
+      else STYLE_DARKACTIVECOLOR_BEFORE = val || "";
     }
     return;
   }
@@ -9084,6 +9604,42 @@ function saveEditedProgressTrack(id, value) { saveEditedMapValue("progress_track
 function saveEditedDarkProgressTrack(id, value) { saveEditedMapValue("dark_progress_track", id, value); }
 
 /**
+ * Persists a button's Hover color/Click color pick from the style popover
+ * into the preview snapshot, buttons only, same draft everything else here
+ * uses. See applyButtonStateColorOverrides()'s doc comment for why these
+ * paint as css custom properties rather than a plain inline style.
+ * @param id the button's data-edit-id
+ * @param value a css color string, or "" to clear back to the default
+ *   shared hover/press darken effect
+ */
+function saveEditedHoverColor(id, value) { saveEditedMapValue("hover_color", id, value); }
+
+/**
+ * Persists a dark-mode override for the row above, same idea as
+ * saveEditedDarkColor() but for content.dark_hover_color.
+ * @param id the button's data-edit-id
+ * @param value a css color string, or "" to clear back to the auto variant
+ */
+function saveEditedDarkHoverColor(id, value) { saveEditedMapValue("dark_hover_color", id, value); }
+
+/**
+ * Persists a button's Click color pick, same idea as saveEditedHoverColor()
+ * but for the pressed (:active) state.
+ * @param id the button's data-edit-id
+ * @param value a css color string, or "" to clear back to the default
+ *   shared hover/press darken effect
+ */
+function saveEditedActiveColor(id, value) { saveEditedMapValue("active_color", id, value); }
+
+/**
+ * Persists a dark-mode override for the row above, same idea as
+ * saveEditedDarkColor() but for content.dark_active_color.
+ * @param id the button's data-edit-id
+ * @param value a css color string, or "" to clear back to the auto variant
+ */
+function saveEditedDarkActiveColor(id, value) { saveEditedMapValue("dark_active_color", id, value); }
+
+/**
  * Persists a button's text-color change from the style popover's Text
  * color control into the preview snapshot, the same draft everything else
  * here uses. Separate map from content.colors since a button's "Color" row
@@ -9356,6 +9912,7 @@ function applySharedEditorOverrides(data, textMap) {
   applyColorOverrides(data.colors, data.dark_colors);
   applyFillOverrides(data.fill, data.dark_fill);
   applyTextColorOverrides(data.text_color, data.dark_text_color);
+  applyButtonStateColorOverrides(data.hover_color, data.dark_hover_color, data.active_color, data.dark_active_color);
   applyTintOverrides(data.tint);
   applyShadeOverrides(data.shade);
   applyRadiusOverrides(data.radius);
@@ -9403,15 +9960,39 @@ function applySharedEditorOverrides(data, textMap) {
  * landing page there's no hardcoded countdown/logistics/hero markup to
  * hydrate here - the days/extras lists stay js/dashboard.js's own separate,
  * hand-rolled rendering, entirely untouched by this file - this only wires
- * up the generic override pipeline every custom-placed element (right now,
- * just the migrated progress bar) needs, gated into edit affordances the
- * exact same isPreviewMode() && isEditMode() way index.html's own pipeline
- * is, so a real student loading this page directly never sees drag handles
- * or a right-click menu, only the rendered result.
+ * up the generic override pipeline every custom-placed element (the
+ * migrated progress bar, plus the nav/footer chrome it shares with
+ * index.html - brand, theme toggle, "footer.org"/"footer.contact") needs,
+ * gated into edit affordances the exact same isPreviewMode() && isEditMode()
+ * way index.html's own pipeline is, so a real student loading this page
+ * directly never sees drag handles or a right-click menu, only the
+ * rendered result.
  */
 function initDashboardPage() {
+  /* dashboard.js's own DOMContentLoaded handler is the one that normally
+     flips #dashApp from its default display:none to block (gateCheck()),
+     but it isn't guaranteed to run before this function's fetchContent()
+     resolves - reveal the app here too so applySharedEditorOverrides()'s
+     applyElementAnchors() call below never measures the anchor spacers
+     while an ancestor is still display:none (every rect comes back all-
+     zero in that case, permanently pinning the progress/extras/days areas
+     to 0,0 since nothing re-runs the anchor pass afterward). Safe to call
+     twice - gateCheck() is idempotent. */
+  if (window.gateCheck) window.gateCheck();
   fetchContent()
-    .then(function (data) { applySharedEditorOverrides(data); })
+    .then(function (data) {
+      /* same legacy contact_text fallback index.html's own DOMContentLoaded
+         handler applies - see applySharedEditorOverrides()'s doc comment -
+         so an old blob saved before the footer became click-to-edit shows
+         its real contact line here too, not the template's hardcoded
+         default, now that the footer (a shared "footer.contact" id) also
+         renders on this page. */
+      var textMap = data.text ? Object.assign({}, data.text) : {};
+      if (textMap["footer.contact"] === undefined && data.contact_text) {
+        textMap["footer.contact"] = data.contact_text;
+      }
+      applySharedEditorOverrides(data, textMap);
+    })
     .catch(function () {});
 }
 
@@ -9442,6 +10023,7 @@ function initObjectCanvas() {
     applyColorOverrides(data.colors, data.dark_colors);
     applyFillOverrides(data.fill, data.dark_fill);
     applyTextColorOverrides(data.text_color, data.dark_text_color);
+    applyButtonStateColorOverrides(data.hover_color, data.dark_hover_color, data.active_color, data.dark_active_color);
     applyTintOverrides(data.tint);
     applyShadeOverrides(data.shade);
     applyRadiusOverrides(data.radius);

@@ -1038,9 +1038,17 @@ function applyTileFlow() {
       area.style.setProperty("--tile-wa", tw || (defW === "100%" ? "max-content" : defW));
       area.style.setProperty("--tile-h", th || "auto");
       /* an expanding axis is sized by its content, so any px the container is
-         still carrying from a previous lock has to come back off */
+         still carrying from a previous lock has to come back off. ovH goes
+         with it: a stored height on an axis whose px have just been thrown
+         away describes a box the container isn't in (getSize() ignores it
+         anyway now, but leaving a phantom figure lying around for the next
+         reader to trust is how this bug worked in the first place). ovW is
+         deliberately left alone - it means something else besides "the current
+         box" over in applyElementAnchors(), where it's the record that a ta
+         chose a width at all, and clearing it would hand an x-expanding
+         container back to the anchor column on the next window resize. */
       if (flow.x === "expand") area.style.width = "";
-      if (flow.y === "expand") area.style.height = "";
+      if (flow.y === "expand") { area.style.height = ""; delete area.dataset.ovH; }
     });
     if (flow.y !== "lock") return;
     var saved = EDIT_SIZES[id];
@@ -1052,7 +1060,10 @@ function applyTileFlow() {
       areas.forEach(function (area) { area.style.height = ""; });
       areas.forEach(function (area) { h = Math.max(h || 0, area.scrollHeight); });
     }
-    if (h) areas.forEach(function (area) { area.style.height = h + "px"; });
+    if (h) areas.forEach(function (area) {
+      area.style.height = h + "px";
+      area.dataset.ovH = h;
+    });
   });
 }
 window.applyTileFlow = applyTileFlow;
@@ -1157,6 +1168,40 @@ function toggleAreaFlowAxis(id, axis) {
      tall as you are now" rather than "take whatever the new mode works out to" */
   if (axis === "y") pinFlowAreaHeight(id, lock);
   setAreaFlowProp(id, axis, lock ? "lock" : "expand");
+}
+
+/**
+ * Hands a flow container whichever axes a ta has just dragged an edge on.
+ *
+ * An axis set to "expand" is sized by its CONTENT (see areaFlowFor()), so a
+ * size dragged along it is a figure nothing will ever paint: applyTileFlow()
+ * clears that axis' px straight back off again. That's why dragging the
+ * "Extra attachments"/"The days" containers taller - both ship y: expand -
+ * looked like it did nothing, springing back to the tiles' own height the
+ * moment the mouse came up. Dragging an edge IS the ta claiming that axis, so
+ * the drag flips it to "lock" and the dragged size becomes the one the
+ * container keeps; the Container menu's own lock toggle is the way back, and
+ * reads as locked afterwards so the state is never a secret.
+ *
+ * Only axes whose size actually changed are claimed, so a pure width drag
+ * never quietly pins a height the ta never touched (and a drag that grinds to
+ * a stop against a min/cap, changing nothing, claims nothing). "Changed" means
+ * the box the drag WROTE, not the box the container ended up measuring - see
+ * startResizeDrag()'s `dragged`.
+ * @param el the flow container just resized
+ * @param before its size at mousedown, {w, h}
+ * @param after the last box the drag wrote, {w, h}
+ */
+function lockDraggedFlowAxes(el, before, after) {
+  var id = elId(el);
+  if (!id) return;
+  var flow = areaFlowFor(id);
+  if (flow.x !== "lock" && Math.round(before.w) !== Math.round(after.w)) {
+    setAreaFlowProp(id, "x", "lock");
+  }
+  if (flow.y !== "lock" && Math.round(before.h) !== Math.round(after.h)) {
+    setAreaFlowProp(id, "y", "lock");
+  }
 }
 
 /**
@@ -1453,13 +1498,33 @@ function getPos(el) {
  * resized, else the size it was detached from flow at, else its live
  * rendered size. Layout px, not visual px, so an element with its own
  * stylesheet transform (eg. the scaled-up brand logo) doesn't jump when a
- * resize starts.
+ * resize starts. A tile flow container is the one element whose stored figures
+ * are only half the answer - see the branch below.
  * @param el the element
  * @return {w, h}
  */
 function getSize(el) {
   var w = parseFloat(el.dataset.ovW);
   var h = parseFloat(el.dataset.ovH);
+  /* a flow container only OWNS an axis it has locked (see areaFlowFor()): the
+     other one is however tall/wide its tiles currently come to, and no stored
+     figure is that number - not a saved override (applyTileFlow() throws that
+     axis' px away again) and not the natW/natH it was detached at, which is a
+     single snapshot taken before the tiles were even rendered (see
+     applyElementAnchors()). Both go stale the moment an attachment is added or
+     a tile is resized, and a resize drag starting from a stale figure jumps
+     the container to it on the first mousemove. So measure that axis instead;
+     the locked one still answers from the box it was given. */
+  if (isFlowAreaEl(el)) {
+    var flow = areaFlowFor(elId(el));
+    /* offsetWidth/Height rather than a client rect, for this function's own
+       layout-px-not-visual-px promise above: a container a ta has rotated
+       measures its own box, not the bounding box the rotation sweeps out */
+    return {
+      w: flow.x === "lock" && !isNaN(w) ? w : el.offsetWidth,
+      h: flow.y === "lock" && !isNaN(h) ? h : el.offsetHeight
+    };
+  }
   if (!isNaN(w) && !isNaN(h)) return { w: w, h: h };
   var nw = parseFloat(el.dataset.natW), nh = parseFloat(el.dataset.natH);
   /* both halves or neither: an element seeded with a natW but no natH (a
@@ -1809,6 +1874,11 @@ function applyResizeSide(el, box) {
   setOwnPos(el, box.tx, box.ty);
   commitSize(el);
   commitPosition(el);
+  /* same reason the drag's own mouseup does it: a container's size is what its
+     tiles are tiled INTO, so undoing one has to re-tile them (see
+     startResizeDrag()). The axis locks the drag claimed stay claimed - undo
+     puts the box back, it doesn't hand the axis back to its content. */
+  if (isFlowAreaEl(el)) applyTileFlow();
   positionRing();
 }
 
@@ -6077,6 +6147,15 @@ function startResizeDrag(e) {
   var startX = e.clientX, startY = e.clientY;
   var start = getSize(el);
   var base = getPos(el);
+  /* the last box a mousemove actually WROTE, which is how onUp tells the axes
+     the ta pulled from the ones that merely moved: a flow container measures
+     an unlocked axis live (see getSize()), and dragging such a container
+     NARROWER reflows its tiles onto more rows, so its height changes all on
+     its own. Comparing measured heights would read that as a height drag and
+     claim the axis (see lockDraggedFlowAxes()); the written box only ever
+     changes on an axis the handle actually pulls, shift-scaling included.
+     Stays null for a handle click with no drag at all. */
+  var dragged = null;
   RING_DRAGGING = true;
 
   /**
@@ -6126,7 +6205,18 @@ function startResizeDrag(e) {
       positionRing();
       return;
     }
-    setBox(el, w, h);
+    dragged = { w: w, h: h };
+    if (isFlowAreaEl(el) && h === start.h) {
+      /* a width drag on a container must leave its height alone rather than
+         pin it to the figure it happened to measure at mousedown: dragging one
+         narrower reflows its tiles onto more rows, so growing taller IS the
+         correct response, and a frozen inline height clips them against the
+         container's own overflow (see .tile-flow.flow-x-lock) for the rest of
+         the drag. The height axis re-derives itself either way the moment the
+         drag settles, see applyTileFlow(). */
+      el.dataset.ovW = w;
+      el.style.width = w + "px";
+    } else setBox(el, w, h);
     /* pin the opposite edge on left/top drags */
     setOwnPos(el,
       base.tx + (dir[0] === -1 ? start.w - w : 0),
@@ -6143,8 +6233,14 @@ function startResizeDrag(e) {
     /* a container's own new size changes what its tiles have to fit into (and
        a locked y axis re-derives its pinned height from that), so re-run the
        layout once the drag settles - a tile drag already did this on every
-       move, through setTileTrackSize() */
-    if (isFlowAreaEl(el)) applyTileFlow();
+       move, through setTileTrackSize(). The axes just dragged are claimed
+       before that pass runs (see lockDraggedFlowAxes()), since which axes the
+       container owns is what decides whether the size committed two lines up
+       is one the pass honours or one it throws straight back away. */
+    if (isFlowAreaEl(el)) {
+      if (dragged) lockDraggedFlowAxes(el, start, dragged);
+      applyTileFlow();
+    }
     pushResizeUndo(elId(el),
       { w: start.w, h: start.h, tx: base.tx, ty: base.ty },
       { w: s.w, h: s.h, tx: p.tx, ty: p.ty });
@@ -6407,6 +6503,13 @@ function resetSizeDbl(e) {
   var pos = getPos(el);
   resetBox(el);
   saveEditedSize(elId(el), null);
+  /* a flow container's box isn't resetBox()'s to restore: its height is
+     whatever its axis locks work out to (a live area is never seeded with a
+     natH at all, see buildCustomElement()'s isAutoHeightArea branch, so the
+     line above just wrote an invalid "NaNpx" the browser drops - leaving the
+     inline height from the resize being reset still sitting there). Re-running
+     the layout is what actually clears it, now that the saved size is gone. */
+  if (isFlowAreaEl(el)) applyTileFlow();
   var after = getSize(el);
   pushResizeUndo(elId(el), { w: before.w, h: before.h, tx: pos.tx, ty: pos.ty }, { w: after.w, h: after.h, tx: pos.tx, ty: pos.ty });
   positionRing();
@@ -13270,6 +13373,18 @@ function saveAreaFlow(id, flow) {
  *   template default
  */
 function saveEditedSize(id, size) {
+  /* EDIT_SIZES is the live mirror of content.sizes that applyTileFlow() reads
+     a flow container's locked height and a tile's track size back out of (see
+     applySizeOverrides()), so it has to learn about a resize at the same
+     moment the snapshot does. Leaving it stale is what snapped the dashboard's
+     tile containers back the instant a resize drag was let go: onUp committed
+     the new height here, then re-ran applyTileFlow(), which looked the
+     container up in a map that still held the PREVIOUS height (or, with none
+     saved, re-measured the tiles) and pinned it straight back - while the
+     dragged height sat on in the element's own dataset, ready to reappear as a
+     jump the next time getSize() read it at the start of another drag. */
+  if (size == null) delete EDIT_SIZES[id];
+  else EDIT_SIZES[id] = size;
   var raw;
   try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   var snapshot;

@@ -122,18 +122,44 @@
    */
   function buildLoginFallback() {
     if (document.querySelector("[data-login-input]")) return;
-    var host = document.getElementById("loginUserAnchor");
-    if (!host || !host.parentNode) return;
-    var wrap = document.createElement("div");
-    wrap.innerHTML =
-      '<div class="login-field" data-login-el="field"><span class="login-field-label">Username</span>' +
-      '<div class="login-field-box"><input class="login-field-input" type="text" autocomplete="username" aria-label="Username" data-login-input="username"></div></div>' +
-      '<div class="login-field" data-login-el="field"><span class="login-field-label">Password</span>' +
-      '<div class="login-field-box"><input class="login-field-input" type="password" autocomplete="current-password" aria-label="Password" data-login-input="password"></div></div>' +
-      '<button class="btn btn-primary login-submit" type="button" data-login-el="submit">Log in</button>' +
-      '<div class="login-error" data-login-el="error"><span class="login-error-msg" data-login-msg="bad">Wrong username or password. Check with a staff member.</span>' +
-      '<span class="login-error-msg" data-login-msg="expired">You were logged out after a while of inactivity. Log in again.</span></div>';
-    while (wrap.firstChild) host.parentNode.insertBefore(wrap.firstChild, host);
+    /* one piece per anchor rather than all four dropped into the first one:
+       the "Username"/"Password" captions are ordinary markup in
+       templates/login.html now (so nothing here builds them), and they sit
+       between the anchors - piling every field into the username slot would
+       leave the password caption stranded underneath the whole form. */
+    var slots = [
+      /* real placeholder attributes here, unlike the placed elements' own
+         editable placeholder spans (see buildCustomElementNode()): nothing
+         builds those spans on this path, and an empty grey box with no hint
+         in it is exactly the wrong thing to hand someone who is already
+         looking at a half-broken page */
+      ["loginUserAnchor",
+        '<div class="login-field" data-login-el="field"><div class="login-field-box">' +
+        '<input class="login-field-input" type="text" autocomplete="username" aria-label="Username" ' +
+        'placeholder="the username you were given" data-login-input="username"></div></div>'],
+      ["loginPassAnchor",
+        '<div class="login-field" data-login-el="field"><div class="login-field-box">' +
+        '<input class="login-field-input" type="password" autocomplete="current-password" aria-label="Password" ' +
+        'placeholder="and its password" data-login-input="password"></div></div>'],
+      ["loginSubmitAnchor",
+        '<button class="btn btn-primary login-submit" type="button" data-login-el="submit">Log in</button>'],
+      ["loginErrorAnchor",
+        '<div class="login-error" data-login-el="error">' +
+        '<span class="login-error-msg" data-login-msg="bad">Wrong username or password. Check with a staff member.</span>' +
+        '<span class="login-error-msg" data-login-msg="expired">You were logged out after a while of inactivity. Log in again.</span></div>']
+    ];
+    slots.forEach(function (slot) {
+      var anchor = document.getElementById(slot[0]);
+      if (!anchor || !anchor.parentNode) return;
+      var wrap = document.createElement("div");
+      wrap.innerHTML = slot[1];
+      while (wrap.firstChild) anchor.parentNode.insertBefore(wrap.firstChild, anchor);
+      /* the spacer has done its job: it exists to hold a slot open for an
+         absolutely-positioned placed element, and what just went in is a
+         normal in-flow one that takes its own room. Leaving it would double
+         the gap under every field. */
+      anchor.style.display = "none";
+    });
     refreshLoginPage();
   }
 

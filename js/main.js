@@ -581,6 +581,14 @@ function neuterLink(el, dim) {
     el.style.opacity = ".5";
     el.style.cursor = "default";
   }
+  /* at most one swallowing listener per element, however many times this runs
+     - applyNavSessionState() neuters the landing page's nav buttons on every
+     override pass, and a second identical listener would be pure waste. A JS
+     property rather than an attribute, so a cloneNode()d duplicate (see
+     duplicateElement(), which copies attributes but never properties or
+     listeners) correctly reads as not-yet-wired and gets its own. */
+  if (el._hrNeutered) return;
+  el._hrNeutered = true;
   el.addEventListener("click", function (e) { e.preventDefault(); });
 }
 
@@ -629,16 +637,16 @@ function currentPageKey() {
  * Every element carrying a data-edit-id keeps the template's default text
  * until a ta overrides it via click-to-edit; stashes that default in a
  * data attribute first so a later edit can tell if it's back to the
- * original wording (see wireClickToEdit()'s blur handler). Skips
- * #portalLink on a real (non-preview) load where a session is already
- * logged in: updatePortalLink() runs earlier in DOMContentLoaded and has
- * already swapped its text to "Staff Portal"/"Dashboard" for this visitor, so
- * capturing that swapped text as the "default" (or overwriting it with a
- * saved "Access portal" override meant for logged-out visitors) would
- * break the per-session label. In preview mode updatePortalLink() never
- * reaches that swap (it neuters and returns early instead), so the ta
- * previewing/editing still gets a normal, fully editable field.
- * Also stamps data-overridden on every field (cleared if there's no saved
+ * original wording (see wireClickToEdit()'s blur handler).
+ *
+ * #portalLink used to need a special case here - it rewrote its own text to
+ * "Dashboard"/"Staff Portal" for a signed-in visitor, so this pass would
+ * capture that swapped wording as the field's "default", or overwrite it with
+ * a saved override that was only ever meant for signed-out visitors. It
+ * doesn't rewrite itself anymore: the signed-in navbar is a separate navbar
+ * with its own separate button (see applyNavSessionState()), so both are
+ * ordinary fields with one wording each and the special case is gone.
+ * Stamps data-overridden on every field (cleared if there's no saved
  * override), so a theme-toggle's ".tic-label" (see buildCustomElement()'s
  * "theme" kind) can tell refreshThemeToggles() (js/theme.js) apart from a
  * plain default: only a field with no override left has its text kept in
@@ -646,9 +654,7 @@ function currentPageKey() {
  * @param textMap {id: overrideHtml}, from content.text
  */
 function applyTextOverrides(textMap) {
-  var skipPortalLink = !isPreviewMode() && localStorage.getItem("session") && localStorage.getItem("role");
   document.querySelectorAll("[data-edit-id]").forEach(function (el) {
-    if (skipPortalLink && el.id === "portalLink") return;
     el.setAttribute("data-default-html", el.innerHTML);
     var id = el.getAttribute("data-edit-id");
     if (textMap && textMap[id] !== undefined) {
@@ -1205,6 +1211,13 @@ function resolveSelectableTarget(target) {
     var toggle = el.closest("[data-theme-toggle], #themeBtn");
     if (toggle) return toggle;
   }
+  /* a login failure line's message string, the second glued child (see
+     isGluedChild()) - and the one that made the problem visible: the string
+     fills its line edge to edge, so EVERY click on the line landed on the
+     string, which as a clamped child of the line (see moveBoundsContainer())
+     had nowhere to go. The line looked immovable and unresizable when in fact
+     nobody had ever managed to select it. */
+  if (el && isLoginErrorMsg(el)) return el.parentElement;
   return el;
 }
 
@@ -1231,6 +1244,38 @@ function isThemeToggleLabel(el) {
   return !!(el.classList && el.classList.contains("tic-label") &&
     el.parentElement && el.parentElement.hasAttribute &&
     (el.parentElement.hasAttribute("data-theme-toggle") || el.parentElement.id === "themeBtn"));
+}
+
+/**
+ * True for one of the login failure line's two strings (see
+ * buildCustomElementNode()'s "loginError" kind): the same "tracked, but not
+ * an independent element" case isThemeToggleLabel() describes, one element
+ * down. The line carries two alternative wordings and only ever shows one, so
+ * the STRING isn't the thing a ta places, moves or resizes - the line is; the
+ * string is just the line's own content, exactly like the sun/moon markup
+ * inside a theme button. Being separately tracked at all is only so each
+ * wording can be typed and styled on its own (data-edit-id).
+ * @param el the element
+ * @return true if el is a failure line's message span
+ */
+function isLoginErrorMsg(el) {
+  return !!(el && el.hasAttribute && el.hasAttribute("data-login-msg") &&
+    el.parentElement && el.parentElement.hasAttribute &&
+    el.parentElement.hasAttribute("data-login-el"));
+}
+
+/**
+ * True for any tracked element that's physically part of its parent rather
+ * than an independent element that merely sits on top of it - a theme
+ * toggle's label, a failure line's message. Both are exempt from the "no
+ * attachment between elements" rule every other tracked descendant follows
+ * (see ancestorPos(), freezeDescendants()): they move and reflow as one piece
+ * with the element they belong to.
+ * @param el the element
+ * @return true if el is glued to its parent
+ */
+function isGluedChild(el) {
+  return isThemeToggleLabel(el) || isLoginErrorMsg(el);
 }
 
 /**
@@ -1306,11 +1351,12 @@ function getSize(el) {
  * twice, once via the card's own painted transform propagating down and
  * again via its own, landing it exactly backwards instead of standing
  * still.
- * A theme toggle's own ".tic-label" is the one exception: it isn't an
- * independent element at all (see isThemeToggleLabel()), so its button
- * parent is never treated as a cancel-worthy ancestor - the label is
- * supposed to move/resize as one piece with the button, exactly like the
- * plain (untracked) icon markup sitting right next to it.
+ * A glued child (see isGluedChild(): a theme toggle's own ".tic-label", a
+ * login failure line's message string) is one exception: it isn't an
+ * independent element at all, so its parent is never treated as a
+ * cancel-worthy ancestor - it's supposed to move/resize as one piece with
+ * the element it belongs to, exactly like the plain (untracked) icon markup
+ * sitting right next to the theme label does.
  *
  * A live area container (see isLiveAreaEl()) is the OTHER exception, for the
  * same reason one step up: nothing inside it is an independent element that
@@ -1331,7 +1377,7 @@ function getSize(el) {
  * @return {tx, ty}
  */
 function ancestorPos(el) {
-  if (isThemeToggleLabel(el)) return { tx: 0, ty: 0 };
+  if (isGluedChild(el)) return { tx: 0, ty: 0 };
   var p = el.parentElement;
   while (p && p !== document.body) {
     if (p.matches && p.matches(RESIZABLE_SEL)) {
@@ -2179,6 +2225,235 @@ function setElementLink(id, url) {
   EDIT_UNDO.push({ type: "link", id: id, before: before, after: after });
   EDIT_REDO.length = 0;
 }
+
+/* ---------------------------------------------------------------------------
+   INLINE LINKS: a link on PART of a text field, rather than on the whole
+   element the way LINKS/applyOneLink() above does it.
+
+   The two are complementary, not competing. An element link makes a whole
+   card/image/button navigate; an inline link makes three words in the middle
+   of a sentence navigate and leaves the rest of the sentence alone - which is
+   what a line like "Access credentials are provided only to accepted
+   participants. Apply here." has always needed, and the reason that sentence
+   was until now the one piece of copy on the login page a ta couldn't safely
+   touch (its link was raw markup inside the field; there was no ui that knew
+   the link was in there).
+
+   An inline link is just more of the field's own innerHTML, so it needs no
+   storage of its own: saveEditedField() already persists the field's markup
+   verbatim and applyTextOverrides() already restores it, so a link survives
+   Apply/reload/profiles with zero new plumbing, and gets full undo/redo for
+   free through commitTextFieldChange() - the same "a chip is just markup"
+   reasoning the formula chips (buildFormulaChipHtml()) already rely on.
+   --------------------------------------------------------------------------- */
+
+/* what marks a piece of a field's text as linked. One class over both element
+   shapes below, so css (the hover underline, the editor's dotted marker) and
+   every lookup here have exactly one hook. */
+var INLINE_LINK_CLASS = "txt-link";
+var INLINE_LINK_SEL = ".txt-link";
+
+/**
+ * Which element an inline link inside this field has to be built out of.
+ * Normally a real `<a href>`, so the browser's own affordances (ctrl-click,
+ * middle-click, status-bar preview, "copy link address", screen-reader link
+ * role) all work with nothing simulating them.
+ *
+ * The exception is a field that IS a link or a button, or sits inside one -
+ * the "button" element kind is a tagged `<a class="btn">`, and the login
+ * page's submit button is a `<span data-edit-id>` inside a real `<button>`.
+ * Nesting an `<a>` in either is invalid html: the parser unnests it, so the
+ * link would silently fall out of the field the first time its saved markup
+ * was restored. Those get a `<span data-href>` that the delegated handler in
+ * wireInlineLinks() navigates instead, which is exactly what applyOneLink()
+ * already does for every non-`<a>` element link.
+ * @param field the data-edit-id text field
+ * @return "a" or "span"
+ */
+function inlineLinkTagFor(field) {
+  return field.closest && field.closest("a, button") ? "span" : "a";
+}
+
+/**
+ * Reads an inline link's target, whichever shape it is (see
+ * inlineLinkTagFor()).
+ * @param el a .txt-link element
+ * @return the url, or ""
+ */
+function inlineLinkHref(el) {
+  return el.getAttribute("href") || el.getAttribute("data-href") || "";
+}
+
+/**
+ * Points an inline link at a url, in whichever shape it already is - a real
+ * `<a>` keeps using href (so it stays a real link to the browser), a span
+ * keeps using data-href.
+ * @param el a .txt-link element
+ * @param url the target
+ */
+function setInlineLinkHref(el, url) {
+  if (el.tagName === "A") el.setAttribute("href", url);
+  else el.setAttribute("data-href", url);
+}
+
+/**
+ * Replaces a node with its own children, leaving the text it wrapped exactly
+ * where it was. How an inline link is removed (and how a link that got caught
+ * inside a newly created one is flattened, see applyInlineLinkToSelection()).
+ * @param node the element to unwrap
+ */
+function unwrapInlineNode(node) {
+  var parent = node.parentNode;
+  if (!parent) return;
+  while (node.firstChild) parent.insertBefore(node.firstChild, node);
+  parent.removeChild(node);
+  parent.normalize();
+}
+
+/**
+ * The inline link the current text selection sits inside, if it's inside one
+ * at all - what makes clicking the toolbar's link button with the caret
+ * anywhere in "Apply here." edit THAT link rather than nest a second one in
+ * it. Matches plain `<a>` markup too, not just .txt-link: a template's own
+ * hand-written link (the login card's note shipped with one long before any
+ * of this existed) should be just as editable as one placed here, which is
+ * the whole point of the feature.
+ * @param field the data-edit-id text field being edited
+ * @return the link element, or null
+ */
+function inlineLinkAt(field) {
+  var sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return null;
+  var node = sel.getRangeAt(0).commonAncestorContainer;
+  if (node.nodeType === 3) node = node.parentElement;
+  var link = node && node.closest ? node.closest(INLINE_LINK_SEL + ", a") : null;
+  /* the field itself can be the `<a>` closest() found (the "button" element
+     kind is one) - that's an ELEMENT link, LINKS/setElementLink()'s business,
+     not a piece of this field's text */
+  if (!link || link === field || !field.contains(link)) return null;
+  return link;
+}
+
+/**
+ * Links whatever's currently selected inside field, or retargets the link the
+ * selection is already inside.
+ * @param field the data-edit-id text field being edited
+ * @param url the target
+ * @return true if the field's markup actually changed
+ */
+function applyInlineLinkToSelection(field, url) {
+  var existing = inlineLinkAt(field);
+  if (existing) {
+    if (inlineLinkHref(existing) === url) return false;
+    setInlineLinkHref(existing, url);
+    existing.classList.add(INLINE_LINK_CLASS);
+    return true;
+  }
+  var sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return false;
+  var range = sel.getRangeAt(0);
+  if (range.collapsed) return false;
+  var link = document.createElement(inlineLinkTagFor(field));
+  link.className = INLINE_LINK_CLASS;
+  setInlineLinkHref(link, url);
+  if (link.tagName !== "A") {
+    /* a span has to say out loud what an <a> says for free */
+    link.setAttribute("role", "link");
+    link.setAttribute("tabindex", "0");
+  }
+  try {
+    range.surroundContents(link);
+  } catch (e) {
+    /* surroundContents() refuses a selection that only partially covers an
+       element (half of a bold run, say). Extracting the contents and
+       re-inserting them wrapped is the equivalent that copes - the browser
+       closes and reopens the partially-covered markup around the split, which
+       is the same thing execCommand would have done. */
+    link.appendChild(range.extractContents());
+    range.insertNode(link);
+  }
+  /* a link inside a link is meaningless (the two would fight over the same
+     click), so anything that came along inside the selection is flattened */
+  link.querySelectorAll(INLINE_LINK_SEL + ", a").forEach(unwrapInlineNode);
+  sel.removeAllRanges();
+  var after = document.createRange();
+  after.selectNodeContents(link);
+  sel.addRange(after);
+  return true;
+}
+
+/**
+ * Unlinks the text the selection covers, leaving the words themselves alone:
+ * the link the caret sits in, or every link the selection touches if it spans
+ * more than one.
+ * @param field the data-edit-id text field being edited
+ * @return true if the field's markup actually changed
+ */
+function removeInlineLinkAtSelection(field) {
+  var link = inlineLinkAt(field);
+  if (link) { unwrapInlineNode(link); return true; }
+  var sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return false;
+  var range = sel.getRangeAt(0);
+  var hit = [];
+  field.querySelectorAll(INLINE_LINK_SEL + ", a").forEach(function (a) {
+    if (range.intersectsNode(a)) hit.push(a);
+  });
+  hit.forEach(unwrapInlineNode);
+  return hit.length > 0;
+}
+
+/**
+ * Makes inline links navigate on the live site, and makes sure they never do
+ * anywhere else. One delegated listener for the whole page, so a link a ta
+ * creates mid-session is live the moment it exists - the same reason
+ * js/login.js delegates everything off document.
+ *
+ * Three cases:
+ *  - inside the ta portal's preview/editor iframe: nothing navigates, same
+ *    rule neuterLink() enforces for the nav's own links (the click still
+ *    reaches wireTextField(), which is what opens the text for editing).
+ *  - a real `<a>` on the live site: left completely alone, the browser
+ *    already does everything right.
+ *  - a `<span data-href>` on the live site (see inlineLinkTagFor()): navigated
+ *    by hand, honouring ctrl/cmd/shift and middle-click as "new tab" so it
+ *    behaves like the link it's standing in for.
+ */
+function wireInlineLinks() {
+  function navigate(e, link) {
+    var url = inlineLinkHref(link);
+    if (!url) return;
+    e.preventDefault();
+    if (e.ctrlKey || e.metaKey || e.shiftKey || e.button === 1 ||
+        link.getAttribute("target") === "_blank") {
+      window.open(url, "_blank", "noopener");
+    } else {
+      window.location.href = url;
+    }
+  }
+  document.addEventListener("click", function (e) {
+    var link = e.target.closest && e.target.closest(INLINE_LINK_SEL);
+    if (!link) return;
+    if (isPreviewMode()) { e.preventDefault(); return; }
+    if (link.tagName === "A") return;
+    navigate(e, link);
+  });
+  /* middle-click never fires a "click" event, and a span link is exactly the
+     case where the browser has no built-in "open in new tab" of its own */
+  document.addEventListener("auxclick", function (e) {
+    if (e.button !== 1 || isPreviewMode()) return;
+    var link = e.target.closest && e.target.closest(INLINE_LINK_SEL);
+    if (link && link.tagName !== "A") navigate(e, link);
+  });
+  /* and a span link is focusable (role="link", tabindex 0), so it has to
+     answer Enter the way a real link does */
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "Enter" || isPreviewMode()) return;
+    var link = e.target.closest && e.target.closest(INLINE_LINK_SEL);
+    if (link && link.tagName !== "A" && !link.isContentEditable) navigate(e, link);
+  });
+}
+wireInlineLinks();
 
 /**
  * Applies an explicit stacking order to every tracked element: z-index is
@@ -5253,11 +5528,13 @@ function parentSelectableOf(el) {
  * label sliding over to fill the gap) before its own turn comes and it
  * gets measured already-wrong. A no-op past the first resize, since a
  * pinned element is already immune to every future one, its own or an
- * ancestor's. Skips a theme toggle's own ".tic-label" (see
- * isThemeToggleLabel()): pinning it absolute would freeze the label at its
- * pre-resize spot instead of letting it reflow inside the button's own
- * growing/shrinking flex box, same as the plain (untracked) icon markup
- * beside it already does with no pinning at all.
+ * ancestor's. Skips a glued child (see isGluedChild()): pinning a theme
+ * toggle's label absolute would freeze it at its pre-resize spot instead of
+ * letting it reflow inside the button's own growing/shrinking flex box (same
+ * as the plain, untracked icon markup beside it already does with no pinning
+ * at all), and pinning a failure line's message would stop the text
+ * rewrapping as a ta drags the line narrower, which is the whole point of
+ * resizing a line of text.
  * @param el the element about to be resized
  */
 function freezeDescendants(el) {
@@ -5272,7 +5549,7 @@ function freezeDescendants(el) {
   if (isLiveAreaEl(el)) return;
   var wraps = [];
   el.querySelectorAll(RESIZABLE_SEL).forEach(function (d) {
-    if (isThemeToggleLabel(d)) return;
+    if (isGluedChild(d)) return;
     var wrap = detachFromFlow(d);
     if (wrap.dataset.pinned !== "1") wraps.push(wrap);
   });
@@ -6532,13 +6809,21 @@ function buildCustomElementNode(d) {
        right-click menu only offers on that page - "under elements, with an
        indicator", see renderCtxMenuRoot()'s "Login page only" section.
 
-       Built out of three tracked pieces rather than one opaque widget,
-       because the spec asks for exactly that: the label is a plain
-       click-to-edit text field, the box around the input is "a regular
-       rectangle with text in it" (a data-resize-id div - so the radius/
-       border/color/shadow rows of the style popover all already work on it
-       with no new plumbing), and the greyed placeholder inside it is another
-       plain text field rather than the <input>'s own placeholder attribute,
+       The "Username"/"Password" caption above the box is deliberately NOT
+       part of this: it's ordinary markup in templates/login.html carrying an
+       ordinary data-edit-id (login.label.username/.password), because it has
+       no functionality beyond being a line of text and shouldn't inherit any
+       of this kind's special handling - no page-exclusive add menu, no
+       violet outline, no undeletable rectangle. It moves, restyles, deletes
+       and re-adds exactly like the card's own title and subtitle beside it.
+
+       What's left is built out of two tracked pieces rather than one opaque
+       widget, because the spec asks for exactly that: the box around the
+       input is "a regular rectangle with text in it" (a data-resize-id div -
+       so the radius/border/color/shadow rows of the style popover all
+       already work on it with no new plumbing), and the greyed placeholder
+       inside it is a plain text field rather than the <input>'s own
+       placeholder attribute,
        which is the only way it could be edited, moved and restyled like
        every other piece of text on the site. js/login.js hides it the moment
        the field has a value, so it still READS as a placeholder to a real
@@ -6547,7 +6832,7 @@ function buildCustomElementNode(d) {
        inside that rectangle.
 
        The box carries data-login-fixed: a field with its rectangle deleted
-       would be a label floating over nothing, so it's the same deliberate
+       would be an <input> with nothing around it, so it's the same deliberate
        exception the attachments tile's download button already makes (see
        deleteElement()) - move/resize/restyle it freely, just never delete
        it. The field as a WHOLE is deletable and re-addable like anything
@@ -6561,11 +6846,6 @@ function buildCustomElementNode(d) {
     /* like a live area, this is meant to span the card it's anchored into
        rather than sit at a hand-measured width, see applyElementAnchors() */
     el.setAttribute("data-login-fill", "1");
-    var lfLabel = document.createElement("span");
-    lfLabel.className = "login-field-label";
-    lfLabel.setAttribute("data-edit-id", d.id + ".label");
-    lfLabel.textContent = lfName === "password" ? "Password" : "Username";
-    el.appendChild(lfLabel);
     var lfBox = document.createElement("div");
     lfBox.className = "login-field-box";
     lfBox.setAttribute("data-resize-id", d.id + ".box");
@@ -6640,6 +6920,36 @@ function buildCustomElementNode(d) {
     leExpired.setAttribute("data-login-msg", "expired");
     leExpired.textContent = "You were logged out after a while of inactivity. Log in again.";
     el.appendChild(leExpired);
+  } else if (d.kind === "navPortal" || d.kind === "navDashboard" || d.kind === "navLogout") {
+    /* the landing page's three nav buttons, offered by the right-click menu on
+       that page only and only for the navbar state currently on show (see
+       renderCtxMenuRoot()'s "Landing page navbar" section): an Access portal
+       button belongs to the signed-out navbar, Dashboard and Log out to the
+       signed-in one, and offering any of them in the wrong state would be
+       offering to place something the page can never show.
+
+       Shaped like the ordinary "button" kind - one tagged element, its own
+       label click-to-edit, size/rounding/colour/border all the usual controls
+       - with one difference: what it DOES is wired to its data-nav-el marker
+       (wireNavButtons()/applyNavSessionState()), not to its id or its href, so
+       it can't be pointed somewhere else by accident and a placed copy works
+       the moment it lands. That's why these draw in the page-exclusive outline
+       colour in edit mode, the same signal the login page's own elements get.
+
+       data-nav-state is derived from the kind rather than stored on the
+       descriptor: a Log out button IS a signed-in-state thing, there's no
+       version of it that makes sense on a page nobody is signed in to. */
+    var navKind = d.kind === "navPortal" ? "portal" :
+      d.kind === "navDashboard" ? "dashboard" : "logout";
+    el = document.createElement(navKind === "logout" ? "button" : "a");
+    el.className = navKind === "logout" ? "btn btn-ghost" : "btn btn-accent2";
+    if (navKind === "logout") el.type = "button";
+    else el.href = navKind === "portal" ? "login.html" : "dashboard.html";
+    el.setAttribute("data-edit-id", d.id);
+    el.setAttribute("data-nav-el", navKind);
+    el.setAttribute("data-nav-state", navKind === "portal" ? "out" : "in");
+    el.textContent = navKind === "portal" ? "Access portal" :
+      navKind === "dashboard" ? "Dashboard" : "Log out";
   } else if (d.kind === "image" && d.url) {
     el = document.createElement("img");
     el.src = d.url;
@@ -7401,6 +7711,15 @@ function findBoundTileHit(x, y, kind) {
  */
 function finishAddedElement(el, d, kind, extra) {
   if (kind === "text" || kind === "button") wireTextField(el);
+  if (kind === "navPortal" || kind === "navDashboard" || kind === "navLogout") {
+    /* its label is the element itself (single tagged node, same as "button"),
+       so one wireTextField() call makes it typeable straight away; the click
+       behaviour needs no wiring at all, wireNavButtons() is delegated. This
+       just brings the new button up to date with the current state - which for
+       a Dashboard button means its href and role wording. */
+    wireTextField(el);
+    applyNavSessionState();
+  }
   /* an attachment icon only knows which glyph to draw once it's actually
      placed inside a tile, see repaintExtrasTypeIcons() */
   if (kind === "extrasIcon") repaintExtrasTypeIcons();
@@ -7427,9 +7746,10 @@ function finishAddedElement(el, d, kind, extra) {
   if (kind === "loginField" || kind === "loginButton" || kind === "loginError") {
     /* same shape as "theme" just below: the element a ta placed carries only
        data-resize-id, and the click-to-edit fields are the spans nested
-       inside it (label/placeholder, button label, the two error strings), so
-       each of those needs its own wireTextField() call to be typeable
-       straight away rather than only after the next reload. */
+       inside it (the box's placeholder, the button's label, the failure
+       line's two strings), so each of those needs its own wireTextField()
+       call to be typeable straight away rather than only after the next
+       reload. */
     el.querySelectorAll("[data-edit-id]").forEach(wireTextField);
     /* and the new box has to start out showing its placeholder / hidden,
        which is js/login.js's job (this page's own script, same window.-hook
@@ -7491,10 +7811,11 @@ function addCustomElement(kind, x, y, extra) {
   var d = { id: prefix + uid, kind: kind, page: currentPageKey(), left: Math.round(x), top: Math.round(y) };
   if (kind === "icon") { d.icon = extra.icon; d.url = extra.url; }
   if (kind === "image" || kind === "video") d.url = extra.url;
-  /* which credential this box collects, picked before placing (see
-     renderCtxMenuLoginFieldPicker()); it decides the input type, the
-     autocomplete hint and the default label/placeholder text, so it's baked
-     into the descriptor rather than resolved at render time */
+  /* which credential this box collects, picked before placing (the right-
+     click menu offers "Username box" and "Password box" as two separate
+     entries, see renderCtxMenuRoot()); it decides the input type, the
+     autocomplete hint and the default placeholder text, so it's baked into
+     the descriptor rather than resolved at render time */
   if (kind === "loginField") d.field = extra.field === "password" ? "password" : "username";
   if (kind === "datetime") {
     d.target = extra.target || new Date(Date.now() + 30 * 86400000).toISOString();
@@ -8135,11 +8456,36 @@ function renderCtxMenuRoot() {
         '<button type="button" data-add="loginButton">Log in button</button>' +
         '<button type="button" data-add="loginError">Error message</button>'
       : "") +
+    /* the landing page's own three, split the same way and gated one step
+       further: which of them can be placed depends on which navbar is on show,
+       since a Log out button has nothing to do on the page a signed-out
+       visitor sees and an Access portal button has nothing to do on the one a
+       signed-in visitor sees. The heading names the state so it's clear which
+       half of the page is being added to. */
+    (currentPageKey() === "index"
+      ? '<div class="ctx-title">Landing page navbar (' +
+          (navStateIsIn() ? "signed in" : "signed out") + ')</div>' +
+        (navStateIsIn()
+          ? '<button type="button" data-add="navDashboard">Dashboard button</button>' +
+            '<button type="button" data-add="navLogout">Log out button</button>'
+          : '<button type="button" data-add="navPortal">Access portal button</button>')
+      : "") +
     /* page-scoped rather than element-scoped, so it sits in its own section
        below "Add element" instead of under "This element" - see
        renderCtxMenuLinkList() for why the whole link inventory belongs in
        the editor at all */
     '<div class="ctx-title">This page</div>' +
+    /* the navbar-state switch. Page-scoped rather than element-scoped on
+       purpose: it has to be reachable from anywhere on the page, or a ta who
+       flipped to the signed-in navbar and then right-clicked somewhere in the
+       page body would have no way back. Landing page only - it's the only page
+       whose nav has two states. */
+    (currentPageKey() === "index"
+      ? '<button type="button" data-nav-state-toggle="1">Navbar: editing the ' +
+        (navStateIsIn() ? "signed-in state &rarr; show signed out"
+                        : "signed-out state &rarr; show signed in") +
+        '</button>'
+      : "") +
     '<button type="button" data-link-list="1">Links on this page</button>';
   CTX_MENU.querySelectorAll("button[data-add]").forEach(function (btn) {
     btn.addEventListener("click", function () { handleCtxAdd(btn.getAttribute("data-add")); });
@@ -8155,6 +8501,17 @@ function renderCtxMenuRoot() {
   if (deleteBtn) {
     deleteBtn.addEventListener("click", function () {
       if (CTX_TARGET_EL) deleteElement(CTX_TARGET_EL);
+      hideCtxMenu();
+    });
+  }
+  var navStateBtn = CTX_MENU.querySelector("[data-nav-state-toggle]");
+  if (navStateBtn) {
+    navStateBtn.addEventListener("click", function () {
+      /* like the failure line's message swap on the login page, this is a pure
+         view toggle - which of the two navbars a ta is currently looking at.
+         Never saved: which one a real visitor gets is decided by whether
+         they're signed in, see applyNavSessionState() */
+      toggleNavState();
       hideCtxMenu();
     });
   }
@@ -8300,15 +8657,34 @@ function renderCtxMenuLinkEditor() {
 /* tagged elements that navigate (or un-navigate) on their own with no
    content.links entry behind them at all, because a real click handler
    elsewhere in this codebase does the work: js/dashboard.js's logout() on the
-   student dashboard, updatePortalLink()'s own sign-out wiring on the landing
+   student dashboard, wireNavButtons()'s own sign-out wiring on the landing
    page. The links view below LISTS these - "what does Log out actually do?"
    is exactly the question it exists to answer - but never lets one be edited:
    a content.links url layered on top would just fight the handler that's
-   already wired to it. Keyed by data-edit-id/data-resize-id. */
+   already wired to it. Keyed by data-edit-id/data-resize-id.
+
+   A nav button a ta PLACES themselves is covered without being listed here:
+   its behaviour is keyed off data-nav-el, not off its id (which is a fresh
+   custom.* one), so navButtonAction() below answers for any number of them. */
 var BUILTIN_LINK_ACTIONS = {
   "dash.nav.logout": "Logs out, back to login.html",
-  "box.logoutBtn": "Logs out, stays on this page"
+  "navin.nav.logout": "Logs out, stays on this page"
 };
+
+/**
+ * What a landing-page nav button does, for the links view (see
+ * pageLinkInventory()). Keyed off the data-nav-el marker rather than the id,
+ * so a placed copy of one reads the same as the one that ships with the page.
+ * @param el a tracked element
+ * @return the description, or "" if el isn't a nav button
+ */
+function navButtonAction(el) {
+  var kind = el.getAttribute && el.getAttribute("data-nav-el");
+  if (kind === "portal") return "Goes to login.html";
+  if (kind === "dashboard") return "Goes to the dashboard for whoever is signed in";
+  if (kind === "logout") return "Logs out, stays on this page";
+  return "";
+}
 
 /**
  * Collects every link that exists on this page right now, split into the
@@ -8326,8 +8702,11 @@ var BUILTIN_LINK_ACTIONS = {
  * One row per id even where the same id is rendered more than once (the brand
  * text sits in both the nav and the footer), pointing at the first instance -
  * the same "an id is the unit, not a node" rule LINKS/applyOneLink() already
- * follow.
- * @return {set, builtin, elsewhere}, each an array of
+ * follow. Inline links (see the INLINE LINKS section) are the one exception:
+ * they're pieces of text, not elements, so several in one field are several
+ * rows, listed read-only since the place to change one is the text toolbar
+ * with the words themselves selected.
+ * @return {set, builtin, inline, elsewhere}, each an array of
  *   {id, el, url, editable, removable, note}
  */
 function pageLinkInventory() {
@@ -8342,8 +8721,9 @@ function pageLinkInventory() {
       set.push({ id: id, el: el, url: LINKS[id], editable: true, removable: true, note: "" });
       return;
     }
-    if (BUILTIN_LINK_ACTIONS[id]) {
-      builtin.push({ id: id, el: el, url: "", editable: false, removable: false, note: BUILTIN_LINK_ACTIONS[id] });
+    var action = BUILTIN_LINK_ACTIONS[id] || navButtonAction(el);
+    if (action) {
+      builtin.push({ id: id, el: el, url: "", editable: false, removable: false, note: action });
       return;
     }
     /* data-builtin-href is where a template link's real target survives the
@@ -8373,8 +8753,29 @@ function pageLinkInventory() {
     return { id: id, el: null, url: LINKS[id], editable: true, removable: true, note: "" };
   });
 
+  /* every linked run of words inside a text field. Read off the live dom like
+     everything else here, which is all it takes: an inline link has no
+     content.links entry to look up, it IS the field's markup. */
+  var inline = [];
+  document.querySelectorAll(INLINE_LINK_SEL).forEach(function (link) {
+    var field = link.closest("[data-edit-id]");
+    if (!field) return;
+    /* the row points at the FIELD, not at the link inside it: only tracked
+       elements can be selected (revealElement() puts the ring on whatever it's
+       handed), and the field is what a ta has to be looking at anyway before
+       they can select the words and press the toolbar's link button */
+    inline.push({
+      id: elId(field), el: field, url: inlineLinkHref(link), editable: false, removable: false,
+      note: '"' + (link.textContent || "").replace(/\s+/g, " ").trim() +
+        '" — select these words and use the toolbar\'s link button'
+    });
+  });
+
   function byId(a, b) { return a.id < b.id ? -1 : (a.id > b.id ? 1 : 0); }
-  return { set: set.sort(byId), builtin: builtin.sort(byId), elsewhere: elsewhere.sort(byId) };
+  return {
+    set: set.sort(byId), builtin: builtin.sort(byId),
+    inline: inline.sort(byId), elsewhere: elsewhere.sort(byId)
+  };
 }
 
 /**
@@ -8523,9 +8924,10 @@ function renderCtxMenuLinkList() {
   }
   addSection("Set here", inv.set);
   addSection("Built in", inv.builtin);
+  addSection("Inside text", inv.inline);
   addSection("Set on another page", inv.elsewhere);
 
-  if (!inv.set.length && !inv.builtin.length && !inv.elsewhere.length) {
+  if (!inv.set.length && !inv.builtin.length && !inv.inline.length && !inv.elsewhere.length) {
     var msg = document.createElement("div");
     msg.className = "ctx-file-msg";
     msg.textContent = 'Nothing on this page links anywhere yet. Right-click an element and choose "Add link".';
@@ -9217,8 +9619,12 @@ function wireResizable() {
        the area around the tiles still knows which one to act on, see
        ctxTileFor() */
     noteTileSelection(el);
-    /* mid-edit: leave the mouse to text selection/caret placement */
-    if (el.isContentEditable) return;
+    /* mid-edit: leave the mouse to text selection/caret placement. Tested on
+       the real event target, not just the resolved element: a glued child
+       resolves UP to its parent (see resolveSelectableTarget()), which isn't
+       itself contentEditable, so dragging across the text to select a few
+       words would otherwise drag the whole element instead. */
+    if (el.isContentEditable || (e.target && e.target.isContentEditable)) return;
     /* a reel tile is selectable (so its style popover is reachable) but
        can't move, resize, delete, or be shift-selected into a group -
        any of those would detachFromFlow() it out of the flex track it
@@ -9521,6 +9927,19 @@ var ALIGN_ICONS = {
     '<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>'
 };
 
+/* the toolbar's "link the selected words" / "unlink them again" pair (see
+   buildTextToolbar()), same minimal stroke-icon style as ALIGN_ICONS above:
+   a chain link, and the same chain with a stroke through it. */
+var LINK_ICONS = {
+  link: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+    '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/>' +
+    '<path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>',
+  unlink: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+    '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/>' +
+    '<path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>' +
+    '<line x1="3" y1="3" x2="21" y2="21"/></svg>'
+};
+
 /* the style popover's Flip horizontal/Flip vertical buttons (buildStyleMenu(),
    icon/image/video/box elements only, see toggleStyleMenu()): two arrows
    pointing away from a mirror axis, same minimal stroke-icon style as
@@ -9651,6 +10070,7 @@ function buildTextToolbar() {
     '<button type="button" class="tt-bold" title="Bold"><b>B</b></button>' +
     '<button type="button" class="tt-italic" title="Italic"><i>I</i></button>' +
     '<button type="button" class="tt-underline" title="Underline"><u>U</u></button>' +
+    '<button type="button" class="tt-link" title="Link the selected text">' + LINK_ICONS.link + '</button>' +
     '<input type="color" class="tt-color" title="Text color (selection)">' +
     '<button type="button" class="tt-color-dark-toggle" title="Edit other mode\'s text color">🌙</button>' +
     '<input type="color" class="tt-color-dark" title="Text color (selection), other mode" style="display:none">' +
@@ -9663,7 +10083,18 @@ function buildTextToolbar() {
     '<button type="button" class="ls-dn" title="Tighter letter spacing">Sp-</button>' +
     '<button type="button" class="ls-up" title="Wider letter spacing">Sp+</button>' +
     '<span class="tt-sep"></span>' +
-    '<button type="button" class="tt-fx" title="Insert a live value from a variable">ƒx</button>';
+    '<button type="button" class="tt-fx" title="Insert a live value from a variable">ƒx</button>' +
+    /* the link editor itself, a full-width row of its own that only appears
+       once the link button is pressed (the toolbar is flex-wrap, so a 100%
+       wide child always lands on its own line). Kept inside TEXT_TOOLBAR
+       rather than floating separately so the field's blur handler already
+       treats typing a url as "still editing" with no extra plumbing, exactly
+       like the font dropdown and the colour pickers. */
+    '<span class="tt-linkbar">' +
+      '<input type="url" class="tt-link-input" placeholder="https://...">' +
+      '<button type="button" class="tt-link-ok" title="Apply">Link</button>' +
+      '<button type="button" class="tt-link-rm" title="Remove this link">' + LINK_ICONS.unlink + '</button>' +
+    '</span>';
   document.body.appendChild(TEXT_TOOLBAR);
 
   TEXT_TOOLBAR.querySelectorAll("button").forEach(function (btn) {
@@ -9782,6 +10213,77 @@ function buildTextToolbar() {
   TEXT_TOOLBAR.querySelector(".tt-fx").addEventListener("click", function () {
     if (!TEXT_TOOLBAR_EL || this.disabled) return;
     openFormulaMenu(TEXT_TOOLBAR_EL, null);
+  });
+
+  /* the inline link editor (see the INLINE LINKS section above). The one
+     thing it has to be careful about is the selection: the moment focus moves
+     to the url input, the document selection is the input's own, so the words
+     that were selected in the field are gone. The range is cloned when the
+     bar opens and restored just before the link is applied - a Range keeps
+     tracking its text through dom changes, it's only the SELECTION that gets
+     taken away. */
+  var linkBar = TEXT_TOOLBAR.querySelector(".tt-linkbar");
+  var linkInput = TEXT_TOOLBAR.querySelector(".tt-link-input");
+  var linkRange = null;
+  linkInput.addEventListener("mousedown", function (e) { e.stopPropagation(); });
+
+  function closeLinkBar() {
+    linkBar.classList.remove("show");
+    linkRange = null;
+    positionTextToolbar();
+  }
+
+  function commitInlineLink(url) {
+    var field = TEXT_TOOLBAR_EL;
+    if (!field) return;
+    var before = field.innerHTML;
+    var sel = window.getSelection();
+    if (linkRange) { sel.removeAllRanges(); sel.addRange(linkRange); }
+    var changed = url
+      ? applyInlineLinkToSelection(field, url)
+      : removeInlineLinkAtSelection(field);
+    closeLinkBar();
+    field.focus();
+    if (!changed) return;
+    /* same commit path a typed edit takes, so an inline link is one undo step
+       and lands in the preview snapshot like any other text change */
+    commitTextFieldChange(field, before, field.innerHTML);
+    positionRing();
+    updateTextToolbarState();
+  }
+
+  TEXT_TOOLBAR.querySelector(".tt-link").addEventListener("click", function () {
+    if (!TEXT_TOOLBAR_EL || this.disabled) return;
+    if (linkBar.classList.contains("show")) { closeLinkBar(); return; }
+    var sel = window.getSelection();
+    linkRange = sel && sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
+    var existing = inlineLinkAt(TEXT_TOOLBAR_EL);
+    linkInput.value = existing ? inlineLinkHref(existing) : "";
+    TEXT_TOOLBAR.querySelector(".tt-link-rm").style.display = existing ? "" : "none";
+    linkBar.classList.add("show");
+    /* the bar is a whole extra row, so the toolbar has to re-park itself or
+       it would now be covering the text being linked */
+    positionTextToolbar();
+    linkInput.focus();
+    linkInput.select();
+  });
+
+  TEXT_TOOLBAR.querySelector(".tt-link-ok").addEventListener("click", function () {
+    var url = linkInput.value.trim();
+    if (url) commitInlineLink(url);
+    else closeLinkBar();
+  });
+  TEXT_TOOLBAR.querySelector(".tt-link-rm").addEventListener("click", function () {
+    commitInlineLink("");
+  });
+  linkInput.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      var url = linkInput.value.trim();
+      if (url) commitInlineLink(url);
+      else closeLinkBar();
+    }
+    if (e.key === "Escape") { e.preventDefault(); closeLinkBar(); if (TEXT_TOOLBAR_EL) TEXT_TOOLBAR_EL.focus(); }
   });
 
   TEXT_TOOLBAR.querySelector(".tt-font").addEventListener("change", function () {
@@ -9956,6 +10458,20 @@ function updateTextToolbarState() {
      its rendered text on save, so offer the button nowhere it can't work */
   var id = TEXT_TOOLBAR_EL.getAttribute("data-edit-id") || "";
   TEXT_TOOLBAR.querySelector(".tt-fx").disabled = id.indexOf("logistics.") === 0;
+
+  /* the link button needs something to act ON: either words to wrap, or a
+     link the caret is already sitting in to retarget. Offered greyed out
+     rather than hidden, so it's always in the same place and its tooltip
+     still explains what it wants. Same logistics.* exclusion as ƒx just
+     above, and for the same reason: those two fields save as plain
+     textContent, so any markup put in them is stripped on the way out. */
+  var sel = window.getSelection();
+  var hasWords = !!(sel && sel.rangeCount && !sel.getRangeAt(0).collapsed);
+  var inLink = !!inlineLinkAt(TEXT_TOOLBAR_EL);
+  var linkBtn = TEXT_TOOLBAR.querySelector(".tt-link");
+  linkBtn.disabled = id.indexOf("logistics.") === 0 || (!hasWords && !inLink);
+  linkBtn.classList.toggle("active", inLink);
+  linkBtn.title = inLink ? "Edit this link" : "Link the selected text";
 }
 
 /**
@@ -9980,14 +10496,25 @@ function showTextToolbar(el) {
     TEXT_TOOLBAR.querySelector(".tt-font").value = current;
     updateFontDeleteButton();
   });
-  /* shown (and thus laid out) before measuring: the toolbar wraps onto a
-     second row past a certain width (flex-wrap, see .text-toolbar's
-     max-width), so its real height varies with viewport width and can't be
-     hardcoded, it has to be read off the actual rendered element. Adding
-     the class and reading offsetHeight both happen synchronously here, so
-     the browser never paints the still-unpositioned toolbar in between. */
+  /* shown (and thus laid out) before measuring, see positionTextToolbar() */
   TEXT_TOOLBAR.classList.add("show");
-  var r = el.getBoundingClientRect();
+  positionTextToolbar();
+}
+
+/**
+ * Parks the toolbar just above the field it's editing (below it if there's no
+ * room), clamped inside the viewport. Split out of showTextToolbar() because
+ * the toolbar's height isn't fixed for the life of an edit session: opening
+ * the link bar (see buildTextToolbar()) adds a whole row, and a toolbar
+ * positioned for its old height would then overlap the very text a ta is
+ * trying to link. Every caller re-measures rather than caching, since the
+ * toolbar also wraps onto extra rows on its own past a certain width
+ * (flex-wrap, see .text-toolbar's max-width) - its real height can only be
+ * read off the rendered element.
+ */
+function positionTextToolbar() {
+  if (!TEXT_TOOLBAR || !TEXT_TOOLBAR_EL) return;
+  var r = TEXT_TOOLBAR_EL.getBoundingClientRect();
   var th = TEXT_TOOLBAR.offsetHeight;
   var top = r.top + window.scrollY - th - 6;
   /* no room above (the field is flush against the top of the page, eg. in
@@ -10004,7 +10531,11 @@ function showTextToolbar(el) {
 /** Hides the text toolbar once the edit ends. */
 function hideTextToolbar() {
   TEXT_TOOLBAR_EL = null;
-  if (TEXT_TOOLBAR) TEXT_TOOLBAR.classList.remove("show");
+  if (!TEXT_TOOLBAR) return;
+  TEXT_TOOLBAR.classList.remove("show");
+  /* the link bar is per-edit-session state (it holds a cloned range into the
+     field that just went away), so it never carries over into the next one */
+  TEXT_TOOLBAR.querySelector(".tt-linkbar").classList.remove("show");
 }
 
 /* the text toolbar's "ƒx" button's own popover: picks an operation + one or
@@ -10258,6 +10789,11 @@ function wireTextField(el) {
     var sel = window.getSelection();
     sel.removeAllRanges();
     sel.addRange(range);
+    /* re-primed now that the whole field is selected: showTextToolbar() ran
+       before this, when the selection was still wherever the click left it,
+       so anything keyed off the selection (the link button, see
+       updateTextToolbarState()) was reading the wrong state */
+    updateTextToolbarState();
   });
 
   el.addEventListener("keydown", function (e) {
@@ -11411,49 +11947,161 @@ function saveEditedRotate(id, deg) {
   try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
 }
 
+/* ---------------------------------------------------------------------------
+   THE LANDING PAGE'S TWO NAVBARS
+
+   templates/index.html ships two complete <nav> elements, one for a signed-out
+   visitor (an "Access portal" button, and "Apply Now" among the links) and one
+   for someone already signed in (a Dashboard button and a Log out button, and
+   no invitation to sign up again). Exactly one of them is in the document at a
+   time, so on the live site this is invisible - it's just what the nav looks
+   like to whoever is reading it.
+
+   It used to be one nav that rewrote itself: the same button changed its own
+   text and href on load, and a hidden Log out button was un-hidden next to it.
+   That worked for a visitor and was unreachable for a ta - the visual editor
+   previews the page as a stranger sees it, so the signed-in nav could never be
+   looked at, let alone styled, and the self-rewriting button needed a special
+   case in applyTextOverrides() to stop a saved override for one state being
+   applied while the page was in the other.
+
+   Two real navbars with no shared ids fixes both: each state is an ordinary
+   page a ta edits with the ordinary tools, and the editor's Navbar toggle (see
+   renderCtxMenuRoot()) is the only new concept. The cost, deliberately
+   accepted, is that they are genuinely separate - a wording or colour change
+   made to one navbar is a change to that state alone and has to be made in the
+   other state too.
+   --------------------------------------------------------------------------- */
+
+/* which navbar is currently in the document flow: "out" (signed out) or "in"
+   (signed in). Decided by the session on a real visit (applyNavSessionState()),
+   and by hand in the visual editor, where a ta is always "signed out" as far as
+   the preview is concerned. Editor-only view state, never saved: what a real
+   visitor sees is decided by whether they're actually logged in, exactly like
+   the login page's two failure strings. */
+var NAV_STATE = "out";
+
+/** @return true while the signed-in navbar is the one on show */
+function navStateIsIn() { return NAV_STATE === "in"; }
+
 /**
- * Still logged in from a previous visit? Point the nav link back at your
- * portal and show a log out button, instead of always saying "Access
- * portal", which read as having been logged out. Skipped in preview mode:
- * a ta previewing the landing page is always logged in as themselves, but
- * a real visitor wouldn't be, so the preview should show the logged-out nav.
+ * Shows the navbar for one state and takes the other out of the document,
+ * along with any element a ta has placed that belongs to a specific state (a
+ * placed Log out button is meaningless on a signed-out page, so it's tagged
+ * data-nav-state="in" by buildCustomElementNode() and follows its navbar).
+ *
+ * Toggles a class rather than writing an inline display, so it can't fight -
+ * or be silently undone by - the inline display a deleted element already
+ * carries (see setHiddenVisual()): an element that's both deleted and in the
+ * inactive state stays deleted when the state comes back.
+ * @param state "out" or "in"
  */
-function updatePortalLink() {
+function applyNavState(state) {
+  NAV_STATE = state === "in" ? "in" : "out";
+  document.querySelectorAll("[data-nav-state]").forEach(function (el) {
+    el.classList.toggle("nav-state-off", el.getAttribute("data-nav-state") !== NAV_STATE);
+  });
+}
+
+/**
+ * Runs fn with BOTH navbars in the document, then puts the inactive one back.
+ * The whole override pipeline measures elements as it applies saved geometry
+ * (detachFromFlow() sizes an element's wrap from its live rect), and an
+ * element inside a display:none navbar measures zero - so a size or position a
+ * ta saved in one state would come back as a 0x0 box on any load that starts
+ * in the other one. Laying both out for the duration is the fix, and it costs
+ * nothing visually: this is one synchronous block, so the browser never paints
+ * the two-navbar intermediate state.
+ * @param fn the work to run
+ */
+function withNavbarsLaidOut(fn) {
+  var off = Array.prototype.slice.call(document.querySelectorAll(".nav-state-off"));
+  off.forEach(function (el) { el.classList.remove("nav-state-off"); });
+  try { fn(); } finally { off.forEach(function (el) { el.classList.add("nav-state-off"); }); }
+}
+
+/**
+ * Flips which navbar the visual editor is showing (and therefore editing).
+ * Driven from the right-click menu's Navbar row, landing page only.
+ */
+function toggleNavState() {
+  applyNavState(navStateIsIn() ? "out" : "in");
+  /* the selection can't stay parked on something that just left the page */
+  if (RING_EL && RING_EL.closest && RING_EL.closest(".nav-state-off")) {
+    RING_EL = null;
+    RING.style.display = "none";
+  }
+  positionRing();
+  /* the page just got 0px taller or shorter (the two navbars are the same
+     height), but an anchored element re-pins for free and it costs nothing to
+     be right if a ta has resized one of the navbars */
+  applyElementAnchors();
+}
+
+/**
+ * Picks the navbar this visit should see, and fills in the signed-in one's
+ * role-dependent details. Called once on DOMContentLoaded (so the right nav is
+ * up before the content fetch resolves) and again after every override pass,
+ * since a placed nav button only exists after renderCustomElements() has run.
+ */
+function applyNavSessionState() {
+  if (!document.querySelector("[data-nav-state]")) return;
   if (isPreviewMode()) {
-    /* previewing isn't a real visit: don't let "Access portal", the brand
-       logo, or "See more in the gallery" wander the ta off into another
-       page while they're just checking their edits (the gallery gets its
-       own preview tab, separate from the landing page, see js/preview.js) */
-    neuterLink(document.getElementById("portalLink"));
-    neuterLink(document.querySelector(".brand"), false);
+    /* previewing isn't a real visit: don't let a nav button, the brand logo,
+       or "See more in the gallery" wander the ta off into another page while
+       they're just checking their edits (the gallery gets its own preview tab,
+       separate from the landing page, see js/preview.js). The navbar on show
+       stays whatever the editor's own toggle last chose. */
+    document.querySelectorAll("[data-nav-el]").forEach(function (el) { neuterLink(el, false); });
+    document.querySelectorAll(".brand").forEach(function (el) { neuterLink(el, false); });
     neuterLink(document.getElementById("galleryLink"));
+    applyNavState(NAV_STATE);
     return;
   }
-  var link = document.getElementById("portalLink");
-  var outBtn = document.getElementById("logoutBtn");
-  var navJoin = document.getElementById("navJoinLink");
-  if (!link) return;
   var session = localStorage.getItem("session");
   var role = localStorage.getItem("role");
+  applyNavState(session && role ? "in" : "out");
   if (!session || !role) return;
-  link.textContent = role === "ta" ? "Staff Portal" : "Dashboard";
-  link.href = role === "ta" ? "instructor.html" : "dashboard.html";
-  /* Apply Now next to Gallery would be a dead prompt to sign up again,
-     hide it while logged in (only in this nav bar, not the rest of the page) */
-  if (navJoin) navJoin.style.display = "none";
-  if (!outBtn) return;
-  outBtn.style.display = "";
-  outBtn.addEventListener("click", function () {
+  document.querySelectorAll('[data-nav-el="dashboard"]').forEach(function (el) {
+    el.setAttribute("href", role === "ta" ? "instructor.html" : "dashboard.html");
+    /* "Dashboard" is only the default wording - a ta who typed their own
+       stays typed. data-overridden is applyTextOverrides()' own record of
+       whether a saved override exists, the same signal refreshThemeToggles()
+       uses to decide whether a theme button's label is still its to write. */
+    if (el.dataset.overridden !== "1") {
+      el.textContent = role === "ta" ? "Staff Portal" : "Dashboard";
+    }
+  });
+}
+
+/**
+ * Wires the three nav buttons' actual behaviour. Delegated off document and
+ * keyed on data-nav-el rather than on an id or an href, so a button a ta
+ * places from the right-click menu ten minutes into a session works the
+ * instant it lands, with no re-wiring - the same convention js/login.js
+ * follows for the login form.
+ *
+ * Only Log out needs a handler at all: Access portal and Dashboard are real
+ * links with real hrefs (applyNavSessionState() points Dashboard at the right
+ * one for the role), which is what makes ctrl-click and the status bar work.
+ */
+function wireNavButtons() {
+  document.addEventListener("click", function (e) {
+    var el = e.target.closest && e.target.closest("[data-nav-el]");
+    if (!el) return;
+    if (isPreviewMode()) { e.preventDefault(); return; }
+    if (el.getAttribute("data-nav-el") !== "logout") return;
+    e.preventDefault();
     localStorage.removeItem("session");
     localStorage.removeItem("role");
     localStorage.removeItem("token");
     localStorage.removeItem("last_active");
-    link.textContent = "Access portal";
-    link.href = "login.html";
-    if (navJoin) navJoin.style.display = "";
-    outBtn.style.display = "none";
+    /* straight back to the signed-out navbar, no reload: same page, same
+       scroll position, just no longer signed in */
+    applyNavSessionState();
   });
 }
+wireNavButtons();
 
 /**
  * The shared tail of a real page's (as opposed to the object mini editor's
@@ -11471,6 +12119,31 @@ function updatePortalLink() {
  *   to merge so it just lets this default
  */
 function applySharedEditorOverrides(data, textMap) {
+  /* every pass below that applies saved geometry measures the element it's
+     applying to, and the landing page keeps one of its two navbars out of the
+     document - so the whole pipeline runs with both of them laid out and the
+     inactive one is put back at the end, see withNavbarsLaidOut(). A no-op on
+     every other page. */
+  withNavbarsLaidOut(function () { applySharedOverridePasses(data, textMap); });
+  applyNavSessionState();
+  if (isPreviewMode() && isEditMode()) {
+    wireResizable();
+    wireClickToEdit();
+    wireAddElementMenu();
+    /* fire-and-forget: only needed once a ta actually opens the right-click
+       menu's "Object..." picker, not before the editor can be used at all */
+    fetchObjectsLibrary().then(function (list) { OBJECTS_LIBRARY = list; });
+  }
+}
+
+/**
+ * Every apply*Overrides() pass, in the order they have to run in. Split out of
+ * applySharedEditorOverrides() only so the whole run can be wrapped, see
+ * withNavbarsLaidOut(); nothing else should call this directly.
+ * @param data see applySharedEditorOverrides()
+ * @param textMap see applySharedEditorOverrides()
+ */
+function applySharedOverridePasses(data, textMap) {
   renderCustomElements(data.custom_elements);
   renderDuplicates(data.duplicates);
   applyTextOverrides(textMap !== undefined ? textMap : (data.text || {}));
@@ -11524,14 +12197,6 @@ function applySharedEditorOverrides(data, textMap) {
      which error string is showing - and only this pass knows when they
      actually exist in the dom */
   if (window.refreshLoginPage) window.refreshLoginPage();
-  if (isPreviewMode() && isEditMode()) {
-    wireResizable();
-    wireClickToEdit();
-    wireAddElementMenu();
-    /* fire-and-forget: only needed once a ta actually opens the right-click
-       menu's "Object..." picker, not before the editor can be used at all */
-    fetchObjectsLibrary().then(function (list) { OBJECTS_LIBRARY = list; });
-  }
 }
 
 /**
@@ -11691,7 +12356,10 @@ document.addEventListener("DOMContentLoaded", function () {
      once that's settled, instead of this file auto-running it here. */
   if (isObjectMode()) return;
 
-  updatePortalLink();
+  /* before the content fetch resolves, so the right navbar is up on the first
+     paint rather than the page visibly swapping one for the other. Runs again
+     at the end of every override pass, once any placed nav button exists. */
+  applyNavSessionState();
 
   var slot = document.getElementById("heroCountdown");
   var grid = document.getElementById("logisticsGrid");

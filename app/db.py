@@ -41,12 +41,24 @@ def _idle_seconds(role):
 # js/main.js): the sticky <nav> itself plus everything inside it, so the
 # whole nav bar reads as promoted, not just its outer box. matches the
 # data-edit-id/data-resize-id values on templates/index.html's <nav>.
-NAV_FIXED_IDS = [
+#
+# BOTH navbars: the landing page has one for a signed-out visitor and one for
+# someone already signed in (the "navin." half, see the two <nav> elements in
+# templates/index.html and applyNavSessionState() in js/main.js). They're
+# edited independently, so each needs its own entry here.
+_NAV_OUT_FIXED_IDS = [
     "box.nav", "box.brand", "img.brand.nav", "nav.brand",
     "nav.link.about", "nav.link.gallery", "nav.link.learn",
     "nav.link.schedule", "nav.link.prizes", "nav.link.apply",
-    "nav.portal", "box.themeBtn", "box.logoutBtn",
+    "nav.portal", "box.themeBtn",
 ]
+_NAV_IN_FIXED_IDS = [
+    "navin.box.nav", "navin.box.brand", "navin.img.brand.nav", "navin.nav.brand",
+    "navin.nav.link.about", "navin.nav.link.gallery", "navin.nav.link.learn",
+    "navin.nav.link.schedule", "navin.nav.link.prizes",
+    "navin.box.themeBtn", "navin.nav.dashboard", "navin.nav.logout",
+]
+NAV_FIXED_IDS = _NAV_OUT_FIXED_IDS + _NAV_IN_FIXED_IDS
 
 # the "What You'll Learn" section's reel (see the "reel" custom-element kind
 # in js/main.js): used to be hardcoded markup in templates/index.html, now a
@@ -494,13 +506,13 @@ _LOGIN_USER_ENTRY = {
     "id": "seed.login.field.username", "kind": "loginField", "field": "username",
     "page": "login",
     "anchor": "#loginUserAnchor", "left": 0, "top": 0,
-    "w": 300, "h": 74,
+    "w": 300, "h": 48,
 }
 _LOGIN_PASS_ENTRY = {
     "id": "seed.login.field.password", "kind": "loginField", "field": "password",
     "page": "login",
     "anchor": "#loginPassAnchor", "left": 0, "top": 0,
-    "w": 300, "h": 74,
+    "w": 300, "h": 48,
 }
 _LOGIN_SUBMIT_ENTRY = {
     "id": "seed.login.submit", "kind": "loginButton",
@@ -889,6 +901,8 @@ def init_db():
     _migrate_dashboard_extras_area(conn)
     _migrate_dashboard_days_area(conn)
     _migrate_login_page(conn)
+    _migrate_login_labels(conn)
+    _migrate_landing_nav_states(conn)
     _migrate_custom_elements_page_scope(conn)
     _migrate_progress_bar_object(conn)
     conn.close()
@@ -1365,6 +1379,111 @@ def _migrate_login_page(conn):
             if box_id not in radius:
                 radius[box_id] = 10
                 changed = True
+        return data, changed
+
+    row = conn.execute("SELECT data FROM content WHERE id = 1").fetchone()
+    if row:
+        data, changed = patch(json.loads(row["data"]))
+        if changed:
+            conn.execute("UPDATE content SET data = ? WHERE id = 1", (json.dumps(data),))
+
+    for prow in conn.execute("SELECT id, data FROM profiles").fetchall():
+        data, changed = patch(json.loads(prow["data"]))
+        if changed:
+            conn.execute("UPDATE profiles SET data = ? WHERE id = ?", (json.dumps(data), prow["id"]))
+
+    conn.commit()
+
+
+def _migrate_landing_nav_states(conn):
+    """one-time patch (same meta-flag trick as _migrate_login_page() above)
+    promoting the landing page's new signed-in navbar to "fixed" in every
+    already-existing content blob/profile, the way the signed-out one has
+    always been.
+
+    Nothing else needs migrating: the signed-out navbar kept every id it had,
+    so every override a ta already saved still lands on it, and the signed-in
+    one is brand new markup with brand new ids that simply has no saved
+    overrides yet. Only the fixed-element defaults are a stored list rather
+    than a fallback, so only they have to be topped up.
+    @param conn an open db connection
+    """
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO meta (key, value) VALUES ('landing_nav_states', '1')"
+    )
+    conn.commit()
+    if cur.rowcount == 0:
+        return
+
+    def patch(data):
+        fixed = data.get("fixed_elements")
+        if not isinstance(fixed, list):
+            return data, False
+        missing = [i for i in _NAV_IN_FIXED_IDS if i not in fixed]
+        if not missing:
+            return data, False
+        fixed.extend(missing)
+        return data, True
+
+    row = conn.execute("SELECT data FROM content WHERE id = 1").fetchone()
+    if row:
+        data, changed = patch(json.loads(row["data"]))
+        if changed:
+            conn.execute("UPDATE content SET data = ? WHERE id = 1", (json.dumps(data),))
+
+    for prow in conn.execute("SELECT id, data FROM profiles").fetchall():
+        data, changed = patch(json.loads(prow["data"]))
+        if changed:
+            conn.execute("UPDATE profiles SET data = ? WHERE id = ?", (json.dumps(data), prow["id"]))
+
+    conn.commit()
+
+
+# ids the two credential boxes used to stamp on their own "Username"/
+# "Password" captions, back when the caption was built as part of the
+# loginField element, mapped to the plain data-edit-id the caption carries now
+# that it's ordinary markup in templates/login.html. A caption has no
+# functionality beyond being a line of text, so it had no business inheriting
+# a page-exclusive element kind's special handling.
+_LOGIN_LABEL_RENAMES = {
+    "seed.login.field.username.label": "login.label.username",
+    "seed.login.field.password.label": "login.label.password",
+}
+
+
+def _migrate_login_labels(conn):
+    """one-time patch (same meta-flag trick as _migrate_login_page() above)
+    carrying any saved edit to a credential box's caption over to the caption's
+    new id, so a ta who had already reworded, restyled, moved or deleted one
+    still sees their own version rather than a reset "Username".
+
+    Renames rather than copies, and does it generically across every id-keyed
+    map and every id list in the blob (content.text, .font_sizes, .colors,
+    .sizes, .positions, .hidden, .layer_order, ...) instead of naming each one:
+    an override left behind under a dead id is invisible junk no page can ever
+    reach again, and the list of maps an element id can appear in only grows.
+    @param conn an open db connection
+    """
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO meta (key, value) VALUES ('login_labels_split', '1')"
+    )
+    conn.commit()
+    if cur.rowcount == 0:
+        return
+
+    def patch(data):
+        changed = False
+        for value in data.values():
+            if isinstance(value, dict):
+                for old, new in _LOGIN_LABEL_RENAMES.items():
+                    if old in value and new not in value:
+                        value[new] = value.pop(old)
+                        changed = True
+            elif isinstance(value, list):
+                for i, item in enumerate(value):
+                    if isinstance(item, str) and item in _LOGIN_LABEL_RENAMES:
+                        value[i] = _LOGIN_LABEL_RENAMES[item]
+                        changed = True
         return data, changed
 
     row = conn.execute("SELECT data FROM content WHERE id = 1").fetchone()

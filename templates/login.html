@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/style.css?v=8" />
+  <link rel="stylesheet" href="css/style.css?v=10" />
 </head>
 <body class="mono">
 
@@ -73,20 +73,34 @@
            #dashProgressAnchor does on the dashboard. Their heights are what
            the old markup measured (see .login-anchor in css/style.css, which
            is also where the editor-only taller error slot lives), so an
-           untouched page lays out identically to before. -->
+           untouched page lays out identically to before.
+
+           The two captions are NOT part of those elements and never were
+           meant to be: a word sitting above a box has no functionality to
+           protect, so it's plain markup with a plain data-edit-id, editable,
+           movable and deletable exactly like the card's title and subtitle
+           above it (see buildCustomElementNode()'s "loginField" kind, which
+           deliberately builds no label of its own). -->
+      <span class="login-field-label" data-edit-id="login.label.username">Username</span>
       <div class="login-anchor" id="loginUserAnchor" aria-hidden="true"></div>
+      <span class="login-field-label" data-edit-id="login.label.password">Password</span>
       <div class="login-anchor" id="loginPassAnchor" aria-hidden="true"></div>
       <div class="login-anchor" id="loginSubmitAnchor" aria-hidden="true"></div>
       <div class="login-anchor" id="loginErrorAnchor" aria-hidden="true"></div>
 
-      <p class="note auth-note" data-edit-id="login.note">Access credentials are provided only to accepted participants. <a href="https://www.youtube.com/watch?v=dQw4w9WgXcQ" target="_blank" rel="noopener">Apply here.</a></p>
+      <!-- "Apply here." is an inline link (js/main.js's INLINE_LINK_CLASS):
+           only that phrase navigates, the rest of the sentence is ordinary
+           text, and a ta can retarget it, extend it over more words or drop
+           it entirely from the text toolbar's link button - which is exactly
+           what the class marks it as. Underlines on hover, see css/style.css. -->
+      <p class="note auth-note" data-edit-id="login.note">Access credentials are provided only to accepted participants. <a class="txt-link" href="https://www.youtube.com/watch?v=dQw4w9WgXcQ" target="_blank" rel="noopener">Apply here.</a></p>
     </div>
 
     <p class="auth-legal" data-edit-id="login.legal"><a href="#">Privacy Policy</a> · <a href="#">Terms of Service</a></p>
   </main>
 
   <script src="js/theme.js?v=3"></script>
-  <script src="js/main.js?v=9"></script>
-  <script src="js/login.js?v=4"></script>
+  <script src="js/main.js?v=11"></script>
+  <script src="js/login.js?v=5"></script>
 </body>
 </html>

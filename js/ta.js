@@ -28,7 +28,14 @@ var NAV_FIXED_IDS = [
   "box.nav", "box.brand", "img.brand.nav", "nav.brand",
   "nav.link.about", "nav.link.gallery", "nav.link.learn",
   "nav.link.schedule", "nav.link.prizes", "nav.link.apply",
-  "nav.portal", "box.themeBtn", "box.logoutBtn"
+  "nav.portal", "box.themeBtn",
+  /* and the same again for the landing page's signed-in navbar, which is a
+     separate navbar with its own ids, see applyNavSessionState() in
+     js/main.js */
+  "navin.box.nav", "navin.box.brand", "navin.img.brand.nav", "navin.nav.brand",
+  "navin.nav.link.about", "navin.nav.link.gallery", "navin.nav.link.learn",
+  "navin.nav.link.schedule", "navin.nav.link.prizes",
+  "navin.box.themeBtn", "navin.nav.dashboard", "navin.nav.logout"
 ];
 
 /**

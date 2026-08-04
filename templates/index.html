@@ -23,13 +23,29 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap"
     rel="stylesheet" />
-  <link rel="stylesheet" href="css/style.css?v=8" />
+  <link rel="stylesheet" href="css/style.css?v=10" />
 </head>
 
 <body class="mono">
 
-  <!-- ===== nav ===== -->
-  <nav class="nav" data-resize-id="box.nav">
+  <!-- ===== nav =====
+       TWO navbars, not one: this page looks different to a signed-out visitor
+       (one "Access portal" button) than to someone already signed in (a
+       Dashboard button and a Log out button, and no "Apply Now" prompting them
+       to sign up again). Only ever one of them is in the document flow - see
+       applyNavSessionState() in js/main.js, which picks by session on a real
+       visit, and the visual editor's own "Navbar" toggle, which picks by hand
+       so a ta can see and edit the signed-in one at all.
+
+       They share NO ids, deliberately: the two are edited independently, so a
+       wording/size/colour change made to one is a change to that state only
+       and has to be made in the other state too. The signed-out nav keeps the
+       plain ids (nav.brand, box.themeBtn, ...) it has always had, which are
+       the same ones the login page and student dashboard use, so one edit to
+       the wordmark or the theme toggle still applies across all three; the
+       signed-in one carries the same names under a "navin." prefix and is
+       landing-page-only. -->
+  <nav class="nav" data-resize-id="box.nav" data-nav-state="out">
     <div class="wrap nav-inner">
       <a href="index.html" class="brand" data-resize-id="box.brand"><img src="assets/logo.png" class="brand-logo"
           data-resize-id="img.brand.nav" alt="ECE Workshops" /> <span data-edit-id="nav.brand">ECE Workshops</span></a>
@@ -39,7 +55,6 @@
         <a href="#learn" data-edit-id="nav.link.learn">What you'll learn</a>
         <a href="#schedule" data-edit-id="nav.link.schedule">Schedule</a>
         <a href="#prizes" data-edit-id="nav.link.prizes">Prizes</a>
-        <!-- hidden while logged in, see updatePortalLink() in js/main.js -->
         <a href="https://www.youtube.com/watch?v=dQw4w9WgXcQ" target="_blank" rel="noopener" class="join-link" id="navJoinLink" data-edit-id="nav.link.apply">Apply Now</a>
       </div>
       <div class="nav-right">
@@ -57,8 +72,50 @@
           </span>
           <span class="tic-label" data-edit-id="nav.themeBtn.label">Light mode</span>
         </button>
-        <a class="btn btn-accent2" href="login.html" id="portalLink" data-edit-id="nav.portal">Access portal</a>
-        <button class="btn btn-ghost" id="logoutBtn" type="button" style="display:none" data-resize-id="box.logoutBtn">Log out</button>
+        <!-- data-nav-el is what wires the button up (js/main.js's
+             wireNavButtons()), not its id or its href: a ta can delete this
+             one and place a fresh "Access portal button" from the right-click
+             menu, and the new one is live the instant it lands -->
+        <a class="btn btn-accent2" href="login.html" id="portalLink" data-nav-el="portal" data-edit-id="nav.portal">Access portal</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- starts out of the document, so the signed-out navbar is what paints
+       first and there's never a flash of two navbars while js decides; also
+       the right failure mode if js never runs at all. applyNavState() takes
+       over from here. -->
+  <nav class="nav nav-state-off" data-resize-id="navin.box.nav" data-nav-state="in">
+    <div class="wrap nav-inner">
+      <a href="index.html" class="brand" data-resize-id="navin.box.brand"><img src="assets/logo.png" class="brand-logo"
+          data-resize-id="navin.img.brand.nav" alt="ECE Workshops" /> <span data-edit-id="navin.nav.brand">ECE Workshops</span></a>
+      <div class="nav-links">
+        <a href="#about" data-edit-id="navin.nav.link.about">About</a>
+        <a href="#gallery" data-edit-id="navin.nav.link.gallery">Gallery</a>
+        <a href="#learn" data-edit-id="navin.nav.link.learn">What you'll learn</a>
+        <a href="#schedule" data-edit-id="navin.nav.link.schedule">Schedule</a>
+        <a href="#prizes" data-edit-id="navin.nav.link.prizes">Prizes</a>
+      </div>
+      <div class="nav-right">
+        <button class="theme-btn" type="button" aria-label="Toggle theme" data-resize-id="navin.box.themeBtn" data-theme-toggle="1">
+          <span class="tic-icon" data-resize-id="navin.box.themeBtn.icon">
+            <svg class="tic sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="4" />
+              <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+            </svg>
+            <svg class="tic moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />
+            </svg>
+          </span>
+          <span class="tic-label" data-edit-id="navin.nav.themeBtn.label">Light mode</span>
+        </button>
+        <!-- "Dashboard" is the default wording; applyNavSessionState() swaps it
+             to "Staff Portal" for a ta, but only while nobody has typed their
+             own wording over it (data-overridden, see applyTextOverrides()) -->
+        <a class="btn btn-accent2" href="dashboard.html" data-nav-el="dashboard" data-edit-id="navin.nav.dashboard">Dashboard</a>
+        <button class="btn btn-ghost" type="button" data-nav-el="logout" data-edit-id="navin.nav.logout">Log out</button>
       </div>
     </div>
   </nav>
@@ -365,7 +422,7 @@
   </footer>
 
   <script src="js/theme.js?v=3"></script>
-  <script src="js/main.js?v=9"></script>
+  <script src="js/main.js?v=11"></script>
   <script src="js/learn-reel.js?v=6"></script>
 </body>
 

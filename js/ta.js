@@ -56,17 +56,19 @@ function seed() {
        "string"/"number"/"boolean"/"datetime". "builtin" ones can be
        renamed but never removed/retyped; "computed" ones have no
        ta-editable value at all, "value" is overwritten server-side on
-       every load (see _refresh_computed_variables() in app/db.py). */
+       every load (see _refresh_computed_variables() in app/db.py); "page"
+       is the one page a variable is offered on in the visual editor, unset
+       (as on every ta-added variable) meaning "every page". */
     variables: [
       {
         key: "total_days", name: "Total days", type: "number", value: 10,
         description: "\"__ of TOTAL days unlocked\" progress bar on student dashboard",
-        builtin: true, computed: false
+        builtin: true, computed: false, page: "dashboard"
       },
       {
         key: "days_progressed", name: "Days progressed", type: "number", value: 0,
         description: "The day number the workshop is currently on (count of unlocked days), calculated automatically",
-        builtin: true, computed: true
+        builtin: true, computed: true, page: "dashboard"
       }
     ],
     timer_mode: "tentative", /* tentative | actual */
@@ -808,6 +810,15 @@ function uniqueVariableKey(base) {
   return base + "_" + n;
 }
 
+/* how a variable's "page" scope reads in its card below - the same page keys
+   js/main.js's currentPageKey() hands out. */
+var VARIABLE_PAGE_LABELS = {
+  index: "landing page",
+  dashboard: "student dashboard",
+  gallery: "gallery page",
+  login: "login page"
+};
+
 /**
  * Renders every named variable into #variablesList and wires up its
  * controls - name/description/type/value all write straight back into the
@@ -871,6 +882,11 @@ function renderVariables() {
         '</div>' +
         '<div class="field"><label>Description</label>' +
           '<textarea class="v-desc" rows="2">' + (v.description || "") + '</textarea></div>' +
+        /* a scoped variable (only the two builtins are, see the seed above)
+           says so, since otherwise the only way to find out is to go looking
+           for it on another page's visual editor and not find it */
+        (v.page ? '<p class="muted" style="margin:-4px 0 14px">Only offered on the ' +
+          (VARIABLE_PAGE_LABELS[v.page] || v.page) + ' in the visual editor.</p>' : "") +
         valueField +
         (v.builtin ? "" : '<button class="btn btn-ghost v-del" type="button" style="margin-top:10px">Remove variable</button>') +
       '</div>';

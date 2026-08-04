@@ -175,8 +175,17 @@ DEFAULT_CONTENT = {
     # named, typed values a ta can bind editor elements to (right now just a
     # progress bar's Current/Total selects, on its right-click menu - see
     # renderCtxMenuProgressVars() in js/main.js) and reference from formula
-    # text. Global to the whole site: every bar on every page, and on the
-    # reusable-object canvas, picks from this one list.
+    # text.
+    # "page" is what a variable MEANS SOMETHING ON: the two builtins below
+    # both describe workshop progress, which is a student-dashboard fact and
+    # nothing else, so they're only offered by the editor's pickers while
+    # editing that page (see pickableVariables() in js/main.js). A variable
+    # with no "page" is site-wide and offered everywhere - that's every
+    # variable a ta adds themselves, since there's no way to type one that
+    # isn't. Scoping only affects what the pickers OFFER: an existing binding
+    # still resolves and paints its number wherever it ends up, and the
+    # reusable-object canvas is exempt entirely (an object gets dropped onto
+    # any page, so it picks from the lot).
     # type is one of "string"/"number"/"boolean"/"datetime". "builtin" ones
     # can be renamed but never removed or retyped (js/ta.js enforces this in
     # the Variables section UI); "computed" ones have no ta-editable value at
@@ -190,13 +199,13 @@ DEFAULT_CONTENT = {
             "key": "total_days", "name": "Total days", "type": "number",
             "value": 10,
             "description": "\"__ of TOTAL days unlocked\" progress bar on student dashboard",
-            "builtin": True, "computed": False,
+            "builtin": True, "computed": False, "page": "dashboard",
         },
         {
             "key": "days_progressed", "name": "Days progressed", "type": "number",
             "value": 0,
             "description": "The day number the workshop is currently on (count of unlocked days), calculated automatically",
-            "builtin": True, "computed": True,
+            "builtin": True, "computed": True, "page": "dashboard",
         },
     ],
     "timer_mode": "tentative",
@@ -1027,6 +1036,7 @@ def init_db():
     _migrate_landing_nav_states(conn)
     _migrate_custom_elements_page_scope(conn)
     _migrate_progress_bar_object(conn)
+    _migrate_variable_page_scope(conn)
     conn.close()
 
 
@@ -1768,6 +1778,51 @@ def _migrate_progress_bar_object(conn):
                 "INSERT INTO objects (owner, name, data) VALUES (?, ?, ?)",
                 ("system", obj["name"], json.dumps(obj["data"])),
             )
+    conn.commit()
+
+
+def _migrate_variable_page_scope(conn):
+    """one-time patch (same meta-flag trick as _migrate_learn_reel()) stamping
+    "page": "dashboard" onto the two builtin workshop-progress variables in
+    every already-existing content blob/profile. Without it, an older blob's
+    copies stay unscoped and keep being offered on every page - which is the
+    exact thing the scope exists to stop, since "Days progressed" is not
+    something to bind a gallery formula to.
+
+    Matched by "key", the identifier that never changes (a ta may well have
+    renamed either of these), and only ever ADDS the field: a variable that
+    already carries a page is left exactly as it is.
+    @param conn an open db connection
+    """
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO meta (key, value) VALUES ('variable_page_scope_migrated', '1')"
+    )
+    conn.commit()
+    if cur.rowcount == 0:
+        return
+
+    scopes = {v["key"]: v["page"] for v in DEFAULT_CONTENT["variables"] if v.get("page")}
+
+    def patch(data):
+        changed = False
+        for v in data.get("variables", []):
+            page = scopes.get(v.get("key"))
+            if page and not v.get("page"):
+                v["page"] = page
+                changed = True
+        return data, changed
+
+    row = conn.execute("SELECT data FROM content WHERE id = 1").fetchone()
+    if row:
+        data, changed = patch(json.loads(row["data"]))
+        if changed:
+            conn.execute("UPDATE content SET data = ? WHERE id = 1", (json.dumps(data),))
+
+    for prow in conn.execute("SELECT id, data FROM profiles").fetchall():
+        data, changed = patch(json.loads(prow["data"]))
+        if changed:
+            conn.execute("UPDATE profiles SET data = ? WHERE id = ?", (json.dumps(data), prow["id"]))
+
     conn.commit()
 
 

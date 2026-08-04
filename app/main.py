@@ -317,12 +317,20 @@ class NewAssetRequest(BaseModel):
 def api_create_asset(kind: str, payload: NewAssetRequest, ta=Depends(require_ta)):
     """registers an already-uploaded file (see /api/upload) as a shared
     icon/video/font, owned by whoever added it. ta-only.
+
+    An icon must be an .svg: the editor inlines an icon's real markup so it
+    can be recolored through css later (see js/main.js's
+    renderCtxMenuIconPicker()/fetchSvgMarkup()), which a raster image can
+    never support. The picker already refuses anything else client-side;
+    this is the same rule where it can't be worked around.
     @param kind "icon", "video", or "font"
     @param payload {name, url}
     @return {id} of the new asset
     """
     if kind not in ASSET_KINDS:
         raise HTTPException(status_code=404, detail="No such asset kind.")
+    if kind == "icon" and not payload.url.split("?")[0].lower().endswith(".svg"):
+        raise HTTPException(status_code=400, detail="Icons must be .svg files, so they can be recolored.")
     name = payload.name.strip() or kind
     asset_id = create_custom_asset(kind, ta["username"], name, payload.url)
     return {"id": asset_id}

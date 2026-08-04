@@ -3040,7 +3040,10 @@ function buildRing() {
     var h = document.createElement("span");
     h.className = "rh rh-" + dir;
     h.setAttribute("data-dir", dir);
-    h.title = "Drag to resize";
+    /* the shift half is the only way a ta finds out it's there, see
+       startResizeDrag() - a modifier nobody mentions is a modifier nobody
+       uses, and the double-click reset below has the same problem */
+    h.title = "Drag to resize, hold Shift to keep the shape. Double-click to reset.";
     h.addEventListener("mousedown", startResizeDrag);
     h.addEventListener("dblclick", resetSizeDbl);
     RING.appendChild(h);
@@ -5662,11 +5665,15 @@ function freezeDescendants(el) {
  * width/height change (see setBox()), so text reflows inside its box at
  * its own size instead of stretching. Dragging a left/top handle keeps
  * the opposite edge pinned by sliding the element's own move offset while
- * the box grows/shrinks. Aspect ratio: icons always locked; images keep
- * object-fit: cover (whatever the box's new shape, the photo re-crops to
- * fill it, never stretched/warped pixel-for-pixel) with shift additionally
- * locking the box's own proportions so the crop framing doesn't swing
- * wildly; everything else (text boxes, cards, sections, buttons) is free.
+ * the box grows/shrinks. Aspect ratio: HOLDING SHIFT locks the box's own
+ * proportions for anything at all - icon, image, text box, card, section,
+ * button, or a tile (which locks by re-tiling its container to a
+ * proportional track, see setTileTrackSize()). An icon is additionally
+ * locked with or without shift, since a squashed glyph is never what
+ * anyone means; an image is free by default but keeps object-fit: cover
+ * either way (whatever the box's new shape, the photo re-crops to fill it,
+ * never stretched/warped pixel-for-pixel), so shift there steadies the
+ * crop framing rather than protecting the pixels.
  * @param e the handle's mousedown
  */
 function startResizeDrag(e) {
@@ -5702,20 +5709,28 @@ function startResizeDrag(e) {
   var base = getPos(el);
   RING_DRAGGING = true;
 
+  /**
+   * Whether this moment of the drag should keep the box's proportions.
+   * Read per mousemove, not once at mousedown, so shift can be pressed or
+   * released mid-drag and take effect immediately. A zero starting side has
+   * no ratio to keep (nothing laid out yet), so it falls back to a free
+   * drag rather than scaling by NaN.
+   * @param ev the mousemove
+   * @return true to lock the aspect ratio
+   */
+  function aspectLocked(ev) {
+    return (kind === "icon" || ev.shiftKey) && start.w > 0 && start.h > 0;
+  }
+
   function onMove(ev) {
     var w = dir[0] ? Math.max(16, start.w + dir[0] * (ev.clientX - startX)) : start.w;
     var h = dir[1] ? Math.max(12, start.h + dir[1] * (ev.clientY - startY)) : start.h;
-    /* the spec's "grinds against the edge" stop, applied to sizes: a
-       container refuses to go narrower than its tiles can squeeze to, and a
-       tile refuses to go wider/taller than the container holding it */
-    if (minW) w = Math.max(w, minW);
-    if (cap) { w = Math.min(w, cap.w); h = Math.min(h, cap.h); }
-    if (tileBox) {
-      setTileTrackSize(el, w, h);
-      positionRing();
-      return;
-    }
-    if (kind === "icon" || (kind === "img" && ev.shiftKey)) {
+    /* shift forces the shape to hold on ANY element (an icon holds its shape
+       with or without it, see this function's doc comment). Both clamps below
+       are folded into the scale FACTOR rather than applied to w/h afterwards,
+       since clamping one side of an already-proportional box would silently
+       break the very proportion shift was held down to keep. */
+    if (aspectLocked(ev)) {
       var f;
       if (dir[0] && dir[1]) {
         /* corner drag: follow whichever axis moved more */
@@ -5723,8 +5738,23 @@ function startResizeDrag(e) {
       } else {
         f = dir[0] ? w / start.w : h / start.h;
       }
+      /* same two clamps as the free branch below, in the same order (so the
+         cap still has the last word), just folded into the factor */
+      if (minW) f = Math.max(f, minW / start.w);
+      if (cap) f = Math.min(f, cap.w / start.w, cap.h / start.h);
       w = start.w * f;
       h = start.h * f;
+    } else {
+      /* the spec's "grinds against the edge" stop, applied to sizes: a
+         container refuses to go narrower than its tiles can squeeze to, and a
+         tile refuses to go wider/taller than the container holding it */
+      if (minW) w = Math.max(w, minW);
+      if (cap) { w = Math.min(w, cap.w); h = Math.min(h, cap.h); }
+    }
+    if (tileBox) {
+      setTileTrackSize(el, w, h);
+      positionRing();
+      return;
     }
     setBox(el, w, h);
     /* pin the opposite edge on left/top drags */
@@ -6099,14 +6129,53 @@ var VARIABLES = [];
 /**
  * Looks up one variable by its stable key (see app/db.py's
  * DEFAULT_CONTENT["variables"]).
+ *
+ * Resolution is deliberately NOT page-scoped, unlike what a picker offers
+ * (see pickableVariables()): a formula chip or progress bar keeps showing
+ * its real number wherever it ends up, even bound to a variable this page
+ * would no longer offer to bind.
  * @param key a variable's "key"
  * @return the variable {key, name, type, value, ...}, or null if unknown
  */
 function variableByKey(key) {
+  /* the gallery's per-pane variables are not content.variables at all -
+     they're derived from whichever image panes are placed right now, see
+     galleryVariableFor() - but they resolve through this same lookup, so
+     everything downstream (formula chips, progress bars) can be built on
+     one without knowing the difference */
+  var gv = galleryVariableFor(key);
+  if (gv) return gv;
   for (var i = 0; i < VARIABLES.length; i++) {
     if (VARIABLES[i].key === key) return VARIABLES[i];
   }
   return null;
+}
+
+/**
+ * The variables a picker on THIS page should offer.
+ *
+ * A variable can name the one page it belongs to (content.variables' "page",
+ * eg the two builtin workshop-progress numbers, which mean nothing anywhere
+ * but the student dashboard); one that doesn't is site-wide and offered
+ * everywhere. On top of that, the gallery page contributes its own per-pane
+ * variables, which live nowhere in content at all (see
+ * galleryVariableInventory(): two per placed image pane, so the list grows
+ * and shrinks as panes are added and removed).
+ *
+ * The object canvas is exempt: an object is built to be dropped onto any
+ * page, so it picks from every variable there is.
+ * @param keepKey a key to keep in the list even when it's out of scope -
+ *   whatever the control being filled is already bound to, so an existing
+ *   binding is never silently swapped for something else. Optional.
+ * @return an array of variables, in content order, gallery ones last
+ */
+function pickableVariables(keepKey) {
+  if (isObjectMode()) return VARIABLES.slice();
+  var page = currentPageKey();
+  var out = VARIABLES.filter(function (v) {
+    return !v.page || v.page === page || v.key === keepKey;
+  });
+  return page === "gallery" ? out.concat(galleryVariableInventory()) : out;
 }
 
 /**
@@ -6131,13 +6200,18 @@ function variableNumericValue(key) {
  * element's right-click Current/Total selects (see
  * populateProgressVarSelect()) and the text toolbar's formula menu (see
  * openFormulaMenu()).
+ *
+ * Only ever offers what's in scope for the page being edited, see
+ * pickableVariables() - the student dashboard's own workshop-progress
+ * numbers are not something to bind to from the gallery, and the gallery's
+ * per-pane numbers are not something to bind to from anywhere else.
  * @param selectEl the <select> to fill
  * @param predicate function(variable) -> bool, which variables to include
  * @param selectedKey the value to preselect
  */
 function populateVariableSelect(selectEl, predicate, selectedKey) {
   selectEl.textContent = "";
-  VARIABLES.filter(predicate).forEach(function (v) {
+  pickableVariables(selectedKey).filter(predicate).forEach(function (v) {
     var opt = document.createElement("option");
     opt.value = v.key;
     opt.textContent = v.name || v.key;
@@ -6263,10 +6337,17 @@ function buildFormulaChipHtml(op, aKey, bKey, decimals) {
  * saved content.text snapshot, which may carry a chip's stale baked-in text
  * from whenever it was last saved, so every load (and every VARIABLES
  * refresh) needs to re-render each chip's text from live data. Called right
- * after VARIABLES is (re)assigned, alongside applyProgressBindings().
+ * after VARIABLES is (re)assigned, alongside applyProgressBindings(), and
+ * again whenever a gallery pane moves (a chip can be built on a pane
+ * variable, see galleryVariableFor()).
+ *
+ * Local chips (data-fx-local: a day tile's ${Day3Number}, an attachment's
+ * filename, a gallery pane's own two numbers) share the .fx-chip class but
+ * carry no formula at all, and resolve through repaintLocalTileContent()
+ * instead - they're skipped here rather than blanked and restored.
  */
 function repaintFormulaChips() {
-  document.querySelectorAll(".fx-chip").forEach(function (chip) {
+  document.querySelectorAll(".fx-chip:not([data-fx-local])").forEach(function (chip) {
     chip.textContent = formulaChipText(chip.dataset.fxOp, chip.dataset.fxA, chip.dataset.fxB, chip.dataset.fxDecimals);
   });
 }
@@ -6332,9 +6413,11 @@ var DAYS_CHIP_VAR_SUFFIX = {
  * That's the spec's "upon editing them, users will just see the variable
  * inline": these names are per-tile and deliberately exist nowhere else -
  * they're not in content.variables, so they never appear in the content
- * manager's variables list nor in the formula menu's variable picker, and
- * the only way to change what one RESOLVES to is the content manager's own
- * day panel (see js/ta.js's renderPanels()).
+ * manager's variables list, and the only way to change what one RESOLVES to
+ * is the content manager's own day panel (see js/ta.js's renderPanels()).
+ * (The gallery's two page variables are the one kind a formula can also be
+ * built on, through a derived record rather than this ${} name - see
+ * galleryVariableFor().)
  * @param chip a .fx-chip element carrying data-fx-local
  * @return the "${Name}" token, or "" when the chip isn't mid-edit (or its
  *   tile carries no variable scope, eg the trailing synthetic locked card)
@@ -6516,10 +6599,13 @@ function insertDaysChip(tile, local) {
    Neither is site content. The variables are LOCAL CHIPS (data-fx-local, same
    machinery as a day tile's ${Day3Number}), so they never enter
    content.variables and never show up in the content manager's variables list
-   or the formula menu's picker - they're meaningless anywhere but here. The
-   actions aren't stored at all: they're derived from whichever panes are
-   currently placed, and an element "is" the forward button purely because its
-   content.links entry points at one of them.
+   - they're meaningless anywhere but here. They DO show up in the formula
+   menu's picker, but only while editing this page (see pickableVariables()),
+   and as derived entries rather than stored ones: that's what lets a ta write
+   "Percent (current of total)" over a pane the same way they'd write it over
+   any other pair of numbers. The actions aren't stored at all either: they're
+   derived from whichever panes are currently placed, and an element "is" the
+   forward button purely because its content.links entry points at one of them.
    --------------------------------------------------------------------------- */
 
 /* the seeded pane's binding: "whatever the directory rail has selected", as
@@ -6615,6 +6701,10 @@ function repaintGalleryChips() {
     chip.textContent = localChipVarToken(chip) ||
       window.galleryChipValue(chip.dataset.fxLocal, chip.dataset.fxDir || "");
   });
+  /* a formula chip can be built on a pane variable too (see
+     galleryVariableFor()), and those read live off the pane, so stepping an
+     image has to repaint them alongside the local chips above */
+  repaintFormulaChips();
 }
 
 /**
@@ -6632,6 +6722,75 @@ function insertGalleryChip(field, local, dir) {
   var before = field.innerHTML;
   field.innerHTML = before + (before ? " " : "") + buildGalleryChipHtml(local, dir);
   commitTextFieldChange(field, before, field.innerHTML);
+}
+
+/**
+ * The key a formula chip/progress binding uses to name one of this page's
+ * pane variables: "gallery:current" for the rail-following pane,
+ * "gallery:total:2026" for one pinned to a directory. Same prefix and same
+ * shape as an action link value (see GALLERY_ACTION_PREFIX) - one family of
+ * "this means something to the gallery page", with disjoint verbs so
+ * galleryActionOf() and galleryVarOf() can never claim each other's strings.
+ * @param local "gallery-current" or "gallery-total"
+ * @param dir the binding's directory name, "" for the rail-following one
+ * @return the key
+ */
+function galleryVarKey(local, dir) {
+  return GALLERY_ACTION_PREFIX + (local === "gallery-total" ? "total" : "current") + (dir ? ":" + dir : "");
+}
+
+/**
+ * Parses a variable key as one of this page's pane variables.
+ * @param key a variable key from anywhere (a formula chip's data-fx-a, a
+ *   progress element's varCurrent, ...)
+ * @return {local, dir}, or null if it isn't a gallery variable at all
+ */
+function galleryVarOf(key) {
+  if (typeof key !== "string" || key.indexOf(GALLERY_ACTION_PREFIX) !== 0) return null;
+  var rest = key.slice(GALLERY_ACTION_PREFIX.length);
+  var cut = rest.indexOf(":");
+  var verb = cut === -1 ? rest : rest.slice(0, cut);
+  if (verb !== "current" && verb !== "total") return null;
+  return { local: "gallery-" + verb, dir: cut === -1 ? "" : rest.slice(cut + 1) };
+}
+
+/**
+ * Builds the variable-shaped record one pane variable resolves to, read live
+ * off js/gallery.js (which owns which image each binding is sitting on)
+ * rather than out of any stored value - so this is a fresh reading every
+ * time, and the chip/bar built on it repaints with the pane, see
+ * repaintGalleryChips().
+ * @param key a key from galleryVarKey()
+ * @return a {key, name, type, value} record, or null if key isn't one
+ */
+function galleryVariableFor(key) {
+  var g = galleryVarOf(key);
+  if (!g) return null;
+  var raw = window.galleryChipValue ? parseFloat(window.galleryChipValue(g.local, g.dir)) : NaN;
+  return {
+    key: key,
+    name: galleryBindingLabel(g.dir) + (g.local === "gallery-total" ? " — total images" : " — current image"),
+    type: "number",
+    value: isNaN(raw) ? 0 : raw,
+    page: "gallery"
+  };
+}
+
+/**
+ * Every variable this page currently offers: two per pane binding (which
+ * image it's on, how many it has), in the same order the bindings come in.
+ * This is the list that goes from two to four the moment a ta places a
+ * second image pane, which is exactly the ta's own "if we add another, it
+ * should go up to 4".
+ * @return an array of variable records
+ */
+function galleryVariableInventory() {
+  var out = [];
+  galleryPaneBindings().forEach(function (dir) {
+    out.push(galleryVariableFor(galleryVarKey("gallery-current", dir)));
+    out.push(galleryVariableFor(galleryVarKey("gallery-total", dir)));
+  });
+  return out;
 }
 
 /* what a content.links value looks like when it points at one of this page's
@@ -9629,10 +9788,12 @@ function renderCtxMenuGalleryVars() {
   var field = CTX_TARGET_EL;
   var rows = [];
   galleryPaneBindings().forEach(function (dir) {
-    rows.push({ local: "gallery-current", dir: dir,
-      label: galleryBindingLabel(dir) + " — image number" });
-    rows.push({ local: "gallery-total", dir: dir,
-      label: galleryBindingLabel(dir) + " — how many images" });
+    /* named exactly as the formula menu names the same two, see
+       galleryVariableFor() - one variable shouldn't read as two different
+       things depending on which menu a ta reached it from */
+    ["gallery-current", "gallery-total"].forEach(function (local) {
+      rows.push({ local: local, dir: dir, label: galleryVariableFor(galleryVarKey(local, dir)).name });
+    });
   });
   CTX_MENU.innerHTML =
     '<div class="ctx-title">Insert gallery variable</div>' +
@@ -9722,21 +9883,23 @@ function setProgressVar(id, field, key) {
  * bar even measuring" among the paint controls made the one structural choice
  * the hardest one to find.
  *
- * Both selects list EVERY number-typed variable in the content manager's
- * Variables section (see populateProgressVarSelect()/VARIABLES): those are
- * global to the whole site, so every bar on every page - and on an object
- * canvas, see initObjectCanvas() - can bind to any of them.
+ * Both selects list every number-typed variable this page can bind to (see
+ * populateProgressVarSelect()/pickableVariables()): the content manager's
+ * own site-wide ones, minus any scoped to a different page, plus whatever
+ * the page itself contributes - on the gallery, a bar can therefore measure
+ * an image pane's own "which image of how many". An object canvas is exempt
+ * from the scoping entirely and sees the lot, see initObjectCanvas().
  */
 function renderCtxMenuProgressVars() {
   var id = CTX_TARGET_ID;
   var d = customElementById(id) || {};
-  var numbers = VARIABLES.filter(function (v) { return v.type === "number"; });
+  var numbers = pickableVariables(d.varCurrent).filter(function (v) { return v.type === "number"; });
   CTX_MENU.innerHTML =
     '<div class="ctx-title">Progress bar variables</div>' +
     (numbers.length ?
       '<div class="ctx-var-row"><label>Current</label><select class="ctx-var-current"></select></div>' +
       '<div class="ctx-var-row"><label>Total</label><select class="ctx-var-total"></select></div>' +
-      '<div class="ctx-file-msg">Every number variable from the content manager’s Variables list.</div>' :
+      '<div class="ctx-file-msg">Every number variable this page can use.</div>' :
       '<div class="ctx-file-msg">No number variables yet. Add one in the content manager’s Variables section.</div>') +
     '<button type="button" class="ctx-lnk-back">Back</button>';
   CTX_MENU.querySelector(".ctx-lnk-back").addEventListener("click", renderCtxMenuRoot);
@@ -9802,14 +9965,21 @@ function renderCtxMenuIconPicker() {
       btn.title = ic.name + " (added by " + ic.owner + ")";
       btn.innerHTML = '<img src="' + ic.url + '" alt="">';
       btn.addEventListener("click", function () {
-        /* fetch the uploaded file's real svg markup and inline it (same as
-           a built-in icon) rather than dropping the url into an <img>, so
-           it can be recolored by a future styling tool; falls back to a
-           plain <img> if the fetch fails for any reason (eg a legacy
-           non-svg upload from before this was enforced) */
+        /* fetch the uploaded file's real svg markup and inline it (same as a
+           built-in icon) rather than dropping the url into an <img>: an <img>
+           can't be recolored through css, and "svg only, so it can be
+           recolored later" is the whole rule this picker enforces. There is
+           deliberately no <img> fallback - an upload whose markup won't parse
+           as svg (a legacy non-svg row from before the rule was enforced, or
+           a fetch that failed) is refused here rather than placed as a
+           permanently uncolorable element. */
         fetchSvgMarkup(ic.url).then(function (svg) {
-          if (replacing) replaceThemeIcon(ICON_REPLACE_TARGET, svg || '<img src="' + ic.url + '" alt="">');
-          else addCustomElement("icon", CTX_POS.x, CTX_POS.y, svg ? { icon: svg } : { url: ic.url });
+          if (!svg) {
+            msg.textContent = '"' + ic.name + '" isn\'t usable as an icon (SVG only). Remove it and re-upload an .svg.';
+            return;
+          }
+          if (replacing) replaceThemeIcon(ICON_REPLACE_TARGET, svg);
+          else addCustomElement("icon", CTX_POS.x, CTX_POS.y, { icon: svg });
           hideCtxMenu();
         });
       });
@@ -11406,8 +11576,11 @@ function refreshFormulaMenuRows() {
   var aSelect = FX_MENU.querySelector(".fxm-a");
   var aPredicate = meta.anyType ? function () { return true; } : function (v) { return v.type === "number"; };
   var curA = aSelect.value;
-  var aStillValid = curA && VARIABLES.some(function (v) { return v.key === curA && aPredicate(v); });
-  var firstA = (VARIABLES.filter(aPredicate)[0] || {}).key || "";
+  /* what this page offers, not every variable there is - on the gallery
+     that's its own panes' numbers, see pickableVariables() */
+  var poolA = pickableVariables(curA);
+  var aStillValid = curA && poolA.some(function (v) { return v.key === curA && aPredicate(v); });
+  var firstA = (poolA.filter(aPredicate)[0] || {}).key || "";
   populateVariableSelect(aSelect, aPredicate, aStillValid ? curA : firstA);
 
   FX_MENU.querySelector(".fxm-b-row").style.display = meta.needsB ? "" : "none";
@@ -11415,8 +11588,9 @@ function refreshFormulaMenuRows() {
     var bSelect = FX_MENU.querySelector(".fxm-b");
     var curB = bSelect.value;
     var numberPredicate = function (v) { return v.type === "number"; };
-    var bStillValid = curB && VARIABLES.some(function (v) { return v.key === curB && numberPredicate(v); });
-    var firstB = (VARIABLES.filter(numberPredicate)[0] || {}).key || "";
+    var poolB = pickableVariables(curB);
+    var bStillValid = curB && poolB.some(function (v) { return v.key === curB && numberPredicate(v); });
+    var firstB = (poolB.filter(numberPredicate)[0] || {}).key || "";
     populateVariableSelect(bSelect, numberPredicate, bStillValid ? curB : firstB);
   }
 

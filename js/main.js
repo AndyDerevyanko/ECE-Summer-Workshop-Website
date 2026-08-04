@@ -19,9 +19,11 @@ var CHECK_ICON_SVG =
  * Builds one logistics tile ("2 weeks", "4 hours", "SFB520", certificate, etc).
  * Text is click-to-editable in the visual editor (see wireClickToEdit()), tagged
  * with the tile's index so an edit writes straight back into content.logistics
- * instead of a template-default override, the content manager's "Info tiles"
- * list shows the same array. Adding/removing tiles stays a content-manager-only
- * action, this view is text-only.
+ * instead of a template-default override. Text only: the tiles render from
+ * that array rather than from their own markup, which is why the right-click
+ * menu leaves them out of Duplicate/Delete (see isSpecial in
+ * renderCtxMenuRoot()) - so the array's LENGTH currently has no ui behind it
+ * at all, now that the content manager's own "Info tiles" list is gone.
  * @param t {big, lbl, icon} tile data
  * @param i the tile's index in the logistics array
  * @return the tile's card element
@@ -342,6 +344,22 @@ function fetchContent() {
         .then(function (res) { return res.json(); })
         .then(function (live) { return mergeSeededElements(snapshot, repairMojibakeDeep(live)); })
         .catch(function () { return snapshot; });
+    }
+    /* no draft yet, and this page is about to start writing one: every
+       save*() in this file merges its one override into whatever's in
+       localStorage, so starting from nothing leaves a blob holding ONLY
+       that override - which js/ta.js's Apply/Save then reads back as the
+       ta's whole content and saves over the real thing, day panels and all.
+       Seed the draft with the live content first so those writers always
+       have a full blob to merge into. */
+    if (isEditMode()) {
+      return fetch("/api/content")
+        .then(function (res) { return res.json(); })
+        .then(repairMojibakeDeep)
+        .then(function (live) {
+          try { localStorage.setItem(snapshotKey(), JSON.stringify(live)); } catch (e) {}
+          return live;
+        });
     }
   }
   return fetch("/api/content").then(function (res) { return res.json(); }).then(repairMojibakeDeep);
@@ -2312,6 +2330,75 @@ function setElementLink(id, url) {
   saveEditedLink(id, after);
   applyLinkHighlight();
   EDIT_UNDO.push({ type: "link", id: id, before: before, after: after });
+  EDIT_REDO.length = 0;
+}
+
+/* ---------------------------------------------------------------------------
+   THE "APPLY NOW" LINK: one url (content.join_url) shared by every .join-link
+   on the landing page - the hero's button, the one in the nav, the one at the
+   bottom of the about section. Not a content.links entry, and deliberately
+   not made into one: they're several elements pointing at one thing, so an
+   ordinary per-element link on one of them would silently drift the set apart
+   the next time the page loaded and setJoinUrl() painted the shared url back
+   over it.
+
+   It used to be a field in the content manager's Landing page section, which
+   is why the link editor pointed at it there rather than offering to change
+   it. That section is down to the Apply Now tooltip now (everything else on
+   the landing page is edited in place), so the editor owns this too: the
+   link editor and the links view both write it through setSharedJoinUrl()
+   below, which paints all of them at once.
+   --------------------------------------------------------------------------- */
+
+/* the current content.join_url, so the link editor has something to show
+   without re-reading the snapshot (and so undo has a "before" to go back to) */
+var JOIN_URL = "";
+
+/**
+ * Whether an element is one of the shared "Apply Now" buttons.
+ * @param el any element
+ * @return true if the element carries the .join-link class
+ */
+function isJoinLink(el) {
+  return !!(el && el.classList && el.classList.contains("join-link"));
+}
+
+/**
+ * Points every "Apply Now" on this page at a url, in the dom only.
+ * @param url the shared url, empty meaning the built-in default
+ */
+function applyJoinUrl(url) {
+  JOIN_URL = url || "";
+  var href = JOIN_URL || DEFAULT_JOIN_URL;
+  document.querySelectorAll(".join-link").forEach(function (a) { a.href = href; });
+}
+
+/**
+ * Persists content.join_url into the preview snapshot, same draft every
+ * other save*() in this file writes into.
+ * @param url the shared url
+ */
+function saveJoinUrl(url) {
+  var raw;
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  snapshot.join_url = url || DEFAULT_JOIN_URL;
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
+ * Changes the shared "Apply Now" url: dom, draft and undo stack, the same
+ * three steps setElementLink() takes for an ordinary per-element link.
+ * @param url the new url
+ */
+function setSharedJoinUrl(url) {
+  var before = JOIN_URL;
+  var after = (url || "").trim();
+  if (before === after) return;
+  applyJoinUrl(after);
+  saveJoinUrl(after);
+  EDIT_UNDO.push({ type: "joinUrl", id: "", before: before, after: after });
   EDIT_REDO.length = 0;
 }
 
@@ -6132,8 +6219,8 @@ var VARIABLES = [];
  *
  * Resolution is deliberately NOT page-scoped, unlike what a picker offers
  * (see pickableVariables()): a formula chip or progress bar keeps showing
- * its real number wherever it ends up, even bound to a variable this page
- * would no longer offer to bind.
+ * its real number wherever it ends up, even bound to one of a page's own
+ * local variables that this page would never offer to bind.
  * @param key a variable's "key"
  * @return the variable {key, name, type, value, ...}, or null if unknown
  */
@@ -6152,30 +6239,45 @@ function variableByKey(key) {
 }
 
 /**
- * The variables a picker on THIS page should offer.
+ * The variables a picker on THIS page should offer. There are two kinds:
  *
- * A variable can name the one page it belongs to (content.variables' "page",
- * eg the two builtin workshop-progress numbers, which mean nothing anywhere
- * but the student dashboard); one that doesn't is site-wide and offered
- * everywhere. On top of that, the gallery page contributes its own per-pane
- * variables, which live nowhere in content at all (see
- * galleryVariableInventory(): two per placed image pane, so the list grows
- * and shrinks as panes are added and removed).
+ *   PUBLIC  - content.variables, the ones a ta types into the content
+ *             manager's Variables list. Site-wide: every page offers all of
+ *             them, including the two builtin workshop-progress numbers.
+ *   LOCAL   - a page's own, which exist nowhere in content and so never show
+ *             up in the content manager at all. They're derived from what's
+ *             placed on the page right now, and only that page can bind them,
+ *             see pageLocalVariables().
  *
- * The object canvas is exempt: an object is built to be dropped onto any
- * page, so it picks from every variable there is.
- * @param keepKey a key to keep in the list even when it's out of scope -
- *   whatever the control being filled is already bound to, so an existing
- *   binding is never silently swapped for something else. Optional.
- * @return an array of variables, in content order, gallery ones last
+ * @param keepKey a key to keep in the list even when the page no longer
+ *   offers it - whatever the control being filled is already bound to, so
+ *   filling a select can't silently swap an existing binding for something
+ *   else (eg a chip built on a pane variable whose pane has since been
+ *   deleted). Optional.
+ * @return an array of variables, content ones first in content order
  */
 function pickableVariables(keepKey) {
-  if (isObjectMode()) return VARIABLES.slice();
-  var page = currentPageKey();
-  var out = VARIABLES.filter(function (v) {
-    return !v.page || v.page === page || v.key === keepKey;
-  });
-  return page === "gallery" ? out.concat(galleryVariableInventory()) : out;
+  var out = VARIABLES.concat(pageLocalVariables());
+  if (keepKey && !out.some(function (v) { return v.key === keepKey; })) {
+    var kept = variableByKey(keepKey);
+    if (kept) out.push(kept);
+  }
+  return out;
+}
+
+/**
+ * This page's own private variables - the local half of pickableVariables().
+ *
+ * Only the gallery has any so far: two per placed image pane (which image
+ * it's on, how many it has, see galleryVariableInventory()), so the list
+ * grows and shrinks as panes are added and removed. The object canvas has no
+ * page of its own to read, and currentPageKey() reads it as the landing page,
+ * which has none either - so an object binds public variables only, which is
+ * what an object built to be dropped onto ANY page can honestly use.
+ * @return an array of variable records, empty on a page with none
+ */
+function pageLocalVariables() {
+  return currentPageKey() === "gallery" ? galleryVariableInventory() : [];
 }
 
 /**
@@ -6201,10 +6303,9 @@ function variableNumericValue(key) {
  * populateProgressVarSelect()) and the text toolbar's formula menu (see
  * openFormulaMenu()).
  *
- * Only ever offers what's in scope for the page being edited, see
- * pickableVariables() - the student dashboard's own workshop-progress
- * numbers are not something to bind to from the gallery, and the gallery's
- * per-pane numbers are not something to bind to from anywhere else.
+ * Offers every content.variables entry plus whatever the page being edited
+ * has of its own, see pickableVariables() - the gallery's per-pane numbers
+ * are not something to bind to from anywhere else.
  * @param selectEl the <select> to fill
  * @param predicate function(variable) -> bool, which variables to include
  * @param selectedKey the value to preselect
@@ -6600,7 +6701,7 @@ function insertDaysChip(tile, local) {
    machinery as a day tile's ${Day3Number}), so they never enter
    content.variables and never show up in the content manager's variables list
    - they're meaningless anywhere but here. They DO show up in the formula
-   menu's picker, but only while editing this page (see pickableVariables()),
+   menu's picker, but only while editing this page (see pageLocalVariables()),
    and as derived entries rather than stored ones: that's what lets a ta write
    "Percent (current of total)" over a pane the same way they'd write it over
    any other pair of numbers. The actions aren't stored at all either: they're
@@ -6771,8 +6872,7 @@ function galleryVariableFor(key) {
     key: key,
     name: galleryBindingLabel(g.dir) + (g.local === "gallery-total" ? " — total images" : " — current image"),
     type: "number",
-    value: isNaN(raw) ? 0 : raw,
-    page: "gallery"
+    value: isNaN(raw) ? 0 : raw
   };
 }
 
@@ -9127,7 +9227,9 @@ function renderCtxMenuRoot() {
         '<button type="button" data-days-add-blurb="1">Insert description variable</button>' : "") +
       (isProgress ? '<button type="button" data-progress-vars="1">Bind variables...</button>' :
         '<button type="button" data-link-edit="1">' +
-        (LINKS[CTX_TARGET_ID] ? "Edit link" : "Add link") +
+        /* an "Apply Now" always has one (content.join_url, see
+           setSharedJoinUrl()), it just isn't a content.links entry */
+        (LINKS[CTX_TARGET_ID] || isJoinLink(CTX_TARGET_EL) ? "Edit link" : "Add link") +
         '</button>') +
       '<button type="button" data-lock-toggle="1">' +
       (isLocked(CTX_TARGET_ID) ? "Unlock element" : "Lock element") +
@@ -9394,6 +9496,10 @@ function renderCtxMenuRoot() {
  */
 function renderCtxMenuLinkEditor() {
   var id = CTX_TARGET_ID;
+  /* every "Apply Now" shares one url rather than carrying its own, so this
+     box edits that one instead for any of them - see setSharedJoinUrl() */
+  var joinLink = isJoinLink(CTX_TARGET_EL);
+  if (joinLink) return renderCtxMenuJoinLinkEditor();
   var current = LINKS[id] || "";
   /* the gallery's own actions, offered above the url box rather than instead
      of it: an element on that page can still be pointed at an ordinary url,
@@ -9435,6 +9541,32 @@ function renderCtxMenuLinkEditor() {
   });
   var rm = CTX_MENU.querySelector(".ctx-link-remove");
   if (rm) rm.addEventListener("click", function () { setElementLink(id, ""); hideCtxMenu(); });
+}
+
+/**
+ * The link editor's "Apply Now" variant: same url box, pointed at the one
+ * shared content.join_url every one of those buttons reads (see
+ * setSharedJoinUrl()) rather than at this element's own link. No "Remove
+ * link" - a button with nowhere to go isn't a state this offers; clearing
+ * the box puts the built-in default back.
+ */
+function renderCtxMenuJoinLinkEditor() {
+  CTX_MENU.innerHTML =
+    '<div class="ctx-title">"Apply Now" link</div>' +
+    '<input type="url" class="ctx-link-input" placeholder="https://...">' +
+    '<button type="button" class="ctx-link-save">Save</button>' +
+    '<div class="ctx-file-msg">Every Apply Now button on this page shares it.</div>';
+  var input = CTX_MENU.querySelector(".ctx-link-input");
+  input.value = JOIN_URL;
+  input.focus();
+  function save() {
+    setSharedJoinUrl(input.value);
+    hideCtxMenu();
+  }
+  CTX_MENU.querySelector(".ctx-link-save").addEventListener("click", save);
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); save(); }
+  });
 }
 
 /* tagged elements that navigate (or un-navigate) on their own with no
@@ -9523,13 +9655,14 @@ function pageLinkInventory() {
        stashBuiltinHref()/neuterLink() */
     var href = el.getAttribute("href") || el.getAttribute("data-builtin-href") || "";
     if (!href) return;
-    if (el.classList.contains("join-link")) {
-      /* every "Apply Now" shares one href, set from content.join_url on load
-         (see setJoinUrl()), so the content manager's own field is the place
-         to change it - overriding a single one here would silently drift the
-         set apart on the next load */
-      builtin.push({ id: id, el: el, url: href, editable: false, removable: false,
-        note: 'Content manager › "Apply Now" button link' });
+    if (isJoinLink(el)) {
+      /* every "Apply Now" shares one href (content.join_url), so editing one
+         row here edits the url all of them read - marked so buildLinkListRow()
+         saves it through setSharedJoinUrl() rather than dropping a per-element
+         override on this one, which would silently drift the set apart on the
+         next load */
+      builtin.push({ id: id, el: el, url: href, editable: true, removable: false,
+        join: true, note: "" });
       return;
     }
     builtin.push({ id: id, el: el, url: href, editable: true, removable: false, note: "" });
@@ -9667,6 +9800,13 @@ function buildLinkListRow(entry) {
      step, same as the style popover's own text fields */
   input.addEventListener("change", function () {
     var next = input.value.trim();
+    /* an "Apply Now" row edits the one url all of them share and never
+       changes section, see the join branch in pageLinkInventory() */
+    if (entry.join) {
+      setSharedJoinUrl(next);
+      renderCtxMenuLinkList();
+      return;
+    }
     /* re-render only when this row is about to change SECTION - a template
        link picking up a ta's own url for the first time moves into "Set
        here" and gains a remove button, and clearing one moves back out.
@@ -9885,10 +10025,9 @@ function setProgressVar(id, field, key) {
  *
  * Both selects list every number-typed variable this page can bind to (see
  * populateProgressVarSelect()/pickableVariables()): the content manager's
- * own site-wide ones, minus any scoped to a different page, plus whatever
- * the page itself contributes - on the gallery, a bar can therefore measure
- * an image pane's own "which image of how many". An object canvas is exempt
- * from the scoping entirely and sees the lot, see initObjectCanvas().
+ * own, which are site-wide, plus whatever the page itself contributes - on
+ * the gallery, a bar can therefore measure an image pane's own "which image
+ * of how many".
  */
 function renderCtxMenuProgressVars() {
   var id = CTX_TARGET_ID;
@@ -11576,8 +11715,8 @@ function refreshFormulaMenuRows() {
   var aSelect = FX_MENU.querySelector(".fxm-a");
   var aPredicate = meta.anyType ? function () { return true; } : function (v) { return v.type === "number"; };
   var curA = aSelect.value;
-  /* what this page offers, not every variable there is - on the gallery
-     that's its own panes' numbers, see pickableVariables() */
+  /* the content manager's variables plus this page's own - on the gallery
+     that's its panes' numbers too, see pickableVariables() */
   var poolA = pickableVariables(curA);
   var aStillValid = curA && poolA.some(function (v) { return v.key === curA && aPredicate(v); });
   var firstA = (poolA.filter(aPredicate)[0] || {}).key || "";
@@ -12056,6 +12195,13 @@ function applyHistoryAction(action, side) {
     applyLinkHighlight();
     return;
   }
+  /* no id: the shared "Apply Now" url isn't keyed to an element, see
+     setSharedJoinUrl() */
+  if (action.type === "joinUrl") {
+    applyJoinUrl(val || "");
+    saveJoinUrl(val || "");
+    return;
+  }
   if (action.type === "fill") {
     var fillEl = styleMenuElById(action.id);
     if (!fillEl) return;
@@ -12349,9 +12495,9 @@ function applyHistoryAction(action, side) {
  * as every other in-progress ta portal edit (see js/ta.js's
  * tryRestoreFromPreview()/openPreview()). Routes logistics tile text
  * (data-edit-id "logistics.<i>.big"/"logistics.<i>.lbl") straight into
- * content.logistics itself, the same array the content manager's "Info
- * tiles" list reads/writes, so editing a tile here shows up there too, not
- * just as a separate override. Everything else (hardcoded template copy)
+ * content.logistics itself, since that array - not the template - is what
+ * those tiles render from (see logisticsTile()), so an override keyed by id
+ * would be read by nothing. Everything else (hardcoded template copy)
  * keeps using content.text, dropping the key entirely once it's edited back
  * to the page's own default so saved blobs don't carry no-op overrides.
  * @param id the element's data-edit-id
@@ -13386,7 +13532,7 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   function setJoinUrl(url) {
-    document.querySelectorAll(".join-link").forEach(function (a) { a.href = url; });
+    applyJoinUrl(url);
   }
 
   function setApplyTooltip(text) {

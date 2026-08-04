@@ -1563,6 +1563,25 @@ body.edit-mode .extras-empty.has-attachments {
   align-items: end;
 }
 .ta-row .btn { width: 100%; justify-content: center; margin-bottom: 16px; }
+
+/* the gallery's "Add a directory" field + button. The button is sized off the
+   input beside it rather than off its own padding (.btn's 12px block padding
+   plus a heading-font line box lands a pixel or two short of the .field
+   input's), and tinted a step toward the accent so the pair reads as
+   "field, then the thing that acts on it" instead of two identical slabs. */
+.ta-dir-row .ta-dir-add {
+  /* the input's own height: its 12px block padding either side of one .95rem
+     line box, which the button's heading font would otherwise overshoot by
+     about 5px */
+  height: calc(1.2rem + 24px);
+  padding-block: 0;
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface-2));
+  color: var(--text);
+}
+.ta-dir-row .ta-dir-add:hover { background: color-mix(in srgb, var(--accent) 28%, var(--surface-2)); }
+/* the row's own message line sits under it, so it doesn't need the 16px the
+   fields above reserve for their spacing */
+#galleryMsg { margin-top: 0; }
 .ta-files { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
 .ta-files:empty { display: none; }
 .ta-file {
@@ -1839,16 +1858,6 @@ body.edit-mode .extras-empty.has-attachments {
 .prof-btns { display: flex; gap: 8px; margin-left: auto; }
 .prof-btns .btn { margin-left: 0; }
 .prof-btns .btn[disabled] { opacity: .5; cursor: default; }
-.ta-live {
-  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 22px;
-  margin-bottom: 14px;
-}
-.ta-live-preview { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
-.ta-live-preview .countdown { margin: 0; flex: none; }
-.ta-live-stat { max-width: 220px; margin-top: 0; padding: 18px; }
 @media (max-width: 700px) {
   .ta-row { grid-template-columns: 1fr; }
 }
@@ -2952,20 +2961,4 @@ body.edit-mode .fx-chip { cursor: pointer; border-bottom: 1px dashed currentColo
   letter-spacing: .4px;
 }
 
-/* ta portal's own mini logistics-tile preview (js/ta.js's wireInlineEdit()):
-   click straight through to STATE, no edit-mode gate needed since this
-   panel is always click-to-edit */
-.inline-editable {
-  cursor: pointer;
-  outline: 1px dashed var(--accent);
-  outline-offset: 3px;
-  border-radius: 3px;
-  transition: outline-style .15s;
-}
-.inline-editable:hover { outline-style: solid; }
-.inline-editable.editing {
-  cursor: text;
-  outline: 2px solid var(--accent);
-  outline-offset: 3px;
-}
 body.mono .day-card .daytag { color: var(--accent); }

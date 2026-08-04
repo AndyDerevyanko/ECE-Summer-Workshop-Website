@@ -1,16 +1,11 @@
 /* ta portal. everything edits the in-memory STATE object below; loaded from
    and saved to /api/content, which is the single source of truth. */
 
-/* landing page photo slots, editable from the content manager's "Site
-   images" section (renderHomeImages() below). same keys/defaults as
-   home_images in DEFAULT_CONTENT, app/db.py. */
-var HOME_IMAGE_SLOTS = [
-  { key: "about_hero", label: "About section, main photo" },
-  { key: "about_1", label: "About section, photo 1" },
-  { key: "about_2", label: "About section, photo 2" },
-  { key: "about_3", label: "About section, photo 3" },
-  { key: "certificate", label: "Certificate photo" }
-];
+/* the landing page's photo slots' default urls, same keys/values as
+   home_images in DEFAULT_CONTENT, app/db.py. No ui here edits these any more
+   (the content manager's "Site images" list went with the rest of that
+   section, see syncLanding()) - they're kept so normalizeState() can fill the
+   key in on a blob saved before it existed, exactly as before. */
 var HOME_IMAGE_DEFAULTS = {
   about_hero: "assets/gallery/group-main-alt.jpeg",
   about_1: "assets/gallery/class-closeup.jpeg",
@@ -56,19 +51,19 @@ function seed() {
        "string"/"number"/"boolean"/"datetime". "builtin" ones can be
        renamed but never removed/retyped; "computed" ones have no
        ta-editable value at all, "value" is overwritten server-side on
-       every load (see _refresh_computed_variables() in app/db.py); "page"
-       is the one page a variable is offered on in the visual editor, unset
-       (as on every ta-added variable) meaning "every page". */
+       every load (see _refresh_computed_variables() in app/db.py). Everything
+       in here is site-wide: what this list holds is exactly what every page's
+       visual editor offers to bind. */
     variables: [
       {
         key: "total_days", name: "Total days", type: "number", value: 10,
         description: "\"__ of TOTAL days unlocked\" progress bar on student dashboard",
-        builtin: true, computed: false, page: "dashboard"
+        builtin: true, computed: false
       },
       {
         key: "days_progressed", name: "Days progressed", type: "number", value: 0,
         description: "The day number the workshop is currently on (count of unlocked days), calculated automatically",
-        builtin: true, computed: true, page: "dashboard"
+        builtin: true, computed: true
       }
     ],
     timer_mode: "tentative", /* tentative | actual */
@@ -276,6 +271,13 @@ function normalizeState() {
   delete STATE.date_mode;
   delete STATE.start_date;
   delete STATE.end_date;
+  /* nothing here should ever be handed a blob with no day panels/extras
+     array at all, but if one turns up (an old save, a hand-edited profile),
+     the manager's renderers and its "New panel" button both walk these
+     unguarded, so an undefined here takes the whole section down rather
+     than showing an empty one */
+  if (!Array.isArray(STATE.days)) STATE.days = seed().days;
+  if (!Array.isArray(STATE.extras)) STATE.extras = [];
   if (STATE.join_url === undefined) STATE.join_url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
   if (STATE.apply_tooltip === undefined) {
     STATE.apply_tooltip = "Applications open once the workshop dates are confirmed, check back soon.";
@@ -348,7 +350,19 @@ function normalizeState() {
   delete STATE.contact_text;
 }
 
+/* seed() is a PLACEHOLDER, not content: it's what STATE holds for the few
+   hundred ms between this file parsing and /api/content (or a restored
+   preview snapshot) coming back, and it holds none of this site's actual
+   panels/extras/gallery/visual edits. STATE_LOADED says whether that has
+   happened yet, and guards the two places a wrong answer is destructive:
+   writePreviewSnapshot() (publishing the placeholder as the draft the
+   Visual editor's iframe renders and Apply/Save read back out of) and
+   showMode() (entering the editor tab before there's anything to edit).
+   CONTENT_READY resolves at the same moment, for callers that would rather
+   wait than be turned away - see whenContentReady(). */
 var STATE = seed();
+var STATE_LOADED = false;
+var CONTENT_READY = null;
 
 var PROFILES = [];  /* saved drafts from /api/profiles */
 var EDITING = null; /* null = editing the live site, else the open profile */
@@ -403,6 +417,21 @@ function authedFetch(url, opts) {
  */
 function showMsg(text, ok) {
   var el = document.getElementById("taMsg");
+  if (!el) return;
+  el.textContent = text;
+  el.className = "form-msg " + (ok ? "ok" : "err");
+}
+
+/**
+ * Same thing for the gallery's "Add a directory" row, which has its own
+ * message line under the field: the shared one above sits with the
+ * Apply/Save buttons at the very top of the page, far enough from this
+ * section that a complaint about what was just typed there can go unseen.
+ * @param text the message ("" clears it)
+ * @param ok true for the good colour, false for the error one
+ */
+function showGalleryMsg(text, ok) {
+  var el = document.getElementById("galleryMsg");
   if (!el) return;
   el.textContent = text;
   el.className = "form-msg " + (ok ? "ok" : "err");
@@ -550,99 +579,6 @@ function itemIcon(item) {
   return FILE_SVG_CHIP;
 }
 
-var CHECK_ICON_SVG =
-  '<svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" ' +
-  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12.5l5 5L20 6.5" /></svg>';
-
-/**
- * Builds one preview tile, same markup as the real one on index.html, but
- * click-to-edit: the big text and label are editable right here, and a
- * commit writes straight back into the tile data (STATE.logistics, since
- * this is a reference into that array) and refreshes the input list below
- * (renderLogistics()) so the two views of the same data never drift apart.
- * @param t {big, lbl, icon} tile data, a reference into STATE.logistics
- * @return the tile's card element
- */
-function logisticsPreviewTile(t) {
-  var card = document.createElement("div");
-  card.className = "card stat ta-live-stat";
-  var big = document.createElement("div");
-  big.className = "big";
-  if (t.icon) {
-    big.innerHTML = CHECK_ICON_SVG;
-  } else {
-    big.textContent = t.big;
-    wireInlineEdit(big, function (text) { t.big = text; renderLogistics(); });
-  }
-  var lbl = document.createElement("div");
-  lbl.className = "lbl";
-  lbl.textContent = t.lbl;
-  wireInlineEdit(lbl, function (text) { t.lbl = text; renderLogistics(); });
-  card.appendChild(big);
-  card.appendChild(lbl);
-  return card;
-}
-
-/**
- * Turns one element into a click-to-edit text field: click makes it
- * contenteditable, Enter/blur commits (calling onCommit with the new
- * text), Escape cancels back to whatever it said before this edit. A
- * smaller, local sibling of js/main.js's wireClickToEdit(): this edits
- * STATE directly (no localStorage/undo stack) since it's mirroring fields
- * that already have their own input in the form below, not a hardcoded
- * page default the way index.html's copy is.
- * @param el the element to make editable
- * @param onCommit called with the trimmed text once an edit is committed
- */
-function wireInlineEdit(el, onCommit) {
-  el.classList.add("inline-editable");
-  var before = "";
-  el.addEventListener("click", function () {
-    if (el.isContentEditable) return;
-    before = el.textContent;
-    el.contentEditable = "true";
-    el.classList.add("editing");
-    el.focus();
-    var range = document.createRange();
-    range.selectNodeContents(el);
-    var sel = window.getSelection();
-    sel.removeAllRanges();
-    sel.addRange(range);
-  });
-  el.addEventListener("keydown", function (e) {
-    if (!el.isContentEditable) return;
-    if (e.key === "Enter") { e.preventDefault(); el.blur(); }
-    if (e.key === "Escape") { e.preventDefault(); el.textContent = before; el.blur(); }
-  });
-  el.addEventListener("blur", function () {
-    if (!el.isContentEditable) return;
-    el.contentEditable = "false";
-    el.classList.remove("editing");
-    if (el.textContent !== before) onCommit(el.textContent);
-  });
-}
-
-/* same markup as the hero on index.html, tba box vs the (still stubbed) real clock */
-var CD_TBA_HTML =
-  '<div class="countdown cd-tba">' +
-    '<svg class="cd-cal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
-    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-    '<rect x="3" y="5" width="18" height="16" rx="2" /><path d="M3 9h18M8 3v4M16 3v4" /></svg>' +
-    '<div><span class="cd-label accent">Date and time</span>' +
-    '<b class="cd-tba-txt">To be announced</b></div>' +
-  '</div>';
-
-var CD_CLOCK_HTML =
-  '<div class="countdown">' +
-    '<span class="cd-label">Workshop begins in</span>' +
-    '<div class="cd-clock">' +
-      '<div class="cd-unit"><b id="pv-cd-d">00</b><span>days</span></div>' +
-      '<div class="cd-unit"><b id="pv-cd-h">00</b><span>hrs</span></div>' +
-      '<div class="cd-unit"><b id="pv-cd-m">00</b><span>min</span></div>' +
-      '<div class="cd-unit"><b id="pv-cd-s">00</b><span>sec</span></div>' +
-    '</div>' +
-  '</div>';
-
 /**
  * Formats a date range as "Mon D to Mon D, YYYY".
  * @param start iso date string (yyyy-mm-dd)
@@ -656,127 +592,6 @@ function formatDateRange(start, end) {
   var e = new Date(end + "T00:00:00");
   return months[s.getMonth()] + " " + s.getDate() + " to " +
     months[e.getMonth()] + " " + e.getDate() + ", " + e.getFullYear();
-}
-
-var previewTickHandle = null;
-
-/**
- * Ticks the preview clock digits every second, same math as js/main.js.
- * @param target iso datetime string to count down to
- */
-function tickPreviewCountdown(target) {
-  var targetMs = new Date(target).getTime();
-  function tick() {
-    var diff = targetMs - Date.now();
-    if (diff < 0) diff = 0;
-    var d = Math.floor(diff / 86400000);
-    var h = Math.floor((diff % 86400000) / 3600000);
-    var m = Math.floor((diff % 3600000) / 60000);
-    var s = Math.floor((diff % 60000) / 1000);
-    var p = function (x) { return (x < 10 ? "0" : "") + x; };
-    var dEl = document.getElementById("pv-cd-d");
-    var hEl = document.getElementById("pv-cd-h");
-    var mEl = document.getElementById("pv-cd-m");
-    var sEl = document.getElementById("pv-cd-s");
-    if (dEl) dEl.textContent = p(d);
-    if (hEl) hEl.textContent = p(h);
-    if (mEl) mEl.textContent = p(m);
-    if (sEl) sEl.textContent = p(s);
-  }
-  tick();
-  previewTickHandle = setInterval(tick, 1000);
-}
-
-/**
- * Reads a countdown text override from STATE.text (the same map the visual
- * editor's click-to-edit fields write into, see js/main.js's
- * saveEditedField()), falling back to the template's own default.
- * @param id the data-edit-id key
- * @param fallback the template's own default text
- * @return the text to render
- */
-function countdownText(id, fallback) {
-  return (STATE.text && STATE.text[id] !== undefined) ? STATE.text[id] : fallback;
-}
-
-/**
- * Wires one countdown label/text node in the mini preview so a click edits
- * it in place, writing straight into STATE.text under the same key the
- * visual editor's click-to-edit fields use (js/main.js's data-edit-id
- * "countdown.tba.label"/"countdown.tba.text"/"countdown.clock.label"), so
- * an edit made here or there shows up in both places, same idea as
- * wireInlineEdit() for logistics tiles. Deletes the key (falls back to the
- * default) if edited back to match it, same rule saveEditedField() uses.
- * @param el the element to wire
- * @param id the STATE.text key
- * @param fallback the template's own default text
- */
-function wireCountdownEdit(el, id, fallback) {
-  el.classList.add("inline-editable");
-  var before = "";
-  el.addEventListener("click", function () {
-    if (el.isContentEditable) return;
-    before = el.textContent;
-    el.contentEditable = "true";
-    el.classList.add("editing");
-    el.focus();
-    var range = document.createRange();
-    range.selectNodeContents(el);
-    var sel = window.getSelection();
-    sel.removeAllRanges();
-    sel.addRange(range);
-  });
-  el.addEventListener("keydown", function (e) {
-    if (!el.isContentEditable) return;
-    if (e.key === "Enter") { e.preventDefault(); el.blur(); }
-    if (e.key === "Escape") { e.preventDefault(); el.textContent = before; el.blur(); }
-  });
-  el.addEventListener("blur", function () {
-    if (!el.isContentEditable) return;
-    el.contentEditable = "false";
-    el.classList.remove("editing");
-    var after = el.textContent;
-    if (after === before) return;
-    if (!STATE.text || typeof STATE.text !== "object") STATE.text = {};
-    if (after.trim() === fallback.trim()) delete STATE.text[id];
-    else STATE.text[id] = after;
-  });
-}
-
-/** Mirrors STATE back into the "current selection" preview box. */
-function renderPreview() {
-  var slot = document.getElementById("previewCountdown");
-  if (!slot) return;
-  if (previewTickHandle) { clearInterval(previewTickHandle); previewTickHandle = null; }
-
-  var showClock = STATE.timer_mode === "actual" && STATE.timer_target;
-  slot.innerHTML = showClock ? CD_CLOCK_HTML : CD_TBA_HTML;
-
-  if (showClock) {
-    tickPreviewCountdown(STATE.timer_target);
-    var clockLabel = slot.querySelector(".cd-label");
-    if (clockLabel) {
-      clockLabel.textContent = countdownText("countdown.clock.label", "Workshop begins in");
-      wireCountdownEdit(clockLabel, "countdown.clock.label", "Workshop begins in");
-    }
-  } else {
-    var tbaLabel = slot.querySelector(".cd-label");
-    var tbaText = slot.querySelector(".cd-tba-txt");
-    if (tbaLabel) {
-      tbaLabel.textContent = countdownText("countdown.tba.label", "Date and time");
-      wireCountdownEdit(tbaLabel, "countdown.tba.label", "Date and time");
-    }
-    if (tbaText) {
-      tbaText.textContent = countdownText("countdown.tba.text", "To be announced");
-      wireCountdownEdit(tbaText, "countdown.tba.text", "To be announced");
-    }
-  }
-
-  var logisticsSlot = document.getElementById("previewLogistics");
-  if (logisticsSlot) {
-    logisticsSlot.innerHTML = "";
-    STATE.logistics.forEach(function (t) { logisticsSlot.appendChild(logisticsPreviewTile(t)); });
-  }
 }
 
 /**
@@ -1124,53 +939,6 @@ function renderExtras() {
   });
 }
 
-/** Renders the editable list of the "4 hours", "SFB520", certificate, etc tiles. */
-function renderLogistics() {
-  var list = document.getElementById("logisticsList");
-  if (!list) return;
-  var html = "";
-
-  STATE.logistics.forEach(function (t, i) {
-    html +=
-      '<div class="ta-panel" data-i="' + i + '">' +
-        '<div class="ta-panel-head">' +
-          '<span class="daytag">Tile ' + (i + 1) + '</span>' +
-          '<button class="btn btn-ghost lg-del" type="button">Remove tile</button>' +
-        '</div>' +
-        '<div class="ta-row">' +
-          '<div class="field"><label>Big text</label>' +
-            '<input type="text" class="lg-big" value="' + t.big + '" ' + (t.icon ? "disabled" : "") + '></div>' +
-          '<div class="field"><label>Label text</label>' +
-            '<input type="text" class="lg-lbl" value="' + t.lbl + '"></div>' +
-        '</div>' +
-        '<label class="ta-radio"><input type="checkbox" class="lg-icon" ' + (t.icon ? "checked" : "") + '>' +
-          ' Show a checkmark icon instead of the big text</label>' +
-      '</div>';
-  });
-
-  list.innerHTML = html;
-
-  var panels = list.querySelectorAll(".ta-panel");
-  panels.forEach(function (p) {
-    var t = STATE.logistics[+p.getAttribute("data-i")];
-    var bigInput = p.querySelector(".lg-big");
-
-    bigInput.addEventListener("input", function () { t.big = this.value; renderPreview(); });
-    p.querySelector(".lg-lbl").addEventListener("input", function () { t.lbl = this.value; renderPreview(); });
-    p.querySelector(".lg-icon").addEventListener("change", function () {
-      t.icon = this.checked;
-      bigInput.disabled = t.icon;
-      renderPreview();
-    });
-    p.querySelector(".lg-del").addEventListener("click", function () {
-      if (!confirm("Remove this tile?")) return;
-      STATE.logistics.splice(STATE.logistics.indexOf(t), 1);
-      renderLogistics();
-      renderPreview();
-    });
-  });
-}
-
 /**
  * Checks whether a gallery url is a video clip.
  * @param u the media url
@@ -1478,69 +1246,18 @@ function renderGallery() {
 }
 
 /**
- * Renders the "Site images" list: one row per landing-page photo slot
- * (HOME_IMAGE_SLOTS), upload/reset controls only, no <img> preview (use
- * Preview to see how it actually looks, same reasoning as not thumbnailing
- * every gallery photo, see renderGallery()).
+ * Pushes STATE into the Landing page section, which is down to one control:
+ * the Apply Now hover tooltip. Everything else that section used to hold (the
+ * live tile preview, the countdown mode/target, the hero clip, the site
+ * photos, the info tiles, the Apply Now url) is edited in place in the Visual
+ * editor instead - those content keys are still here in STATE, they just
+ * aren't edited from a form any more. The tooltip stays because it has no
+ * element of its own to right-click: it only exists while a visitor is
+ * hovering one of the buttons.
  */
-function renderHomeImages() {
-  var list = document.getElementById("homeImagesList");
-  if (!list) return;
-  list.innerHTML = HOME_IMAGE_SLOTS.map(function (slot) {
-    var url = STATE.home_images[slot.key];
-    var isDefault = url === HOME_IMAGE_DEFAULTS[slot.key];
-    return '<div class="home-img-row" data-key="' + slot.key + '">' +
-      '<div class="field" style="margin-bottom:6px"><label>' + slot.label + '</label></div>' +
-      '<p class="muted home-img-name" style="margin:0 0 10px">' +
-        (isDefault ? "Using the default photo." : "Custom: " + url.split("/").pop()) +
-      '</p>' +
-      '<label class="btn btn-ghost ta-upload">' +
-        '<svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
-        'stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>' +
-        ' Upload image<input type="file" accept="image/*" class="home-img-file" hidden></label> ' +
-      '<button class="btn btn-ghost home-img-reset" type="button"' + (isDefault ? " disabled" : "") + '>Reset to default</button>' +
-    '</div>';
-  }).join("");
-
-  list.querySelectorAll(".home-img-row").forEach(function (row) {
-    var key = row.getAttribute("data-key");
-    row.querySelector(".home-img-file").addEventListener("change", function () {
-      var file = this.files[0];
-      this.value = "";
-      if (!file) return;
-      showMsg("Uploading...", true);
-      uploadFile(file)
-        .then(function (item) {
-          STATE.home_images[key] = item.url;
-          showMsg("Uploaded. Don't forget to save your changes.", true);
-          renderHomeImages();
-        })
-        .catch(function (err) {
-          if (err.message === "expired") return;
-          showMsg("Couldn't upload the image. Try again.", false);
-        });
-    });
-    row.querySelector(".home-img-reset").addEventListener("click", function () {
-      STATE.home_images[key] = HOME_IMAGE_DEFAULTS[key];
-      renderHomeImages();
-    });
-  });
-}
-
-/** Pushes STATE into the landing page controls' input values. */
 function syncLanding() {
-  var radios = document.querySelectorAll('input[name="cdMode"]');
-  radios.forEach(function (r) { r.checked = r.value === STATE.timer_mode; });
-  document.getElementById("cdTarget").value = STATE.timer_target;
-  document.getElementById("joinUrlInput").value = STATE.join_url;
-  document.getElementById("applyTooltipInput").value = STATE.apply_tooltip;
-
-  var nameEl = document.getElementById("heroVideoName");
-  var isDefault = STATE.hero_video_url === "assets/cover-video.mp4";
-  nameEl.textContent = isDefault ?
-    "Using the default clip." :
-    "Custom: " + STATE.hero_video_url.split("/").pop();
-  document.getElementById("heroVideoReset").disabled = isDefault;
+  var tooltip = document.getElementById("applyTooltipInput");
+  if (tooltip) tooltip.value = STATE.apply_tooltip;
 }
 
 /** Re-renders every editor section from STATE. */
@@ -1548,11 +1265,8 @@ function renderAll() {
   renderVariables();
   renderPanels();
   renderExtras();
-  renderLogistics();
   renderGallery();
-  renderHomeImages();
   syncLanding();
-  renderPreview();
 }
 
 /**
@@ -1711,6 +1425,17 @@ function pullStateFromEditor() {
     var newState = JSON.parse(raw);
     var editingRaw;
     try { editingRaw = localStorage.getItem("preview_editing"); } catch (e) { editingRaw = null; }
+    /* any top-level key the draft doesn't carry at all keeps whatever
+       STATE already had. js/ta.js always writes the WHOLE blob, so a
+       missing key never means "the ta emptied this" (that shows up as an
+       empty array/object, which is present and comes across as-is) - it
+       means the draft was built up key-by-key by the editor's own
+       incremental writers (js/main.js's save*(), which merge into
+       whatever's in localStorage) starting from nothing. Losing the day
+       panels, extras and gallery to that is exactly the wipe this guards. */
+    Object.keys(STATE).forEach(function (k) {
+      if (newState[k] === undefined) newState[k] = STATE[k];
+    });
     STATE = newState;
     EDITING = editingRaw ? JSON.parse(editingRaw) : null;
     normalizeState();
@@ -1744,9 +1469,22 @@ function showMode(mode) {
   document.querySelectorAll("#taModeTabs .ta-mode-tab").forEach(function (b) {
     b.classList.toggle("active", b.getAttribute("data-mode") === mode);
   });
+  /* the iframe renders the snapshot, so it can't be pointed at a page until
+     there IS one - landing straight on this tab (?tab=editor, the link
+     preview.html offers) used to fire while /api/content was still in
+     flight, handing the editor the placeholder seed() as if it were the
+     site's content. writePreviewSnapshot() refuses to write that now, which
+     stops the wipe but would leave the editor showing a stock page, so wait
+     the fetch out instead. */
   if (mode === "editor") {
-    writePreviewSnapshot();
-    showEditorSubTab(editorSubTab);
+    whenContentReady(function () {
+      if (TA_MODE !== "editor") return; /* switched back while it loaded */
+      if (!writePreviewSnapshot()) {
+        showMsg("Couldn't load the saved content, so there's nothing to edit yet. Reload the page.", false);
+        return;
+      }
+      showEditorSubTab(editorSubTab);
+    });
   }
 }
 
@@ -1785,13 +1523,32 @@ function clickEditRedo() {
  * Snapshots STATE (and the open profile, if any) into localStorage, the
  * hand-off preview.html and the Visual editor's iframe both read from and
  * tryRestoreFromPreview() restores back out of.
+ *
+ * Refuses to write while STATE is still the placeholder seed() (see
+ * STATE_LOADED): that snapshot isn't just what the iframe renders, it's
+ * what Apply/Save read back out of it (pullStateFromEditor()), so
+ * publishing the placeholder would quietly stage "no day panels, no
+ * extras, no gallery directories, none of the visual edits" as the ta's
+ * work - and then save exactly that over the real thing.
+ * @return true if the snapshot was written
  */
 function writePreviewSnapshot() {
+  if (!STATE_LOADED) return false;
   try {
     localStorage.setItem("preview_content", JSON.stringify(STATE));
     if (EDITING) localStorage.setItem("preview_editing", JSON.stringify(EDITING));
     else localStorage.removeItem("preview_editing");
-  } catch (e) {}
+  } catch (e) { return false; }
+  return true;
+}
+
+/**
+ * Runs fn once STATE holds real content, immediately if it already does.
+ * @param fn called with no args
+ */
+function whenContentReady(fn) {
+  if (STATE_LOADED || !CONTENT_READY) fn();
+  else CONTENT_READY.then(fn);
 }
 
 /** Clears the unsaved-edits snapshot used by the Preview button/page. */
@@ -1828,6 +1585,7 @@ function tryRestoreFromPreview() {
     var newEditing = editingRaw ? JSON.parse(editingRaw) : null;
     STATE = newState;
     EDITING = newEditing;
+    STATE_LOADED = true;
     normalizeState();
     renderAll();
     syncProfileBar();
@@ -1849,6 +1607,7 @@ function loadLive(okMsg) {
     .then(function (res) { return res.json(); })
     .then(function (data) {
       STATE = data;
+      STATE_LOADED = true;
       normalizeState();
       renderAll();
       if (okMsg) showMsg(okMsg, true);
@@ -2272,7 +2031,7 @@ document.addEventListener("DOMContentLoaded", function () {
   });
   if (!gateCheck()) return;
 
-  if (!tryRestoreFromPreview()) loadLive();
+  CONTENT_READY = tryRestoreFromPreview() ? Promise.resolve() : loadLive();
   fetchProfiles();
   fetchObjects();
 
@@ -2306,21 +2065,33 @@ document.addEventListener("DOMContentLoaded", function () {
     renderPanels();
   });
 
-  document.getElementById("addLogistics").addEventListener("click", function () {
-    STATE.logistics.push({ big: "", lbl: "", icon: false });
-    renderLogistics();
-    renderPreview();
-  });
-
+  var newYearInput = document.getElementById("newYearInput");
   document.getElementById("addGalleryYear").addEventListener("click", function () {
-    var input = document.getElementById("newYearInput");
-    var y = input.value.trim();
-    if (!y) return;
-    if (STATE.gallery.years.indexOf(y) !== -1) { showMsg("That directory already exists.", false); return; }
+    var y = newYearInput.value.trim();
+    if (!y) {
+      showGalleryMsg("Give the directory a name first.", false);
+      newYearInput.focus();
+      return;
+    }
+    if (STATE.gallery.years.indexOf(y) !== -1) {
+      showGalleryMsg('There\'s already a directory called "' + y + '".', false);
+      newYearInput.focus();
+      newYearInput.select();
+      return;
+    }
     STATE.gallery.years.unshift(y);
     STATE.gallery.images[y] = [];
-    input.value = "";
+    newYearInput.value = "";
+    showGalleryMsg('Added "' + y + '". Apply or save your changes to keep it.', true);
     renderGallery();
+  });
+  /* the complaint is about what's in the box, so it goes as soon as that
+     changes rather than sitting there being wrong */
+  newYearInput.addEventListener("input", function () { showGalleryMsg("", true); });
+  newYearInput.addEventListener("keydown", function (e) {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    document.getElementById("addGalleryYear").click();
   });
 
   document.getElementById("extraFile").addEventListener("change", function () {
@@ -2338,28 +2109,6 @@ document.addEventListener("DOMContentLoaded", function () {
         if (err.message === "expired") return;
         showMsg("Couldn't upload one of the files. Try again.", false);
       });
-  });
-
-  document.getElementById("heroVideoFile").addEventListener("change", function () {
-    var file = this.files[0];
-    this.value = "";
-    if (!file) return;
-    showMsg("Uploading...", true);
-    uploadFile(file)
-      .then(function (item) {
-        STATE.hero_video_url = item.url;
-        showMsg("Uploaded. Don't forget to save your changes.", true);
-        syncLanding();
-      })
-      .catch(function (err) {
-        if (err.message === "expired") return;
-        showMsg("Couldn't upload the video. Try again.", false);
-      });
-  });
-
-  document.getElementById("heroVideoReset").addEventListener("click", function () {
-    STATE.hero_video_url = "assets/cover-video.mp4";
-    syncLanding();
   });
 
   var extraLinkRow = document.getElementById("extraLinkRow");
@@ -2381,11 +2130,6 @@ document.addEventListener("DOMContentLoaded", function () {
     if (e.key === "Enter") { e.preventDefault(); addExtraLink(); }
   });
 
-  document.querySelectorAll('input[name="cdMode"]').forEach(function (r) {
-    r.addEventListener("change", function () { STATE.timer_mode = this.value; renderPreview(); });
-  });
-  document.getElementById("cdTarget").addEventListener("input", function () { STATE.timer_target = this.value; renderPreview(); });
-  document.getElementById("joinUrlInput").addEventListener("input", function () { STATE.join_url = this.value; });
   document.getElementById("applyTooltipInput").addEventListener("input", function () { STATE.apply_tooltip = this.value; });
 
   document.getElementById("taPreview").addEventListener("click", openPreview);

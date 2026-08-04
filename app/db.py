@@ -176,16 +176,13 @@ DEFAULT_CONTENT = {
     # progress bar's Current/Total selects, on its right-click menu - see
     # renderCtxMenuProgressVars() in js/main.js) and reference from formula
     # text.
-    # "page" is what a variable MEANS SOMETHING ON: the two builtins below
-    # both describe workshop progress, which is a student-dashboard fact and
-    # nothing else, so they're only offered by the editor's pickers while
-    # editing that page (see pickableVariables() in js/main.js). A variable
-    # with no "page" is site-wide and offered everywhere - that's every
-    # variable a ta adds themselves, since there's no way to type one that
-    # isn't. Scoping only affects what the pickers OFFER: an existing binding
-    # still resolves and paints its number wherever it ends up, and the
-    # reusable-object canvas is exempt entirely (an object gets dropped onto
-    # any page, so it picks from the lot).
+    # Everything in this list is PUBLIC: it's what the content manager's
+    # Variables section shows, and every page's editor pickers offer all of
+    # it, the two builtins below included. A page can also have PRIVATE
+    # variables that are meaningless anywhere else (the gallery's per-pane
+    # "which image of how many" pairs) - those are derived by the editor from
+    # what's placed on the page, never stored here, and never listed in the
+    # content manager, see pageLocalVariables() in js/main.js.
     # type is one of "string"/"number"/"boolean"/"datetime". "builtin" ones
     # can be renamed but never removed or retyped (js/ta.js enforces this in
     # the Variables section UI); "computed" ones have no ta-editable value at
@@ -199,13 +196,13 @@ DEFAULT_CONTENT = {
             "key": "total_days", "name": "Total days", "type": "number",
             "value": 10,
             "description": "\"__ of TOTAL days unlocked\" progress bar on student dashboard",
-            "builtin": True, "computed": False, "page": "dashboard",
+            "builtin": True, "computed": False,
         },
         {
             "key": "days_progressed", "name": "Days progressed", "type": "number",
             "value": 0,
             "description": "The day number the workshop is currently on (count of unlocked days), calculated automatically",
-            "builtin": True, "computed": True, "page": "dashboard",
+            "builtin": True, "computed": True,
         },
     ],
     "timer_mode": "tentative",
@@ -1036,7 +1033,7 @@ def init_db():
     _migrate_landing_nav_states(conn)
     _migrate_custom_elements_page_scope(conn)
     _migrate_progress_bar_object(conn)
-    _migrate_variable_page_scope(conn)
+    _migrate_drop_variable_page_scope(conn)
     conn.close()
 
 
@@ -1781,34 +1778,36 @@ def _migrate_progress_bar_object(conn):
     conn.commit()
 
 
-def _migrate_variable_page_scope(conn):
-    """one-time patch (same meta-flag trick as _migrate_learn_reel()) stamping
-    "page": "dashboard" onto the two builtin workshop-progress variables in
-    every already-existing content blob/profile. Without it, an older blob's
-    copies stay unscoped and keep being offered on every page - which is the
-    exact thing the scope exists to stop, since "Days progressed" is not
-    something to bind a gallery formula to.
+def _migrate_drop_variable_page_scope(conn):
+    """one-time patch (same meta-flag trick as _migrate_learn_reel()) undoing a
+    short-lived experiment that stamped a "page" onto content.variables so the
+    editor's pickers would only offer a variable on the page it was about.
 
-    Matched by "key", the identifier that never changes (a ta may well have
-    renamed either of these), and only ever ADDS the field: a variable that
-    already carries a page is left exactly as it is.
+    That was the wrong split. A variable in the content manager is public by
+    definition - a ta types it there so the site can use it, and hiding it on
+    four pages out of five is just a variable they can't bind. What's actually
+    page-private (the gallery's per-pane image counters) was never stored here
+    in the first place, see pageLocalVariables() in js/main.js. So the field
+    means nothing now, and this strips it back out rather than leaving dead
+    keys in the blob for the next reader to puzzle over.
     @param conn an open db connection
     """
     cur = conn.execute(
-        "INSERT OR IGNORE INTO meta (key, value) VALUES ('variable_page_scope_migrated', '1')"
+        "INSERT OR IGNORE INTO meta (key, value) VALUES ('variable_page_scope_dropped', '1')"
     )
     conn.commit()
     if cur.rowcount == 0:
         return
-
-    scopes = {v["key"]: v["page"] for v in DEFAULT_CONTENT["variables"] if v.get("page")}
+    # the flag from the migration this one reverses: dropped too, so a later
+    # scope migration (if the idea ever comes back in a better shape) isn't
+    # silently skipped by a leftover "already done"
+    conn.execute("DELETE FROM meta WHERE key = 'variable_page_scope_migrated'")
 
     def patch(data):
         changed = False
         for v in data.get("variables", []):
-            page = scopes.get(v.get("key"))
-            if page and not v.get("page"):
-                v["page"] = page
+            if "page" in v:
+                del v["page"]
                 changed = True
         return data, changed
 

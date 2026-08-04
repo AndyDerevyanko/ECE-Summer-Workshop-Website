@@ -3,9 +3,9 @@
 
 /* the landing page's photo slots' default urls, same keys/values as
    home_images in DEFAULT_CONTENT, app/db.py. No ui here edits these any more
-   (the content manager's "Site images" list went with the rest of that
-   section, see syncLanding()) - they're kept so normalizeState() can fill the
-   key in on a blob saved before it existed, exactly as before. */
+   (the content manager's "Site images" list went with the rest of the Landing
+   page section) - they're kept so normalizeState() can fill the key in on a
+   blob saved before it existed, exactly as before. */
 var HOME_IMAGE_DEFAULTS = {
   about_hero: "assets/gallery/group-main-alt.jpeg",
   about_1: "assets/gallery/class-closeup.jpeg",
@@ -69,7 +69,6 @@ function seed() {
     timer_mode: "tentative", /* tentative | actual */
     timer_target: "",
     join_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-    apply_tooltip: "Applications open once the workshop dates are confirmed, check back soon.",
     hero_video_url: "assets/cover-video.mp4",
     home_images: Object.assign({}, HOME_IMAGE_DEFAULTS),
     logistics: [
@@ -173,7 +172,14 @@ function seed() {
     progress_fill: {},
     dark_progress_fill: {},
     progress_track: {},
-    dark_progress_track: {}
+    dark_progress_track: {},
+    /* per-element hover tooltips, keyed by data-edit-id/data-resize-id, one
+       whole descriptor each (the words plus where the bubble sits and how it
+       looks) rather than a map per property - added and edited from the visual
+       editor's right-click menu, see the ELEMENT TOOLTIPS section in
+       js/main.js. This is what replaced the old apply_tooltip field that used
+       to live in the Landing page section of this page. */
+    tooltips: {}
   };
 }
 
@@ -292,9 +298,6 @@ function normalizeState() {
   if (!Array.isArray(STATE.days)) STATE.days = seed().days;
   if (!Array.isArray(STATE.extras)) STATE.extras = [];
   if (STATE.join_url === undefined) STATE.join_url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
-  if (STATE.apply_tooltip === undefined) {
-    STATE.apply_tooltip = "Applications open once the workshop dates are confirmed, check back soon.";
-  }
   /* a blob saved before variables existed gets the full seeded pair; one
      that already has some (even just custom ones a ta added) still needs
      either builtin backfilled in if somehow missing, same "never let an
@@ -366,6 +369,7 @@ function normalizeState() {
   if (!STATE.dark_progress_fill || typeof STATE.dark_progress_fill !== "object") STATE.dark_progress_fill = {};
   if (!STATE.progress_track || typeof STATE.progress_track !== "object") STATE.progress_track = {};
   if (!STATE.dark_progress_track || typeof STATE.dark_progress_track !== "object") STATE.dark_progress_track = {};
+  if (!STATE.tooltips || typeof STATE.tooltips !== "object") STATE.tooltips = {};
   /* footer contact line used to be its own field, edited from a dedicated
      input in this section; now it's click-to-edit like the rest of the
      landing page copy, so fold any already-saved value in once and stop
@@ -374,7 +378,25 @@ function normalizeState() {
     STATE.text["footer.contact"] = STATE.contact_text;
   }
   delete STATE.contact_text;
+  /* the Apply Now hover tooltip was the same kind of leftover: one string, one
+     form field, because a tooltip had no element in the editor to click on.
+     Every element can carry its own now (see STATE.tooltips above), so an
+     already-saved value folds into one per Apply Now button and the field goes
+     away. The server does the same fold for the live site, see
+     _migrate_apply_tooltip() in app/db.py - this is for a draft or a profile
+     that's already in a ta's hands here. */
+  if (STATE.apply_tooltip) {
+    APPLY_TOOLTIP_IDS.forEach(function (id) {
+      if (!STATE.tooltips[id]) STATE.tooltips[id] = { text: STATE.apply_tooltip, pos: "bottom" };
+    });
+  }
+  delete STATE.apply_tooltip;
 }
+
+/* the three Apply Now buttons on the landing page (templates/index.html), by
+   data-edit-id: the nav one, the hero's, and the one under the prizes. The
+   only place this list is needed is the one-time fold above. */
+var APPLY_TOOLTIP_IDS = ["nav.link.apply", "hero.cta.primary", "prizes.cta"];
 
 /* seed() is a PLACEHOLDER, not content: it's what STATE holds for the few
    hundred ms between this file parsing and /api/content (or a restored
@@ -1062,8 +1084,7 @@ var GALLERY_VIDEO_INPUTS = [
 ];
 
 /**
- * Pushes STATE into the Gallery section's "Video clips" checkboxes, the same
- * "the form IS the state" sync syncLanding() does for its one field - split
+ * Pushes STATE into the Gallery section's "Video clips" checkboxes - split
  * from renderGallery() below because these three are static markup in
  * instructor.html rather than part of the directory list it rebuilds.
  */
@@ -1292,20 +1313,13 @@ function renderGallery() {
   });
 }
 
-/**
- * Pushes STATE into the Landing page section, which is down to one control:
- * the Apply Now hover tooltip. Everything else that section used to hold (the
- * live tile preview, the countdown mode/target, the hero clip, the site
- * photos, the info tiles, the Apply Now url) is edited in place in the Visual
- * editor instead - those content keys are still here in STATE, they just
- * aren't edited from a form any more. The tooltip stays because it has no
- * element of its own to right-click: it only exists while a visitor is
- * hovering one of the buttons.
- */
-function syncLanding() {
-  var tooltip = document.getElementById("applyTooltipInput");
-  if (tooltip) tooltip.value = STATE.apply_tooltip;
-}
+/* There is no Landing page section on this page any more. It was down to one
+   control - the Apply Now hover tooltip - which was only here because a
+   tooltip had no element in the visual editor to right-click: it doesn't
+   exist until someone hovers. Tooltips are per-element there now (see the
+   ELEMENT TOOLTIPS section in js/main.js), so those three buttons are edited
+   where the rest of that page is, and the section is gone rather than left
+   standing empty. */
 
 /** Re-renders every editor section from STATE. */
 function renderAll() {
@@ -1314,7 +1328,6 @@ function renderAll() {
   renderExtras();
   renderGallery();
   syncGalleryVideo();
-  syncLanding();
 }
 
 /**
@@ -2288,8 +2301,6 @@ document.addEventListener("DOMContentLoaded", function () {
   extraLinkInput.addEventListener("keydown", function (e) {
     if (e.key === "Enter") { e.preventDefault(); addExtraLink(); }
   });
-
-  document.getElementById("applyTooltipInput").addEventListener("input", function () { STATE.apply_tooltip = this.value; });
 
   document.getElementById("taPreview").addEventListener("click", openPreview);
   document.getElementById("taApply").addEventListener("click", applyContent);

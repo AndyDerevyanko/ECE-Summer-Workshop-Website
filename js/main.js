@@ -69,7 +69,6 @@ var DEFAULT_LOGISTICS = [
   { big: "", lbl: "Certificate of completion", icon: true }
 ];
 var DEFAULT_JOIN_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
-var DEFAULT_APPLY_TOOLTIP = "Applications open once the workshop dates are confirmed, check back soon.";
 var DEFAULT_HERO_VIDEO = "assets/cover-video.mp4";
 /* landing page photo slots, same shape/values as home_images in
    DEFAULT_CONTENT, app/db.py. keys map to the <img> ids below. */
@@ -3955,6 +3954,10 @@ function reapplyThemedColors() {
   applyButtonStateColorOverrides(THEMED_OVERRIDE_MAPS.hoverColor, THEMED_OVERRIDE_MAPS.darkHoverColor,
     THEMED_OVERRIDE_MAPS.activeColor, THEMED_OVERRIDE_MAPS.darkActiveColor);
   repaintInlineTextColors();
+  /* a tooltip's own two colors resolve the same way (see paintTooltipBubble()),
+     and one can be on show while the theme flips - the ta styling it from the
+     sub-editor with the site's theme toggle a click away is exactly that case */
+  refreshTooltipBubble();
 }
 window.reapplyThemedColors = reapplyThemedColors;
 
@@ -4140,6 +4143,571 @@ function applyFlipRotateOverrides(flipH, flipV, rotate) {
     if (deg) el.dataset.rotate = deg; else delete el.dataset.rotate;
     paintPos(el);
   });
+}
+
+/* ---------------------------------------------------------------------------
+   ELEMENT TOOLTIPS
+
+   Any tagged element, on any page the editor opens, can carry a hover tooltip:
+   a ta right-clicks it, picks "Add tooltip", and gets a small sub-editor for
+   the words and for the bubble's own look - where it sits, its two colors, its
+   border, corners, text size and how wide it's allowed to get. Saved in
+   content.tooltips keyed by data-edit-id/data-resize-id like every other
+   override, and painted on the live site too: a tooltip is something a visitor
+   reads, not editor chrome.
+
+   ONE DESCRIPTOR PER ELEMENT, rather than the dozen parallel id-keyed maps the
+   older style controls use (content.colors, content.radius, content.border,
+   ...). Those grew one control at a time, each new knob needing its own map; a
+   tooltip arrives as one whole thing with one panel behind it, so it stores as
+   one whole thing. content.custom_elements is already free-form json in the
+   same blob, so the shape is nothing new to anything downstream.
+
+   ONE BUBBLE, parked on the body and moved to whatever is being hovered,
+   rather than a ::after on each element. A pseudo-element inherits its host's
+   clipping and stacking - a tooltip on anything inside a scrolling container,
+   an overflow:hidden card or a tile would come out cut in half or behind its
+   neighbours - and a lot of the tagged elements on this site sit inside one of
+   those. It also keeps the bubble out of every innerHTML the editor saves: a
+   node parked inside a text field would be written straight into content.text
+   by saveEditedField().
+
+   This replaces content.apply_tooltip, which was one hardcoded string shared by
+   the three Apply Now buttons and edited from a lone field in the content
+   manager, because a tooltip that only exists while someone hovers had no
+   element in the editor to click on. It does now, so those three are ordinary
+   tooltips seeded with the same words - see _migrate_apply_tooltip() in
+   app/db.py.
+   --------------------------------------------------------------------------- */
+
+/* content.tooltips, {id: descriptor}. See TOOLTIP_DEFAULTS for the shape. */
+var TOOLTIPS = {};
+
+/* the one bubble (built on first use) and which element it's currently up for */
+var TT_BUBBLE = null;
+var TT_BUBBLE_EL = null;
+/* the element whose tooltip the sub-editor is holding open: shown regardless of
+   where the pointer is, so a ta can see the thing they're restyling while they
+   restyle it - the same reason an empty progress bar previews a fill while it's
+   the selected element, see progressFillWidthFor() */
+var TT_PINNED_EL = null;
+var TT_HOVER_WIRED = false;
+
+/* what a tooltip looks like before a ta changes anything, which is deliberately
+   the bubble the Apply Now buttons used to get from their own hardcoded css
+   rule - the migrated ones come out looking exactly as they did. The colors
+   start empty rather than at a literal hex: "" means "whatever the site's own
+   surface/text color is in the theme that's on", which is what lets an
+   untouched tooltip follow a theme flip on its own. */
+var TOOLTIP_DEFAULTS = {
+  text: "",
+  pos: "top",
+  bg: "", darkBg: "",
+  color: "", darkColor: "",
+  borderW: 0, borderColor: "", darkBorderColor: "",
+  radius: 8, fontSize: 13, width: 220
+};
+
+/**
+ * One element's tooltip descriptor with every field filled in, for the
+ * sub-editor to prime its controls from. Saved descriptors are written whole
+ * (see setTooltipProp()), but one seeded in app/db.py or left behind by an
+ * older shape of this feature needn't be.
+ * @param id a data-edit-id/data-resize-id
+ * @return a fresh object, never the stored one - a caller can't edit the map
+ *   out from under everything else by accident
+ */
+function tooltipDescriptor(id) {
+  return Object.assign({}, TOOLTIP_DEFAULTS, TOOLTIPS[id] || {});
+}
+
+/**
+ * The tooltip worth actually showing for an id: one with words in it. A
+ * descriptor with an empty text is a draft the sub-editor is still holding
+ * (see closeTooltipEditor(), which throws those away rather than saving an
+ * invisible tooltip nobody can find again).
+ * @param id a data-edit-id/data-resize-id
+ * @return the descriptor, or null
+ */
+function tooltipFor(id) {
+  var d = id && TOOLTIPS[id];
+  return d && d.text ? d : null;
+}
+
+/**
+ * The element a hover should show a tooltip for: the innermost tracked
+ * ancestor of node that has one. Walking up rather than looking only at what
+ * the pointer is directly over is what makes a tooltip put on a card (or a
+ * button, or a whole tile) fire for the text inside it too - those inner
+ * pieces are separately tracked elements in their own right, so a plain lookup
+ * would find nothing and the tooltip would only appear in the gaps between
+ * them.
+ * @param node the event target
+ * @return the element, or null if nothing in the chain has a tooltip
+ */
+function tooltipTargetFor(node) {
+  var el = node && node.closest ? node.closest(RESIZABLE_SEL) : null;
+  while (el) {
+    if (tooltipFor(elId(el))) return el;
+    el = el.parentElement ? el.parentElement.closest(RESIZABLE_SEL) : null;
+  }
+  return null;
+}
+
+/** Builds the one shared bubble, lazily. */
+function buildTooltipBubble() {
+  TT_BUBBLE = document.createElement("div");
+  TT_BUBBLE.className = "tt-bubble";
+  document.body.appendChild(TT_BUBBLE);
+}
+
+/**
+ * Paints the bubble from one descriptor. Every property is written on every
+ * paint, "" where the descriptor has nothing to say: this is ONE shared node,
+ * so anything left inline from the last element it was shown for would
+ * otherwise leak onto the next one. An empty string hands the property back to
+ * the stylesheet (see .tt-bubble in css/style.css), which is where the
+ * defaults actually live.
+ * @param d a tooltip descriptor
+ */
+function paintTooltipBubble(d) {
+  var s = TT_BUBBLE.style;
+  /* textContent, not innerHTML: this is plain words a ta typed into a
+     textarea, and it renders on the live site */
+  TT_BUBBLE.textContent = d.text || "";
+  s.background = resolveThemedColor(d.bg, d.darkBg);
+  s.color = resolveThemedColor(d.color, d.darkColor);
+  var bw = +d.borderW || 0;
+  s.border = bw
+    ? bw + "px solid " + (resolveThemedColor(d.borderColor, d.darkBorderColor) || "var(--border)")
+    : "";
+  s.borderRadius = (d.radius === undefined ? TOOLTIP_DEFAULTS.radius : +d.radius || 0) + "px";
+  s.fontSize = (+d.fontSize || TOOLTIP_DEFAULTS.fontSize) + "px";
+  s.maxWidth = (+d.width || TOOLTIP_DEFAULTS.width) + "px";
+}
+
+/**
+ * Puts the bubble on whichever side of an element its descriptor asks for.
+ * Clamped to the VIEWPORT rather than to the document: a bubble hanging off
+ * the right edge would widen the page and hand every page on the site a
+ * horizontal scrollbar. Coordinates are document ones (rect + scroll), same as
+ * the editor's own popovers.
+ * @param el the element the tooltip belongs to
+ * @param pos "top", "bottom", "left" or "right"
+ */
+function positionTooltipBubble(el, pos) {
+  var r = el.getBoundingClientRect();
+  var w = TT_BUBBLE.offsetWidth, h = TT_BUBBLE.offsetHeight;
+  var gap = 10;
+  var x = r.left + r.width / 2 - w / 2;
+  var y = r.top - h - gap;
+  if (pos === "bottom") {
+    y = r.bottom + gap;
+  } else if (pos === "left") {
+    x = r.left - w - gap;
+    y = r.top + r.height / 2 - h / 2;
+  } else if (pos === "right") {
+    x = r.right + gap;
+    y = r.top + r.height / 2 - h / 2;
+  }
+  var maxX = document.documentElement.clientWidth - w - 6;
+  var maxY = document.documentElement.clientHeight - h - 6;
+  TT_BUBBLE.style.left = (Math.max(6, Math.min(x, maxX)) + window.scrollX) + "px";
+  TT_BUBBLE.style.top = (Math.max(6, Math.min(y, maxY)) + window.scrollY) + "px";
+}
+
+/**
+ * Shows the bubble for one element, or puts it away if that element hasn't
+ * got a tooltip any more (the sub-editor's Remove button, an undo).
+ * @param el the element
+ */
+function showTooltipFor(el) {
+  var d = tooltipFor(elId(el));
+  if (!d) { hideTooltipBubble(); return; }
+  if (!TT_BUBBLE) buildTooltipBubble();
+  TT_BUBBLE_EL = el;
+  paintTooltipBubble(d);
+  /* shown before it's positioned: the size it gets placed against is only real
+     once it's actually in the layout */
+  TT_BUBBLE.classList.add("show");
+  positionTooltipBubble(el, d.pos);
+}
+
+/** Puts the bubble away. */
+function hideTooltipBubble() {
+  TT_BUBBLE_EL = null;
+  if (TT_BUBBLE) TT_BUBBLE.classList.remove("show");
+}
+
+/** Repaints whatever bubble is on show - a theme flip, or a live edit in the sub-editor. */
+function refreshTooltipBubble() {
+  if (TT_BUBBLE_EL) showTooltipFor(TT_BUBBLE_EL);
+}
+
+/**
+ * Wires the hover/focus behaviour once per page. Delegated off the document
+ * rather than bound per element, which is the whole reason nothing has to
+ * re-run when the dashboard's tiles, the gallery's panes or a placed element
+ * are rebuilt: a listener attached to one of those would go with it, and the
+ * lookup here starts from the event target either way (see
+ * tooltipTargetFor()).
+ */
+function wireTooltipHover() {
+  if (TT_HOVER_WIRED) return;
+  TT_HOVER_WIRED = true;
+  document.addEventListener("mouseover", function (e) {
+    /* the sub-editor is holding one open on purpose; nothing the pointer does
+       gets to take that over until the panel closes */
+    if (TT_PINNED_EL) return;
+    /* mid-drag in the editor, a bubble popping up under the pointer is just
+       noise on top of the thing being moved */
+    if (RING_DRAGGING) { hideTooltipBubble(); return; }
+    var el = tooltipTargetFor(e.target);
+    if (!el) { hideTooltipBubble(); return; }
+    if (el !== TT_BUBBLE_EL) showTooltipFor(el);
+  });
+  /* the pointer leaving the document fires no mouseover at all, so nothing
+     above would ever put the last bubble away */
+  document.addEventListener("mouseleave", function () {
+    if (!TT_PINNED_EL) hideTooltipBubble();
+  });
+  /* the bubble is placed against where its element was when it opened, and the
+     sticky nav (or any scrolling container) slides out from under that */
+  window.addEventListener("scroll", function () {
+    if (!TT_PINNED_EL) hideTooltipBubble();
+  }, true);
+  /* keyboard reach, the same :focus-visible the Apply Now tooltip answered to
+     before this replaced it. Not in the editor: focus there lands on whatever
+     text field a ta just clicked into, and a bubble over the words being typed
+     is the one place this is actively unhelpful. */
+  document.addEventListener("focusin", function (e) {
+    if (TT_PINNED_EL || (isPreviewMode() && isEditMode())) return;
+    var el = tooltipTargetFor(e.target);
+    if (el) showTooltipFor(el);
+  });
+  document.addEventListener("focusout", function () {
+    if (!TT_PINNED_EL) hideTooltipBubble();
+  });
+}
+
+/**
+ * Applies saved tooltips. Runs on every load, live site included, same as
+ * applyTextOverrides(). Nothing is written onto the elements themselves -
+ * tooltipTargetFor() answers from this map at hover time - so this is just the
+ * map plus the one-time wiring behind it.
+ * @param map content.tooltips, {id: descriptor}
+ */
+function applyTooltipOverrides(map) {
+  TOOLTIPS = map || {};
+  wireTooltipHover();
+  if (TT_BUBBLE_EL && !tooltipFor(elId(TT_BUBBLE_EL))) hideTooltipBubble();
+  else refreshTooltipBubble();
+}
+
+/**
+ * Writes one element's tooltip into the map and the preview snapshot, and
+ * repaints whatever is on show. A descriptor with no text is deleted rather
+ * than stored, so "no tooltip" is the absence of an entry everywhere - the
+ * live site, the saved content and the "Add/Edit tooltip" label all read it
+ * the same way.
+ * @param id the element's data-edit-id/data-resize-id
+ * @param d a full descriptor, or null/one without text to remove it
+ */
+function setTooltipDescriptor(id, d) {
+  if (d && d.text) TOOLTIPS[id] = d;
+  else delete TOOLTIPS[id];
+  saveEditedMapValue("tooltips", id, TOOLTIPS[id] || "");
+  if (TT_PINNED_EL) refreshPinnedTooltip();
+  else if (TT_BUBBLE_EL && elId(TT_BUBBLE_EL) === id) showTooltipFor(TT_BUBBLE_EL);
+}
+
+/**
+ * Changes one field of an element's tooltip from the sub-editor, filling the
+ * rest in from the defaults if this is the first thing set on a brand new one.
+ * Saved on every keystroke/slider tick like the rest of the editor's controls;
+ * the single undo entry covering the whole session at the panel is pushed on
+ * close instead, see closeTooltipEditor().
+ * @param id the element's data-edit-id/data-resize-id
+ * @param key a TOOLTIP_DEFAULTS field name
+ * @param value its new value
+ */
+function setTooltipProp(id, key, value) {
+  var d = Object.assign({}, TOOLTIP_DEFAULTS, TOOLTIPS[id] || {});
+  d[key] = value;
+  TOOLTIPS[id] = d;
+  /* a draft with nothing typed in it yet is kept in memory (so the colors a ta
+     dials in first survive until they type) but never written out - see
+     closeTooltipEditor() for the other half of that */
+  saveEditedMapValue("tooltips", id, d.text ? d : "");
+  refreshPinnedTooltip();
+}
+
+/* the element the tooltip sub-editor is currently open on, and the descriptor
+   that was there when it opened: one undo entry covers the whole session at the
+   panel (the way one drag is one entry) rather than one per keystroke */
+var TT_EDIT_EL = null;
+var TT_EDIT_BEFORE = "";
+
+/** Holds the bubble open on el for as long as the sub-editor is up. */
+function pinTooltipPreview(el) {
+  TT_PINNED_EL = el;
+  refreshPinnedTooltip();
+}
+
+/** Repaints the held-open preview after an edit (or hides it while there are no words yet). */
+function refreshPinnedTooltip() {
+  if (!TT_PINNED_EL) return;
+  if (tooltipFor(elId(TT_PINNED_EL))) showTooltipFor(TT_PINNED_EL);
+  else hideTooltipBubble();
+}
+
+/**
+ * Ends a session at the tooltip sub-editor: drops a draft that never got any
+ * words, records the one undo entry for everything that did change, and lets
+ * the bubble go back to following the pointer. Called from hideCtxMenu(), so
+ * every way the menu can close - a click elsewhere, Escape, another
+ * right-click, the panel's own Done button - comes through here.
+ */
+function closeTooltipEditor() {
+  if (!TT_EDIT_EL) return;
+  var id = elId(TT_EDIT_EL);
+  /* colors dialed in on a bubble with no words are as good as no tooltip at
+     all, and an entry with no text would sit in the saved content forever
+     showing nothing */
+  if (TOOLTIPS[id] && !TOOLTIPS[id].text) {
+    delete TOOLTIPS[id];
+    saveEditedMapValue("tooltips", id, "");
+  }
+  var after = TOOLTIPS[id] ? JSON.stringify(TOOLTIPS[id]) : "";
+  if (after !== TT_EDIT_BEFORE) {
+    EDIT_UNDO.push({ type: "tooltip", id: id, before: TT_EDIT_BEFORE, after: after });
+    EDIT_REDO.length = 0;
+  }
+  TT_EDIT_EL = null;
+  TT_EDIT_BEFORE = "";
+  TT_PINNED_EL = null;
+  hideTooltipBubble();
+}
+
+/**
+ * Swaps the right-click menu into the tooltip sub-editor for whatever
+ * CTX_TARGET_ID/CTX_TARGET_EL point at. It lives in the menu rather than in
+ * the style popover for the same reason the link editor does - a tooltip is
+ * something an element either has or hasn't, not one more knob on something
+ * that's always there - and it holds the bubble open the whole time it's up,
+ * so every change lands on the real element in front of the ta as they make
+ * it.
+ */
+function renderCtxMenuTooltip() {
+  var id = CTX_TARGET_ID;
+  var el = CTX_TARGET_EL;
+  if (!id || !el) { hideCtxMenu(); return; }
+  var d = tooltipDescriptor(id);
+  TT_EDIT_EL = el;
+  TT_EDIT_BEFORE = TOOLTIPS[id] ? JSON.stringify(TOOLTIPS[id]) : "";
+  /* painted before the swatches below are primed off it, whether or not it's
+     on show yet: an unset color has no value of its own to put in a picker
+     (see currentColorValue()), so what the bubble actually renders as is the
+     honest answer for both of them */
+  if (!TT_BUBBLE) buildTooltipBubble();
+  paintTooltipBubble(d);
+  var liveBg = rgbToHex(getComputedStyle(TT_BUBBLE).backgroundColor) || "#222222";
+  var liveFg = rgbToHex(getComputedStyle(TT_BUBBLE).color) || "#ffffff";
+  var liveBorder = rgbToHex(getComputedStyle(TT_BUBBLE).borderTopColor) || liveFg;
+
+  CTX_MENU.innerHTML =
+    '<div class="ctx-title">Tooltip</div>' +
+    '<div class="ctx-tt-panel">' +
+      '<textarea class="ctx-tt-text" rows="2" placeholder="Shown while a visitor hovers this"></textarea>' +
+      '<div class="sm-row">' +
+        '<label>Where</label>' +
+        '<select class="ctx-tt-pos">' +
+          '<option value="top">Above</option>' +
+          '<option value="bottom">Below</option>' +
+          '<option value="left">Left</option>' +
+          '<option value="right">Right</option>' +
+        '</select>' +
+      '</div>' +
+      tooltipColorRowHtml("bg", "Background", "background") +
+      tooltipColorRowHtml("color", "Text", "text color") +
+      '<div class="sm-row">' +
+        '<label>Border</label>' +
+        '<input type="range" class="ctx-tt-range ctx-tt-borderW" min="0" max="6" step="1">' +
+        '<span class="ctx-tt-val ctx-tt-borderW-val">0px</span>' +
+        '<input type="color" class="ctx-tt-sw ctx-tt-borderColor">' +
+      '</div>' +
+      '<div class="sm-row sm-dark-toggle-row ctx-tt-borderColor-toggle-row">' +
+        '<button type="button" class="sm-dark-toggle ctx-tt-borderColor-dark-toggle"></button>' +
+      '</div>' +
+      '<div class="sm-row sm-dark-row ctx-tt-borderColor-dark-row">' +
+        '<label>Dark mode border</label>' +
+        '<input type="color" class="ctx-tt-sw ctx-tt-borderColor-dark">' +
+        '<button type="button" class="ctx-tt-reset ctx-tt-borderColor-dark-reset" title="Reset to auto">×</button>' +
+      '</div>' +
+      '<div class="sm-row">' +
+        '<label>Corners</label>' +
+        '<input type="range" class="ctx-tt-range ctx-tt-radius" min="0" max="24" step="1">' +
+        '<span class="ctx-tt-val ctx-tt-radius-val">8px</span>' +
+      '</div>' +
+      '<div class="sm-row">' +
+        '<label>Text size</label>' +
+        '<input type="range" class="ctx-tt-range ctx-tt-fontSize" min="10" max="22" step="1">' +
+        '<span class="ctx-tt-val ctx-tt-fontSize-val">13px</span>' +
+      '</div>' +
+      '<div class="sm-row">' +
+        '<label>Max width</label>' +
+        '<input type="range" class="ctx-tt-range ctx-tt-width" min="120" max="420" step="10">' +
+        '<span class="ctx-tt-val ctx-tt-width-val">220px</span>' +
+      '</div>' +
+    '</div>' +
+    (tooltipFor(id) ? '<button type="button" class="ctx-tt-remove">Remove tooltip</button>' : "") +
+    '<button type="button" class="ctx-tt-done">Done</button>';
+
+  var textArea = CTX_MENU.querySelector(".ctx-tt-text");
+  textArea.value = d.text;
+  textArea.addEventListener("input", function () {
+    setTooltipProp(id, "text", textArea.value);
+  });
+  var posSel = CTX_MENU.querySelector(".ctx-tt-pos");
+  posSel.value = d.pos;
+  posSel.addEventListener("change", function () { setTooltipProp(id, "pos", posSel.value); });
+
+  wireTooltipColorRow(id, d, "bg", "darkBg", liveBg, "background");
+  wireTooltipColorRow(id, d, "color", "darkColor", liveFg, "text color");
+  wireTooltipColorRow(id, d, "borderColor", "darkBorderColor", liveBorder, "border");
+
+  /* the four sliders, all in px and all named for the descriptor field they
+     write, so one loop covers them and adding a fifth is a row of markup */
+  ["borderW", "radius", "fontSize", "width"].forEach(function (key) {
+    var range = CTX_MENU.querySelector(".ctx-tt-" + key);
+    var out = CTX_MENU.querySelector(".ctx-tt-" + key + "-val");
+    range.value = d[key];
+    out.textContent = d[key] + "px";
+    range.addEventListener("input", function () {
+      out.textContent = range.value + "px";
+      setTooltipProp(id, key, +range.value);
+    });
+  });
+
+  var removeBtn = CTX_MENU.querySelector(".ctx-tt-remove");
+  if (removeBtn) {
+    removeBtn.addEventListener("click", function () {
+      setTooltipDescriptor(id, null);
+      hideCtxMenu();
+    });
+  }
+  CTX_MENU.querySelector(".ctx-tt-done").addEventListener("click", function () { hideCtxMenu(); });
+
+  /* the menu is a different size than the root list it just replaced, and the
+     bubble it holds open has to be placed against the element rather than
+     against wherever it was last shown */
+  clampCtxMenu();
+  pinTooltipPreview(el);
+  textArea.focus();
+}
+
+/**
+ * One color row of the sub-editor: the swatch itself, its 🌙/☀️ button, and
+ * the other theme's row collapsed underneath. Written as a helper because all
+ * three of them (background, text, border) are the same row - the border one
+ * just supplies its own swatch, since it shares a line with the border width.
+ * @param key the descriptor's light-mode field name, also the class stem
+ * @param label the row's own label
+ * @param what the noun the dark row and its toggle title use
+ * @return the row's html
+ */
+function tooltipColorRowHtml(key, label, what) {
+  return '<div class="sm-row ctx-tt-' + key + '-row">' +
+      '<label>' + label + '</label>' +
+      '<input type="color" class="ctx-tt-sw ctx-tt-' + key + '">' +
+      '<button type="button" class="ctx-tt-reset ctx-tt-' + key + '-reset" title="Reset to default">×</button>' +
+    '</div>' +
+    '<div class="sm-row sm-dark-toggle-row ctx-tt-' + key + '-toggle-row">' +
+      '<button type="button" class="sm-dark-toggle ctx-tt-' + key + '-dark-toggle"></button>' +
+    '</div>' +
+    '<div class="sm-row sm-dark-row ctx-tt-' + key + '-dark-row">' +
+      '<label>Dark mode ' + what + '</label>' +
+      '<input type="color" class="ctx-tt-sw ctx-tt-' + key + '-dark">' +
+      '<button type="button" class="ctx-tt-reset ctx-tt-' + key + '-dark-reset" title="Reset to auto">×</button>' +
+    '</div>';
+}
+
+/**
+ * Primes and wires one color row, doing the same light<->dark primary swap the
+ * style popover does (see primeThemedColorRow()): the theme that's actually on
+ * is the one the top swatch edits, and the other side stays collapsed behind
+ * its toggle until a ta opens it or it already carries an explicit override.
+ * Without the swap, a ta working in dark mode - the site's own default - would
+ * be picking colors they can't see the effect of.
+ * @param id the element being edited
+ * @param d its descriptor, filled out
+ * @param key the light-mode field name, also the row's class stem
+ * @param darkKey the dark-mode field name
+ * @param liveHex what the bubble currently renders this color as, for the
+ *   swatch that has no explicit value of its own to show
+ * @param what the noun for the toggle's title
+ */
+function wireTooltipColorRow(id, d, key, darkKey, liveHex, what) {
+  var dark = isDarkThemeActive();
+  var lightInput = CTX_MENU.querySelector(".ctx-tt-" + key);
+  var darkInput = CTX_MENU.querySelector(".ctx-tt-" + key + "-dark");
+  var darkRow = CTX_MENU.querySelector(".ctx-tt-" + key + "-dark-row");
+  /* the border color shares its line with the border width slider, so there's
+     no row of its own to collapse - the swatch itself stands in for one, the
+     same substitution buildStyleMenu() makes for its own border row */
+  var lightRow = CTX_MENU.querySelector(".ctx-tt-" + key + "-row") || lightInput;
+  var toggle = CTX_MENU.querySelector(".ctx-tt-" + key + "-dark-toggle");
+  var darkReset = CTX_MENU.querySelector(".ctx-tt-" + key + "-dark-reset");
+  var lightReset = CTX_MENU.querySelector(".ctx-tt-" + key + "-reset");
+
+  var primaryKey = dark ? darkKey : key;
+  var secondaryKey = dark ? key : darkKey;
+  var primaryInput = dark ? darkInput : lightInput;
+  var secondaryInput = dark ? lightInput : darkInput;
+  var secondaryRow = dark ? lightRow : darkRow;
+
+  /* a swatch has no "unset" of its own to show, so an override that isn't set
+     shows what the bubble actually renders as instead (liveHex), and the
+     other theme's shows the variant it would auto-derive - see
+     primeThemedColorRow(), which is doing exactly this for the style popover */
+  primaryInput.value = isHexColor(d[primaryKey]) ? d[primaryKey] : liveHex;
+  secondaryInput.value = isHexColor(d[secondaryKey])
+    ? d[secondaryKey] : autoDarkVariant(primaryInput.value);
+  secondaryRow.style.display = d[secondaryKey] ? "" : "none";
+
+  toggle.textContent = dark ? "☀️" : "🌙";
+  toggle.title = (dark ? "Edit light mode " : "Edit dark mode ") + what;
+  toggle.addEventListener("click", function () {
+    secondaryRow.style.display = secondaryRow.style.display === "none" ? "" : "none";
+  });
+
+  lightInput.addEventListener("input", function () { setTooltipProp(id, key, lightInput.value); });
+  darkInput.addEventListener("input", function () { setTooltipProp(id, darkKey, darkInput.value); });
+  /* the resets clear the override and put the suggestion back in the swatch,
+     but leave the row where it is: collapsing it here would take the primary
+     row away with it in whichever theme has that side on top */
+  if (lightReset) {
+    lightReset.addEventListener("click", function () {
+      setTooltipProp(id, key, "");
+      lightInput.value = liveHex;
+    });
+  }
+  darkReset.addEventListener("click", function () {
+    setTooltipProp(id, darkKey, "");
+    darkInput.value = autoDarkVariant(lightInput.value);
+  });
+}
+
+/**
+ * Whether a saved color is one of the sub-editor's own picks, ie something an
+ * <input type=color> can actually be set to. A descriptor seeded elsewhere can
+ * carry a css variable (var(--surface-2)) or any other color string, which a
+ * swatch has no way to show.
+ * @param v the saved value
+ * @return true if it's a "#rrggbb" string
+ */
+function isHexColor(v) {
+  return typeof v === "string" && v.charAt(0) === "#";
 }
 
 /* the style (color/opacity) popover's own singleton, opened by the ring's
@@ -9064,7 +9632,7 @@ function copyDuplicateOverrides(pairs, skipMaps) {
   var snap;
   try { snap = raw ? JSON.parse(raw) : {}; } catch (e) { snap = {}; }
   var skip = skipMaps || [];
-  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "shade", "radius", "border", "links", "text_color", "theme_icons", "dark_colors", "dark_text_color", "dark_fill", "dark_border", "progress_fill", "dark_progress_fill", "progress_track", "dark_progress_track", "rotate", "hover_color", "dark_hover_color", "active_color", "dark_active_color"];
+  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "shade", "radius", "border", "links", "text_color", "theme_icons", "dark_colors", "dark_text_color", "dark_fill", "dark_border", "progress_fill", "dark_progress_fill", "progress_track", "dark_progress_track", "rotate", "hover_color", "dark_hover_color", "active_color", "dark_active_color", "tooltips"];
   var flatLists = ["shadow", "flip_h", "flip_v"].concat(VIDEO_PLAYBACK_KEYS);
   pairs.forEach(function (p) {
     plainMaps.forEach(function (m) {
@@ -9914,7 +10482,7 @@ function placeObject(objData, x, y) {
   });
   snap.custom_elements = (snap.custom_elements || []).concat(newParts);
 
-  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "shade", "radius", "border", "links", "text_color", "theme_icons", "dark_colors", "dark_text_color", "dark_fill", "dark_border", "progress_fill", "dark_progress_fill", "progress_track", "dark_progress_track"];
+  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "shade", "radius", "border", "links", "text_color", "theme_icons", "dark_colors", "dark_text_color", "dark_fill", "dark_border", "progress_fill", "dark_progress_fill", "progress_track", "dark_progress_track", "tooltips"];
   plainMaps.forEach(function (m) {
     if (!objData[m]) return;
     snap[m] = snap[m] || {};
@@ -10003,6 +10571,7 @@ function placeObject(objData, x, y) {
   applyShadowOverrides(snap.shadow);
   applyOpacityOverrides(snap.opacity);
   applyFlipRotateOverrides(snap.flip_h, snap.flip_v, snap.rotate);
+  applyTooltipOverrides(snap.tooltips);
   setLockedElements(snap.locked);
   setLinks(snap.links);
   applyGroups(snap.groups);
@@ -10124,6 +10693,10 @@ function buildCtxMenu() {
  * buildStyleMenu()), not here.
  */
 function renderCtxMenuRoot() {
+  /* a right-click somewhere else re-renders this list without the menu ever
+     hiding, so the tooltip sub-view's session has to be closed out here too -
+     same reason ICON_REPLACE_TARGET is cleared on the way back to this list */
+  closeTooltipEditor();
   var toggleHtml = "";
   if (CTX_TARGET_ID) {
     var targetData = customElementById(CTX_TARGET_ID);
@@ -10204,6 +10777,14 @@ function renderCtxMenuRoot() {
            setSharedJoinUrl()), it just isn't a content.links entry */
         (LINKS[CTX_TARGET_ID] || isJoinLink(CTX_TARGET_EL) ? "Edit link" : "Add link") +
         '</button>') +
+      /* every tagged element can carry one, on every page - a tooltip is just
+         words about whatever it's on, so there's nothing to gate it on (see
+         the ELEMENT TOOLTIPS section). Sat next to the link row because the
+         two are the same kind of thing: something an element either has or
+         hasn't, edited in its own sub-view of this menu. */
+      '<button type="button" data-tooltip-edit="1">' +
+      (tooltipFor(CTX_TARGET_ID) ? "Edit tooltip" : "Add tooltip") +
+      '</button>' +
       '<button type="button" data-lock-toggle="1">' +
       (isLocked(CTX_TARGET_ID) ? "Unlock element" : "Lock element") +
       '</button>' +
@@ -10437,6 +11018,10 @@ function renderCtxMenuRoot() {
   var linkEditBtn = CTX_MENU.querySelector("[data-link-edit]");
   if (linkEditBtn) {
     linkEditBtn.addEventListener("click", function () { renderCtxMenuLinkEditor(); });
+  }
+  var tooltipBtn = CTX_MENU.querySelector("[data-tooltip-edit]");
+  if (tooltipBtn) {
+    tooltipBtn.addEventListener("click", function () { renderCtxMenuTooltip(); });
   }
   var progressVarsBtn = CTX_MENU.querySelector("[data-progress-vars]");
   if (progressVarsBtn) {
@@ -11552,6 +12137,10 @@ function clampCtxMenu() {
 
 /** Hides the "Add element" menu. */
 function hideCtxMenu() {
+  /* the tooltip sub-view holds a bubble open and a draft in memory for as long
+     as it's up, and this is every way it can close (an outside click, Escape,
+     its own Done button, another right-click) - see closeTooltipEditor() */
+  closeTooltipEditor();
   if (CTX_MENU) CTX_MENU.classList.remove("show");
   ICON_REPLACE_TARGET = null;
 }
@@ -13162,6 +13751,13 @@ function applyHistoryAction(action, side) {
     toggleLocked(action.id);
     return;
   }
+  /* one entry per session at the tooltip sub-editor, not per keystroke: both
+     sides are the whole descriptor as json ("" for "there wasn't one"), since
+     a tooltip is edited as one thing, see closeTooltipEditor() */
+  if (action.type === "tooltip") {
+    setTooltipDescriptor(action.id, val ? JSON.parse(val) : null);
+    return;
+  }
   if (action.type === "text") {
     var textEls = document.querySelectorAll('[data-edit-id="' + action.id + '"]');
     if (!textEls.length) return;
@@ -14549,6 +15145,7 @@ function applySharedOverridePasses(data, textMap) {
   applyShadowOverrides(data.shadow);
   applyOpacityOverrides(data.opacity);
   applyFlipRotateOverrides(data.flip_h, data.flip_v, data.rotate);
+  applyTooltipOverrides(data.tooltips);
   applyHiddenOverrides(data.hidden);
   setFixedElements(data.fixed_elements);
   setLockedElements(data.locked);
@@ -14797,10 +15394,6 @@ document.addEventListener("DOMContentLoaded", function () {
     applyJoinUrl(url);
   }
 
-  function setApplyTooltip(text) {
-    document.querySelectorAll(".join-link").forEach(function (a) { a.setAttribute("data-tooltip", text); });
-  }
-
   /**
    * Points the hero's background video at a staff-uploaded clip instead of
    * the hardcoded default, reloading it so the new src actually takes.
@@ -14839,7 +15432,6 @@ document.addEventListener("DOMContentLoaded", function () {
 
       renderTiles(resolveLogistics(data));
       setJoinUrl(data.join_url || DEFAULT_JOIN_URL);
-      setApplyTooltip(data.apply_tooltip || DEFAULT_APPLY_TOOLTIP);
       setHeroVideo(data.hero_video_url || DEFAULT_HERO_VIDEO);
       setHomeImages(data.home_images);
 
@@ -14858,7 +15450,6 @@ document.addEventListener("DOMContentLoaded", function () {
       slot.innerHTML = CD_TBA_HTML;
       renderTiles(DEFAULT_LOGISTICS);
       setJoinUrl(DEFAULT_JOIN_URL);
-      setApplyTooltip(DEFAULT_APPLY_TOOLTIP);
       applyTextOverrides({});
       if (window.initAllReels) window.initAllReels();
     });

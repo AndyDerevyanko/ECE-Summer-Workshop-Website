@@ -191,33 +191,43 @@ h1, h2, h3 {
 }
 .btn-ghost:hover { background: color-mix(in srgb, var(--text) 9%, var(--surface-2)); }
 
-/* hover tooltip on the Apply Now buttons, text is ta-editable (content.apply_tooltip) */
-.join-link[data-tooltip] { position: relative; }
-.join-link[data-tooltip]::after {
-  content: attr(data-tooltip);
+/* the one hover tooltip bubble, moved to whatever element is being hovered
+   rather than a ::after per element (see the ELEMENT TOOLTIPS section in
+   js/main.js for why). Everything here is what an untouched tooltip looks
+   like - deliberately the bubble the Apply Now buttons used to get from their
+   own hardcoded rule, which this replaced - and every one of these can be
+   overridden per element from the editor's tooltip sub-editor, which writes
+   inline styles onto this node (paintTooltipBubble()).
+
+   Positioned in document coordinates, like the editor's own popovers. Its
+   z-index sits above everything on the page (the sticky nav included, at 50)
+   and below the editor's own chrome, which starts at 9999: a bubble covering
+   the selection ring or the menu being used to style it would be the one thing
+   worse than no preview at all. */
+.tt-bubble {
   position: absolute;
-  top: calc(100% + 10px);
-  left: 50%;
-  transform: translateX(-50%);
+  display: none;
+  left: 0;
+  top: 0;
+  z-index: 9000;
   width: max-content;
   max-width: 220px;
-  background: var(--surface-2);
-  color: var(--text);
   padding: 8px 12px;
   border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  box-shadow: var(--shadow);
   font-family: var(--font-body);
-  font-size: .78rem;
+  font-size: 13px;
   font-weight: 400;
   line-height: 1.4;
   text-align: center;
-  box-shadow: var(--shadow);
-  opacity: 0;
+  /* the words come from a textarea, so the line breaks a ta typed are part of
+     what they wrote */
+  white-space: pre-wrap;
   pointer-events: none;
-  transition: opacity .15s ease;
-  z-index: 60;
 }
-.join-link[data-tooltip]:hover::after,
-.join-link[data-tooltip]:focus-visible::after { opacity: 1; }
+.tt-bubble.show { display: block; }
 
 /* ---------- nav ---------- */
 .nav {
@@ -2395,7 +2405,10 @@ body.edit-mode .apply-bob { animation: none; }
 .ctx-menu .sm-hovercolor-dark,
 .ctx-menu .sm-activecolor-dark,
 .ctx-menu .sm-fill-dark,
-.ctx-menu .sm-border-color-dark {
+.ctx-menu .sm-border-color-dark,
+/* the tooltip sub-editor's three swatches (renderCtxMenuTooltip()) are the
+   same control as the style popover's, so they're the same rule */
+.ctx-menu .ctx-tt-sw {
   width: 32px;
   height: 26px;
   padding: 0;
@@ -2414,7 +2427,8 @@ body.edit-mode .apply-bob { animation: none; }
 .ctx-menu .sm-hovercolor-dark-reset,
 .ctx-menu .sm-activecolor-dark-reset,
 .ctx-menu .sm-fill-dark-reset,
-.ctx-menu .sm-border-dark-reset {
+.ctx-menu .sm-border-dark-reset,
+.ctx-menu .ctx-tt-reset {
   width: 22px;
   height: 22px;
   border-radius: 6px;
@@ -2434,7 +2448,8 @@ body.edit-mode .apply-bob { animation: none; }
 .ctx-menu .sm-hovercolor-dark-reset:hover,
 .ctx-menu .sm-activecolor-dark-reset:hover,
 .ctx-menu .sm-fill-dark-reset:hover,
-.ctx-menu .sm-border-dark-reset:hover { background: var(--accent); color: #fff; }
+.ctx-menu .sm-border-dark-reset:hover,
+.ctx-menu .ctx-tt-reset:hover { background: var(--accent); color: #fff; }
 
 /* "🌙" buttons that reveal each Color/Text color/Fill/Border row's own
    dark-mode override sub-row (buildStyleMenu()'s wireDarkToggle()): a
@@ -2491,6 +2506,65 @@ body.edit-mode .apply-bob { animation: none; }
   border-radius: 6px;
 }
 .ctx-menu .sm-theme-icon-btn:hover { background: var(--accent); color: #fff; }
+
+/* the right-click menu's tooltip sub-editor (renderCtxMenuTooltip() in
+   js/main.js). Same .sm-row controls the style popover is built from - it's
+   the same job, dialing in how something looks - in a column that scrolls
+   rather than one that runs off a short viewport, since this panel has more
+   rows than any of the menu's other sub-views. The width is set by the border
+   row, the widest of them: label, slider, readout and swatch on one line. */
+.ctx-menu .ctx-tt-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 262px;
+  max-height: 58vh;
+  overflow-y: auto;
+  padding: 2px 8px 8px;
+}
+.ctx-menu .ctx-tt-panel .sm-row label {
+  width: 74px;
+  white-space: nowrap;
+}
+/* "Dark mode background" doesn't fit the width above, and these labels don't
+   wrap (.sm-dark-row label) - without this the swatch next to one sits on top
+   of the last few letters */
+.ctx-menu .ctx-tt-panel .sm-dark-row label { width: 118px; }
+.ctx-menu .ctx-tt-text {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: .82rem;
+  line-height: 1.4;
+}
+.ctx-menu .ctx-tt-pos {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-body);
+  font-size: 12px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+}
+.ctx-menu .ctx-tt-range { flex: 1; min-width: 0; }
+.ctx-menu .ctx-tt-val {
+  font-size: 12px;
+  color: var(--muted);
+  width: 38px;
+  text-align: right;
+  flex-shrink: 0;
+}
+/* the two actions under the panel read as what they are: Done just closes,
+   Remove throws the tooltip away, so only one of them is destructive */
+.ctx-menu .ctx-tt-remove { color: var(--rose, #c0576b); }
 
 /* datetime element controls in the style popover (buildStyleMenu()): its
    "Format string"/"Target" labels run longer than a color swatch row's, and

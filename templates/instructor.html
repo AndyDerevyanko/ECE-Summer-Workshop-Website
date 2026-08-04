@@ -28,7 +28,6 @@
         <a href="#panels">Day panels</a>
         <a href="#extras">Extra attachments</a>
         <a href="#gallery">Gallery</a>
-        <a href="#landing">Landing page</a>
         <a href="#objects">Objects</a>
         <a href="#profiles">Profiles</a>
       </div>
@@ -228,24 +227,13 @@
         </div>
       </section>
 
-      <section class="section-sm" id="landing">
-        <div class="wrap">
-          <h2 style="font-size:1.4rem;margin-bottom:6px">Landing page</h2>
-          <p class="muted" style="margin-top:0;margin-bottom:18px">
-            Everything on this page is edited in place in the Visual editor now. The one
-            thing left here is the tooltip below: it only exists while someone is hovering
-            over an Apply Now button, so there's no element in the editor to click on.
-          </p>
-
-          <div class="ta-card">
-            <div class="field">
-              <label for="applyTooltipInput">"Apply Now" hover tooltip</label>
-              <textarea id="applyTooltipInput" rows="2" placeholder="Shown when a visitor hovers over Apply Now"></textarea>
-            </div>
-          </div>
-
-        </div>
-      </section>
+      <!-- the Landing page section that used to sit here is gone. It was down
+           to one field, the Apply Now hover tooltip, and only because a tooltip
+           had no element in the Visual editor to right-click: it doesn't exist
+           until someone hovers. Every element can carry its own tooltip there
+           now (right-click > Add tooltip, see the ELEMENT TOOLTIPS section in
+           js/main.js), so those three buttons are edited where the rest of that
+           page is and there was nothing left in here to keep. -->
 
       <section class="section-sm" id="objects">
         <div class="wrap">

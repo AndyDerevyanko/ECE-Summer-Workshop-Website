@@ -164,6 +164,15 @@ def _learn_reel_overlay():
 (_LEARN_REEL_ENTRY, _LEARN_REEL_TEXT, _LEARN_REEL_FONT_SIZES,
  _LEARN_REEL_TEXT_STYLES, _LEARN_REEL_COLORS) = _learn_reel_overlay()
 
+# the three landing-page Apply Now buttons (templates/index.html), by
+# data-edit-id, and the tooltip they ship with. See DEFAULT_CONTENT["tooltips"]
+# below and _migrate_apply_tooltip() further down, the only two users of this.
+_APPLY_TOOLTIP_IDS = ["nav.link.apply", "hero.cta.primary", "prizes.cta"]
+_APPLY_TOOLTIP_SEED = {
+    "text": "Applications open once the workshop dates are confirmed, check back soon.",
+    "pos": "bottom",
+}
+
 # starting content, same shape as the old hardcoded DAYS/EXTRAS/timer vars.
 # only used the first time the content table is empty.
 DEFAULT_CONTENT = {
@@ -208,7 +217,6 @@ DEFAULT_CONTENT = {
     "timer_mode": "tentative",
     "timer_target": "",
     "join_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-    "apply_tooltip": "Applications open once the workshop dates are confirmed, check back soon.",
     "hero_video_url": "assets/cover-video.mp4",
     # landing page photos (about section + certificate), staff-replaceable
     # from the content manager's "Site images" section, see js/ta.js.
@@ -435,6 +443,25 @@ DEFAULT_CONTENT = {
     "dark_progress_fill": {},
     "progress_track": {},
     "dark_progress_track": {},
+    # per-element hover tooltips, keyed by data-edit-id/data-resize-id. one
+    # whole descriptor per element rather than a map per property - the words,
+    # which side of the element the bubble sits on, and its colors/border/
+    # corners/size - since a tooltip is added and edited as one thing from the
+    # visual editor's right-click menu. Anything a descriptor leaves out falls
+    # back to TOOLTIP_DEFAULTS, see the ELEMENT TOOLTIPS section in js/main.js.
+    #
+    # seeded with the three landing-page Apply Now buttons, which is where this
+    # feature came from: their tooltip used to be one shared apply_tooltip
+    # string edited from a form field in the content manager, because a tooltip
+    # only exists while someone is hovering and so had no element in the editor
+    # to click on. Same words, same place under the button (pos "bottom",
+    # matching the old hardcoded css rule) - see _migrate_apply_tooltip() for
+    # blobs that already carry a ta's own wording.
+    "tooltips": {
+        "nav.link.apply": {**_APPLY_TOOLTIP_SEED},
+        "hero.cta.primary": {**_APPLY_TOOLTIP_SEED},
+        "prizes.cta": {**_APPLY_TOOLTIP_SEED},
+    },
 }
 DEFAULT_CONTENT["custom_elements"].append(_LEARN_REEL_ENTRY)
 DEFAULT_CONTENT["text"].update(_LEARN_REEL_TEXT)
@@ -1050,6 +1077,7 @@ def init_db():
     _migrate_custom_elements_page_scope(conn)
     _migrate_progress_bar_object(conn)
     _migrate_drop_variable_page_scope(conn)
+    _migrate_apply_tooltip(conn)
     conn.close()
 
 
@@ -1794,6 +1822,58 @@ def _migrate_progress_bar_object(conn):
     conn.commit()
 
 
+def _migrate_apply_tooltip(conn):
+    """one-time patch (same meta-flag trick as _migrate_learn_reel()) folding
+    the old content.apply_tooltip - one string shared by the three landing-page
+    Apply Now buttons, edited from a form field in the content manager - into
+    an ordinary per-element tooltip on each of those buttons, then dropping the
+    key.
+
+    That field only ever existed because a tooltip has no element in the visual
+    editor to right-click: it doesn't exist until someone is hovering. Every
+    element can carry its own tooltip now (content.tooltips, see the ELEMENT
+    TOOLTIPS section in js/main.js), so those three buttons are edited where the
+    rest of that page is.
+
+    get_content()'s generic per-key backfill hands an old blob the seeded
+    default (DEFAULT_CONTENT["tooltips"]) on its own, but that's the DEFAULT
+    wording - this is what carries a ta's own across. Anything they've since
+    written on one of those buttons in the editor wins: only ids with no
+    tooltip yet get the old string.
+    @param conn an open db connection
+    """
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO meta (key, value) VALUES ('apply_tooltip_migrated', '1')"
+    )
+    conn.commit()
+    if cur.rowcount == 0:
+        return
+
+    def patch(data):
+        if "apply_tooltip" not in data:
+            return data, False
+        text = data.pop("apply_tooltip")
+        tooltips = data.setdefault("tooltips", {})
+        if text:
+            for tip_id in _APPLY_TOOLTIP_IDS:
+                if not tooltips.get(tip_id):
+                    tooltips[tip_id] = {"text": text, "pos": "bottom"}
+        return data, True
+
+    row = conn.execute("SELECT data FROM content WHERE id = 1").fetchone()
+    if row:
+        data, changed = patch(json.loads(row["data"]))
+        if changed:
+            conn.execute("UPDATE content SET data = ? WHERE id = 1", (json.dumps(data),))
+
+    for prow in conn.execute("SELECT id, data FROM profiles").fetchall():
+        data, changed = patch(json.loads(prow["data"]))
+        if changed:
+            conn.execute("UPDATE profiles SET data = ? WHERE id = ?", (json.dumps(data), prow["id"]))
+
+    conn.commit()
+
+
 def _migrate_drop_variable_page_scope(conn):
     """one-time patch (same meta-flag trick as _migrate_learn_reel()) undoing a
     short-lived experiment that stamped a "page" onto content.variables so the
@@ -1871,7 +1951,7 @@ def get_content():
     if not row:
         return DEFAULT_CONTENT
     data = json.loads(row["data"])
-    # blobs saved before a key existed (gallery, apply_tooltip, ...) come
+    # blobs saved before a key existed (gallery, tooltips, ...) come
     # back without it, fill those in from the defaults so the frontend
     # always sees the full shape
     for key, value in DEFAULT_CONTENT.items():

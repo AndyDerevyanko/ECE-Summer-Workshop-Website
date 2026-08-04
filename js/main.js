@@ -572,8 +572,8 @@ function renderDatetimeContent(el, d) {
  * pageLinkInventory()) has to be able to READ it - a ta asking "where does
  * the brand logo go?" would otherwise see a blank next to every neutered
  * link. Never overwrites an existing stash, so a second neuterLink() pass
- * (js/dashboard.js and js/gallery.js keep their own copies of it, and both
- * pages also load this file) can't record the already-stripped "" over the
+ * (js/dashboard.js and js/gallery.js both call it on their own nav, and both
+ * pages load this file first) can't record the already-stripped "" over the
  * real value.
  * @param el the link about to lose its href
  */

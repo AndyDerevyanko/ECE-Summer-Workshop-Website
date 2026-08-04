@@ -663,23 +663,6 @@ function logout() {
   window.location.href = "login.html";
 }
 
-/**
- * Strips a link's href and swallows its clicks, so it can't navigate the
- * preview iframe away to a page a real student there shouldn't reach.
- * @param el the link/button to neuter
- */
-function neuterLink(el) {
-  if (!el) return;
-  /* keep the real target readable inside the editor - see stashBuiltinHref()
-     in js/main.js (loaded before this file on every page that uses it) and
-     the right-click "Links on this page" view it feeds */
-  if (window.stashBuiltinHref) window.stashBuiltinHref(el);
-  el.removeAttribute("href");
-  el.style.opacity = ".5";
-  el.style.cursor = "default";
-  el.addEventListener("click", function (e) { e.preventDefault(); });
-}
-
 document.addEventListener("DOMContentLoaded", function () {
   var session = gateCheck();
   var logoutBtn = document.getElementById("logoutBtn");
@@ -687,9 +670,13 @@ document.addEventListener("DOMContentLoaded", function () {
     /* previewing isn't a real visit: don't let the brand logo wander the
        ta off to another page, and don't let "Log out" fire for real either,
        since it'd clear the session localStorage shares with the ta's own
-       portal tab, ending their actual login just from clicking a preview */
-    neuterLink(document.querySelector(".brand"));
-    neuterLink(logoutBtn);
+       portal tab, ending their actual login just from clicking a preview.
+       neuterLink() lives in js/main.js, loaded before this file on every page
+       that uses it; dim=false because the nav is editable in the visual
+       editor and a ta comparing it against the live site should see the same
+       colours there, not a half-faded "disabled" navbar. */
+    neuterLink(document.querySelector(".brand"), false);
+    neuterLink(logoutBtn, false);
   } else if (logoutBtn) {
     logoutBtn.addEventListener("click", logout);
   }

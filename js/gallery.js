@@ -418,10 +418,12 @@ document.addEventListener("DOMContentLoaded", function () {
   if (isGalleryPreview()) {
     /* previewing isn't a real visit: don't let the brand logo or the other nav
        links wander the ta off to a non-preview page while they're just
-       checking unsaved gallery edits */
-    neuterLink(document.querySelector(".brand"));
-    neuterLink(document.querySelector(".nav-back"));
-    document.querySelectorAll(".nav-links a").forEach(function (a) { neuterLink(a); });
+       checking unsaved gallery edits. dim=false throughout: the nav is
+       editable in the visual editor, so it has to render in its real colours
+       rather than looking half-disabled (see neuterLink() in js/main.js). */
+    neuterLink(document.querySelector(".brand"), false);
+    neuterLink(document.querySelector(".nav-back"), false);
+    document.querySelectorAll(".nav-links a").forEach(function (a) { neuterLink(a, false); });
   }
 
   /* the directory list rides along in the same content blob js/main.js is

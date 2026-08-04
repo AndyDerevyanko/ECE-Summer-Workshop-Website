@@ -1618,6 +1618,37 @@ body.edit-mode .extras-empty.has-attachments {
 /* the row's own message line sits under it, so it doesn't need the 16px the
    fields above reserve for their spacing */
 #galleryMsg { margin-top: 0; }
+
+/* the Objects section's "New object" row (templates/instructor.html, list
+   filled in by js/ta.js's fetchObjects()). Everything above it is a stack of
+   full-width .res-row cards, so a default-width ghost button sitting hard
+   against the last of them reads as a stray control that happens to be
+   nearby; matched to the list's width and dashed instead, it reads as the
+   list's own "and one more" row - the empty slot at the end of the stack,
+   which is exactly what it does. Deliberately not a solid card: it isn't a
+   saved object, and shouldn't be mistaken for one at a glance. */
+.obj-add {
+  width: 100%;
+  justify-content: center;
+  margin-top: 10px;
+  padding-block: 15px;
+  background: transparent;
+  border: 1px dashed color-mix(in srgb, var(--text) 22%, var(--border));
+  color: var(--muted);
+}
+.obj-add:hover {
+  /* .btn's default hover is a brightness filter, which does nothing readable
+     on a transparent box - fill it and firm up the edge instead */
+  filter: none;
+  background: var(--surface);
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  color: var(--text);
+}
+.obj-add .iic { width: 18px; height: 18px; }
+/* the "No saved objects yet" line the list shows in place of any rows: on its
+   own above a dashed add row it needs the same inset as a real row, or the
+   two read as unrelated bits of text floating in the section */
+#objectsList .muted { margin: 0; padding: 2px 2px 6px; }
 .ta-files { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
 .ta-files:empty { display: none; }
 .ta-file {
@@ -2134,6 +2165,24 @@ body.edit-mode .apply-bob { animation: none; }
   transition: opacity .16s ease, transform .16s ease;
 }
 .edit-toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* the visual editor's snapping grid (js/main.js's GRID SNAPPING section):
+   two 1px line patterns, spacing set from GRID_SIZE in js so the drawn grid
+   and the one drags round to can't drift apart. Only up while something is
+   actually being dragged, and under the selection ring's z-index so a dragged
+   element's own handles stay readable on top of it. */
+.grid-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .12s ease;
+  background-image:
+    linear-gradient(to right, color-mix(in srgb, var(--accent) 26%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--accent) 26%, transparent) 1px, transparent 1px);
+}
+.grid-overlay.show { opacity: 1; }
 
 /* the visual editor's one selection ring (wireResizable() in js/main.js):
    a floating frame that follows whatever tracked element the mouse is

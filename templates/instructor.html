@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/style.css?v=16" />
+  <link rel="stylesheet" href="css/style.css?v=17" />
 </head>
 <body class="mono">
 
@@ -256,10 +256,13 @@
             "Add element" menu. Shared with every staff member; only the ta who added one can
             remove it.
           </p>
-          <div id="objectsList">
+          <!-- .res-list for the gap between rows: these are the same stacked
+               cards the Profiles list below uses, and without it they render
+               as one seam-to-seam slab -->
+          <div class="res-list" id="objectsList">
             <!-- filled in by ta.js -->
           </div>
-          <button class="btn btn-ghost" id="newObjectBtn" type="button">
+          <button class="btn obj-add" id="newObjectBtn" type="button">
             <svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
               stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
             New object
@@ -309,6 +312,18 @@
                   <span class="ed-switch-text" id="edDashViewText">Dashboard</span>
                 </button>
               </div>
+              <!-- whether drags in the editor round to a pixel grid. Every
+                   page, so never hidden - unlike the two above it, this is
+                   about how editing behaves rather than about what the page
+                   being edited is. Shift+R does the same thing from inside
+                   the frame (js/main.js's GRID SNAPPING section). -->
+              <div class="ed-switch-row" id="edGridSnapRow">
+                <span class="ed-switch-cap">Snap</span>
+                <button class="ed-switch" id="edGridSnap" type="button" role="switch" aria-checked="false">
+                  <span class="ed-switch-track"><span class="ed-switch-knob"></span></span>
+                  <span class="ed-switch-text" id="edGridSnapText">Off</span>
+                </button>
+              </div>
             </div>
             <div class="ed-undo-row">
               <button class="btn btn-ghost" id="edUndo" type="button" disabled>Undo</button>
@@ -332,6 +347,6 @@
 
   <script src="js/theme.js?v=3"></script>
   <script src="js/idle.js?v=3"></script>
-  <script src="js/ta.js?v=9"></script>
+  <script src="js/ta.js?v=10"></script>
 </body>
 </html>

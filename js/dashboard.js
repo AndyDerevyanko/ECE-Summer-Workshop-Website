@@ -241,6 +241,11 @@ var DEFAULT_DAYS_OPEN_DAYTAG_HTML =
    overwrite one day's actual title from here. See buildDayOpenTileHtml(). */
 var DEFAULT_DAYS_OPEN_TITLE_HTML = buildDaysChipHtml("day-title", "Title");
 var DEFAULT_DAYS_OPEN_BLURB_HTML = buildDaysChipHtml("day-blurb", "Description");
+/* the locked tile's one-line explanation. Plain words, no chip: nothing about
+   it is per-day (a locked day has no content to name yet), it's the shared
+   template's own copy - which is exactly why it's editable as one field for
+   every locked tile at once, see buildDayLockedTileHtml(). */
+var DEFAULT_DAYS_LOCKED_BLURB_HTML = "This module will be available soon";
 
 /**
  * Builds one LOCKED day tile's markup: a shared template rendered once per
@@ -251,19 +256,21 @@ var DEFAULT_DAYS_OPEN_BLURB_HTML = buildDaysChipHtml("day-blurb", "Description")
  * ("days.locked.*") so restyling a locked tile never touches an open one
  * (the two states are deliberately separate templates, not one template
  * that swaps pieces). The big lock icon and the "Locked" badge are
- * data-days-fixed (stylable/resizable, never deletable); the rect and the
- * title text are ordinary deletable elements, restorable via right-click
- * (see js/main.js's insertDaysChip()).
+ * data-days-fixed (stylable/resizable, never deletable); the rect, the title
+ * and the "available soon" blurb under it are ordinary deletable elements,
+ * restorable via right-click (see js/main.js's insertDaysChip()).
  * @param dayId the day's own stable id, or "" for the trailing synthetic card
  * @param dayNum the day number to show
  * @param style {rectColor, rectDarkColor, rectRadius} (reads "days.locked.*"
  *   keys, independent from the open template's own style)
  * @param titleHtml content.text["days.locked.title"], or undefined for the
  *   shared default (just the day-number chip)
+ * @param blurbHtml content.text["days.locked.blurb"], or undefined for the
+ *   shared default (see DEFAULT_DAYS_LOCKED_BLURB_HTML)
  * @param badgeHtml content.text["days.locked.badge"], or undefined for "Locked"
  * @return an HTML string for one locked tile
  */
-function buildDayLockedTileHtml(dayId, dayNum, style, titleHtml, badgeHtml) {
+function buildDayLockedTileHtml(dayId, dayNum, style, titleHtml, blurbHtml, badgeHtml) {
   var rectStyle = "";
   if (style.rectColor || style.rectDarkColor) {
     rectStyle += "background-color:" + resolveThemedColor(style.rectColor, style.rectDarkColor) + ";";
@@ -283,7 +290,10 @@ function buildDayLockedTileHtml(dayId, dayNum, style, titleHtml, badgeHtml) {
         'data-default-html="' + escapeHtml(DEFAULT_DAYS_LOCKED_TITLE_HTML) + '">' +
         (titleHtml !== undefined ? titleHtml : DEFAULT_DAYS_LOCKED_TITLE_HTML) +
       '</h3>' +
-      '<p class="muted">This module will be available soon</p>' +
+      '<p class="muted" data-edit-id="days.locked.blurb" data-days-role="locked.blurb" ' +
+        'data-default-html="' + escapeHtml(DEFAULT_DAYS_LOCKED_BLURB_HTML) + '">' +
+        (blurbHtml !== undefined ? blurbHtml : DEFAULT_DAYS_LOCKED_BLURB_HTML) +
+      '</p>' +
       '<span class="badge locked" data-edit-id="days.locked.badge" data-days-role="locked.badge" data-days-fixed="1" ' +
         'data-default-html="Locked">' + LOCK_SVG + (badgeHtml !== undefined ? badgeHtml : "Locked") +
       '</span>' +
@@ -406,7 +416,8 @@ function renderDays() {
   DAYS.forEach(function (day) {
     if (!day.unlocked) {
       allOpen = false;
-      html += buildDayLockedTileHtml(day.id || "", day.day, lockedStyle, text["days.locked.title"], text["days.locked.badge"]);
+      html += buildDayLockedTileHtml(day.id || "", day.day, lockedStyle,
+        text["days.locked.title"], text["days.locked.blurb"], text["days.locked.badge"]);
       return;
     }
     unlockedCount++;
@@ -416,7 +427,8 @@ function renderDays() {
   /* once every panel is open, one locked card trails for the next day - no
      backing content.days[] entry, so no id/bound children, same as before */
   if (allOpen && DAYS.length < TOTAL_DAYS) {
-    html += buildDayLockedTileHtml("", DAYS.length + 1, lockedStyle, text["days.locked.title"], text["days.locked.badge"]);
+    html += buildDayLockedTileHtml("", DAYS.length + 1, lockedStyle,
+      text["days.locked.title"], text["days.locked.blurb"], text["days.locked.badge"]);
   }
 
   host.innerHTML = html;

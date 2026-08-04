@@ -79,6 +79,10 @@ function seed() {
       { big: "", lbl: "Certificate of completion", icon: true }
     ],
     gallery: {
+      /* how a clip plays inside a gallery image pane, one choice for the whole
+         gallery (see the Gallery section's "Video clips" card in
+         instructor.html and paintPanes() in js/gallery.js) */
+      video: { autoplay: true, controls: false, pausable: false },
       years: ["2026", "2025"],
       images: {
         "2026": ["assets/gallery/group-main-2026.png"],
@@ -143,6 +147,15 @@ function seed() {
     /* ids with the shared drop-shadow (style popover's Shadow checkbox)
        turned on, flat list, same shape as fixed_elements/locked */
     shadow: [],
+    /* the three per-video playback switches on a placed video's right-click
+       menu, flat lists of ids in the same shape as shadow above - a placed
+       video autoplays muted on a loop with no player chrome, so each list
+       only names the clips that deviate. See VIDEO_PLAYBACK_KEYS in
+       js/main.js; the gallery's panes have their own equivalent setting in
+       the Gallery section (STATE.gallery.video). */
+    video_no_autoplay: [],
+    video_controls: [],
+    video_pausable: [],
     /* right-click "Add link"/"Edit link" targets, keyed by data-edit-id/
        data-resize-id, a url string, see applyOneLink() in js/main.js */
     links: {},
@@ -297,6 +310,16 @@ function normalizeState() {
   if (!STATE.home_images || typeof STATE.home_images !== "object") STATE.home_images = {};
   STATE.home_images = Object.assign({}, HOME_IMAGE_DEFAULTS, STATE.home_images);
   if (!STATE.gallery || !Array.isArray(STATE.gallery.years)) STATE.gallery = seed().gallery;
+  /* a blob saved before the video switches existed has a gallery but no
+     "video" key in it, so the fallback above never fires for it - same
+     "never let an old save crash on a since-added field" top-up every other
+     key here gets, and the defaults are how the gallery has always behaved */
+  var galleryVideo = STATE.gallery.video || {};
+  STATE.gallery.video = {
+    autoplay: galleryVideo.autoplay !== false,
+    controls: !!galleryVideo.controls,
+    pausable: !!galleryVideo.pausable
+  };
 
   if (!STATE.text || typeof STATE.text !== "object") STATE.text = {};
   if (!STATE.sizes || typeof STATE.sizes !== "object") STATE.sizes = {};
@@ -331,6 +354,9 @@ function normalizeState() {
   if (!STATE.radius || typeof STATE.radius !== "object") STATE.radius = {};
   if (!STATE.border || typeof STATE.border !== "object") STATE.border = {};
   if (!Array.isArray(STATE.shadow)) STATE.shadow = [];
+  ["video_no_autoplay", "video_controls", "video_pausable"].forEach(function (k) {
+    if (!Array.isArray(STATE[k])) STATE[k] = [];
+  });
   if (!STATE.links || typeof STATE.links !== "object") STATE.links = {};
   if (!STATE.dark_colors || typeof STATE.dark_colors !== "object") STATE.dark_colors = {};
   if (!STATE.dark_text_color || typeof STATE.dark_text_color !== "object") STATE.dark_text_color = {};
@@ -1027,6 +1053,27 @@ function renameGalleryDir(from, to) {
   });
 }
 
+/* the Gallery section's "Video clips" card: each checkbox paired with the
+   content.gallery.video flag it drives (see paintPanes() in js/gallery.js) */
+var GALLERY_VIDEO_INPUTS = [
+  ["galleryVideoAutoplay", "autoplay"],
+  ["galleryVideoControls", "controls"],
+  ["galleryVideoPausable", "pausable"]
+];
+
+/**
+ * Pushes STATE into the Gallery section's "Video clips" checkboxes, the same
+ * "the form IS the state" sync syncLanding() does for its one field - split
+ * from renderGallery() below because these three are static markup in
+ * instructor.html rather than part of the directory list it rebuilds.
+ */
+function syncGalleryVideo() {
+  GALLERY_VIDEO_INPUTS.forEach(function (pair) {
+    var box = document.getElementById(pair[0]);
+    if (box) box.checked = !!STATE.gallery.video[pair[1]];
+  });
+}
+
 /**
  * Renders the editable per-directory photo/clip lists shown on gallery.html.
  * One image at a time per directory, same flip-through idea as the public
@@ -1266,6 +1313,7 @@ function renderAll() {
   renderPanels();
   renderExtras();
   renderGallery();
+  syncGalleryVideo();
   syncLanding();
 }
 
@@ -2063,6 +2111,11 @@ document.addEventListener("DOMContentLoaded", function () {
       id: newExtraId(), children: []
     });
     renderPanels();
+  });
+
+  GALLERY_VIDEO_INPUTS.forEach(function (pair) {
+    var box = document.getElementById(pair[0]);
+    if (box) box.addEventListener("change", function () { STATE.gallery.video[pair[1]] = this.checked; });
   });
 
   var newYearInput = document.getElementById("newYearInput");

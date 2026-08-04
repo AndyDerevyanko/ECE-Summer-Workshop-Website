@@ -1,7 +1,8 @@
 /* every reel on the page (see addCustomElement()'s "reel" kind in
    js/main.js): drifts on its own along its orientation's axis, and homes in
-   on whichever tile the pointer is over (speeding up to bring it fully on
-   screen first, if it's still entering) instead of just pausing dead.
+   on whichever tile the pointer is over (bringing it fully on screen first
+   if it's hanging off either end - speeding up for one still entering,
+   winding back for one already leaving) instead of just pausing dead.
 
    The idle drift itself runs as a Web Animation (track.animate()), not a
    rAF loop: a plain rAF-driven translate visibly sped up while the mouse
@@ -149,6 +150,13 @@ function initReel(wrap) {
    * place if it's already fully on screen), and pops it up visually. Hands
    * control from the idle Web Animation to a rAF loop for the duration of
    * the hover - see this file's top doc comment for why the split exists.
+   *
+   * Works on BOTH edges of the mask, symmetrically: a tile still entering
+   * (hanging off the far edge) is pulled the rest of the way in by speeding
+   * the drift up, and a tile on its way out (already half past the near edge)
+   * is brought back on by running the drift BACKWARDS the same amount - so
+   * hovering anything half-visible reads the same way round either end,
+   * rather than only being readable on the side it entered from.
    * @param el the hovered tile
    */
   function onEnter(el) {
@@ -159,10 +167,23 @@ function initReel(wrap) {
     var maskRect = mask.getBoundingClientRect();
     var elRect = el.getBoundingClientRect();
     var margin = 24;
+    /* how far past the edge the tile hangs, on the side the drift is carrying
+       tiles TOWARD (bottom/right) and on the side it's carrying them AWAY
+       from (top/left). Only one can be positive unless the tile is bigger
+       than the mask itself, in which case the near edge wins below: reading
+       one starts at its beginning. */
     var overflow = vertical ?
       elRect.bottom - (maskRect.bottom - margin) :
       elRect.right - (maskRect.right - margin);
-    var targetPos = overflow > 0 ? hoverPos + overflow : hoverPos;
+    var underflow = vertical ?
+      (maskRect.top + margin) - elRect.top :
+      (maskRect.left + margin) - elRect.left;
+    var targetPos = hoverPos;
+    /* clamped at the loop's own origin: the track only carries copies of the
+       tile set AHEAD of the current position (see the REPEATS loop above), so
+       winding further back than 0 would drag blank track into view */
+    if (underflow > 0) targetPos = Math.max(hoverPos - underflow, 0);
+    else if (overflow > 0) targetPos = hoverPos + overflow;
     el.classList.add("popped");
 
     var lastTime = null;

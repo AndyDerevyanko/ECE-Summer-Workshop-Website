@@ -17,6 +17,7 @@
    the names in it are free text now (a ta can call one "Field trip"), the key
    just isn't worth a migration to rename. */
 var DEFAULT_GALLERY = {
+  video: { autoplay: true, controls: false, pausable: false },
   years: ["2026", "2025"],
   images: {
     "2026": ["assets/gallery/group-main-2026.png"],
@@ -56,6 +57,28 @@ function isGalleryPreview() {
  * @return true if it's a .MOV clip
  */
 function isVid(u) { return /\.mov$/i.test(u); }
+
+/* how a clip plays inside an image pane, straight out of content.gallery.video
+   (the content manager's Gallery section). Held here rather than read off
+   GALLERY_CONTENT every time so the fallback path, which never sees a content
+   blob at all, has the same defaults to paint from. */
+var GALLERY_VIDEO_OPTS = { autoplay: true, controls: false, pausable: false };
+
+/**
+ * Loads the gallery's video playback settings out of a content blob. A blob
+ * saved before these existed has no "video" key at all, so anything missing
+ * falls back to how the gallery has always behaved: muted clips that start on
+ * their own, loop, and show no player chrome.
+ * @param gallery content.gallery
+ */
+function initGalleryVideoOpts(gallery) {
+  var v = (gallery && gallery.video) || {};
+  GALLERY_VIDEO_OPTS = {
+    autoplay: v.autoplay !== false,
+    controls: !!v.controls,
+    pausable: !!v.pausable
+  };
+}
 
 /**
  * Every directory name currently defined, in the order the content manager
@@ -138,8 +161,15 @@ function paintPanes() {
     if (isVid(cur)) {
       img.hidden = true;
       vid.hidden = false;
+      vid.controls = GALLERY_VIDEO_OPTS.controls;
+      vid.autoplay = GALLERY_VIDEO_OPTS.autoplay;
       if (vid.getAttribute("src") !== cur) vid.src = cur;
-      vid.play().catch(function () {});
+      /* flipping to a clip is a fresh start either way: autoplay off means it
+         waits on the visitor (its first frame is already showing, so the pane
+         doesn't go black), and autoplay on has to be asked for explicitly -
+         the attribute alone only covers a clip that was in the markup at load */
+      if (GALLERY_VIDEO_OPTS.autoplay) vid.play().catch(function () {});
+      else vid.pause();
     } else {
       vid.pause();
       vid.removeAttribute("src");
@@ -313,6 +343,7 @@ window.renderGallery = renderGallery;
 function initGalleryContent(gallery) {
   DIRS = (gallery && gallery.years) || [];
   PHOTOS = (gallery && gallery.images) || {};
+  initGalleryVideoOpts(gallery);
   if (DIRS.indexOf(selectedDir) === -1) selectedDir = DIRS[0] || "";
 }
 
@@ -342,7 +373,22 @@ document.addEventListener("click", function (e) {
   var tile = e.target.closest && e.target.closest("[data-gallery-tile]");
   if (tile) { selectDir(tile.getAttribute("data-gallery-dir") || ""); return; }
   var pane = e.target.closest && e.target.closest("[data-gallery-pane]");
-  if (pane) stepGallery(pane.getAttribute("data-gallery-dir") || "", 1);
+  if (!pane) return;
+  /* a click on the clip ITSELF belongs to the player as soon as a ta has
+     handed the visitor any control over playback: stepping to the next image
+     on the same click that pauses (or that reaches for the scrub bar) would
+     make both unusable. Everywhere else in the pane still steps as always. */
+  var vid = e.target.closest('[data-gallery-media="vid"]');
+  if (vid && !vid.hidden && (GALLERY_VIDEO_OPTS.controls || GALLERY_VIDEO_OPTS.pausable)) {
+    /* with the native controls up the browser already play/pauses on a click
+       on the video, so this only has to cover the controls-free case */
+    if (!GALLERY_VIDEO_OPTS.controls) {
+      if (vid.paused) vid.play().catch(function () {});
+      else vid.pause();
+    }
+    return;
+  }
+  stepGallery(pane.getAttribute("data-gallery-dir") || "", 1);
 });
 
 document.addEventListener("keydown", function (e) {

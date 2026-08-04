@@ -177,6 +177,31 @@
             here at any time. Each one gets its own tile in the gallery page's directory rail,
             and can be shown by its own image pane in the Visual editor.
           </p>
+          <!-- how a clip plays once it comes up in an image pane. One choice
+               for the whole gallery rather than one per pane: several panes
+               can be placed, but "how our videos play" is a single decision
+               about the gallery. The equivalent switches for a video placed
+               anywhere else live on that video's own right-click menu in the
+               Visual editor. -->
+          <div class="ta-card" style="margin-bottom:18px">
+            <div class="field">
+              <label>Video clips</label>
+              <label class="ta-radio">
+                <input type="checkbox" id="galleryVideoAutoplay"> Start playing on their own
+              </label>
+              <label class="ta-radio">
+                <input type="checkbox" id="galleryVideoControls"> Show the player controls
+              </label>
+              <label class="ta-radio">
+                <input type="checkbox" id="galleryVideoPausable"> Click the clip to play/pause it
+              </label>
+              <p class="muted" style="margin:6px 0 0">
+                Clips are always muted and looping. With any of the last two on, clicking a clip
+                works its player instead of moving to the next image — the arrows and the rest of
+                the pane still flip through the directory as usual.
+              </p>
+            </div>
+          </div>
           <div id="galleryList">
             <!-- filled in by ta.js -->
           </div>

@@ -3870,6 +3870,126 @@ function applyShadowOverrides(shadow) {
   });
 }
 
+/* the three per-video playback switches offered on a placed video's right-
+   click menu (see renderCtxMenuRoot()'s "Video" section). Each is a flat list
+   of ids, the same shape content.shadow/content.locked already use for a
+   per-id boolean flag - a placed video ships exactly the way it always has
+   (muted, looping, autoplaying, no controls, see buildCustomElementNode()),
+   so each list only names the videos that deviate from that default rather
+   than storing a full state per video:
+   - "video_no_autoplay": doesn't start on its own
+   - "video_controls": shows the browser's own native player chrome
+   - "video_pausable": a plain click anywhere on the clip play/pauses it */
+var VIDEO_PLAYBACK_KEYS = ["video_no_autoplay", "video_controls", "video_pausable"];
+
+/**
+ * Switches one of a video's playback options on or off, live.
+ * @param el the <video> element (anything else is ignored)
+ * @param key one of VIDEO_PLAYBACK_KEYS
+ * @param on true to switch it on
+ */
+function setVideoPlaybackOption(el, key, on) {
+  if (!el || el.tagName !== "VIDEO") return;
+  /* every one of these is written as a real html attribute rather than as a
+     js-side property or a bookkeeping map, so js/learn-reel.js's cloned reel
+     tiles - cloneNode() copies attributes, never properties or listeners -
+     play exactly like the tile they were copied from */
+  if (key === "video_controls") { el.controls = !!on; return; }
+  if (key === "video_pausable") {
+    if (on) el.setAttribute("data-video-pausable", "1");
+    else el.removeAttribute("data-video-pausable");
+    return;
+  }
+  /* "video_no_autoplay". The attribute alone only decides what a FUTURE load
+     does, so a clip that's already rolling has to actually be stopped (and
+     one switched back to autoplay actually started) for the toggle to read as
+     immediate in the editor. */
+  el.autoplay = !on;
+  if (on) el.pause();
+  else el.play().catch(function () {});
+}
+
+/**
+ * Whether one of a video's playback options is currently on, read straight
+ * off the element rather than out of a parallel map - the same "the dom is
+ * the state" approach the style popover's shadow checkbox takes (see
+ * currentShadowOn()), and the only one that works for a cloned reel tile,
+ * which carries these attributes but none of the ids they were saved under.
+ * @param el the <video> element
+ * @param key one of VIDEO_PLAYBACK_KEYS
+ * @return true if it's switched on
+ */
+function videoPlaybackOn(el, key) {
+  if (!el) return false;
+  if (key === "video_controls") return !!el.controls;
+  if (key === "video_pausable") return el.hasAttribute("data-video-pausable");
+  return !el.autoplay;
+}
+
+/* set once wireVideoPauseClicks() has installed its delegated listener */
+var VIDEO_PAUSE_WIRED = false;
+
+/**
+ * Wires the single delegated listener behind the "Click to play/pause"
+ * switch. Delegated rather than per-element for the same reason
+ * wireNavButtons() is: a video placed mid-session, and every copy
+ * js/learn-reel.js clones out of a reel tile AFTER the override passes have
+ * run, then behaves like the original with no re-wiring at all.
+ */
+function wireVideoPauseClicks() {
+  if (VIDEO_PAUSE_WIRED) return;
+  VIDEO_PAUSE_WIRED = true;
+  document.addEventListener("click", function (e) {
+    /* inside the editor a click on a video is how it gets selected/styled */
+    if (isEditMode()) return;
+    var vid = e.target.closest && e.target.closest("[data-video-pausable]");
+    if (!vid || vid.tagName !== "VIDEO") return;
+    /* with the native controls on show, the browser already play/pauses on a
+       click on the video (and on its own play button) - handling it here too
+       would just undo whatever that click did */
+    if (vid.controls) return;
+    if (vid.paused) vid.play().catch(function () {});
+    else vid.pause();
+  });
+}
+
+/**
+ * Applies the saved per-video playback switches on top of a placed video's
+ * built-in default (autoplays, no controls, not click-pausable). Runs on
+ * every load, live site included, same shape as applyShadowOverrides() - and
+ * deliberately ahead of initAllReels(), so a reel's cloned tiles are copied
+ * from videos that are already in their final state.
+ * @param noAutoplay content.video_no_autoplay, a flat array of ids
+ * @param controls content.video_controls, a flat array of ids
+ * @param pausable content.video_pausable, a flat array of ids
+ */
+function applyVideoPlaybackOverrides(noAutoplay, controls, pausable) {
+  wireVideoPauseClicks();
+  var lists = { video_no_autoplay: noAutoplay, video_controls: controls, video_pausable: pausable };
+  VIDEO_PLAYBACK_KEYS.forEach(function (key) {
+    (lists[key] || []).forEach(function (id) {
+      setVideoPlaybackOption(elByAnyId(id), key, true);
+    });
+  });
+}
+
+/**
+ * Flips one of a video's playback switches from the right-click menu: live,
+ * saved, and undoable. The undo entry carries no before/after value since
+ * the toggle is its own inverse, same as "shadow"/"flip_h".
+ * @param id the video's data-resize-id
+ * @param key one of VIDEO_PLAYBACK_KEYS
+ */
+function toggleVideoPlayback(id, key) {
+  var el = elByAnyId(id);
+  if (!el) return;
+  var on = !videoPlaybackOn(el, key);
+  setVideoPlaybackOption(el, key, on);
+  saveEditedVideoPlayback(id, key, on);
+  EDIT_UNDO.push({ type: "videoplayback", id: id, key: key });
+  EDIT_REDO.length = 0;
+}
+
 /**
  * Applies saved Flip horizontal/Flip vertical/Rotate overrides (style
  * popover's Flip buttons and Rotate slider, icon/image/video/box elements
@@ -6447,6 +6567,15 @@ function isSelected(id) {
  */
 function toggleSelected(id) {
   if (!id) return;
+  /* the first shift-click EXTENDS the current selection rather than starting
+     from nothing: the ring's own element is the one a ta sees as selected, so
+     it joins the queue as its first member (picking up the same
+     .multi-selected highlight every other member gets) instead of being
+     silently left out of the group they think they're building */
+  if (!SELECTED_IDS.length && RING_EL) {
+    var ringId = elId(RING_EL);
+    if (ringId && ringId !== id) SELECTED_IDS.push(ringId);
+  }
   var i = SELECTED_IDS.indexOf(id);
   if (i === -1) SELECTED_IDS.push(id); else SELECTED_IDS.splice(i, 1);
   updateSelectionHighlight();
@@ -7568,7 +7697,10 @@ function freezeFreeElement(el) {
  * existed (no `d.url`) still falls back to the site's flat `.ph` placeholder
  * box (see the Media bullets in CLAUDE.md). A "video" is a real uploaded
  * clip (same upload flow as an image), a plain looping muted autoplay
- * `<video>`, same object-fit: cover. A "datetime" is a live countdown or a
+ * `<video>`, same object-fit: cover - that being only its DEFAULT: whether it
+ * autoplays, shows the browser's own player controls, or play/pauses on a
+ * click is a per-video choice on its right-click menu, applied over this by
+ * applyVideoPlaybackOverrides(). A "datetime" is a live countdown or a
  * formatted static date/time (see renderDatetimeContent()), driven by its
  * own `d.target`/`d.format` rather than a click-to-edit text field. A
  * "theme" is a real functional light/dark toggle (see js/theme.js's
@@ -8122,7 +8254,13 @@ function buildReelElement(d) {
       placeInTile(tile, childEl, childD.left || 0, childD.top || 0);
       if (childD.w) { childEl.style.width = childD.w + "px"; childEl.dataset.natW = childD.w; }
       if (childD.h) { childEl.style.height = childD.h + "px"; childEl.dataset.natH = childD.h; }
-      if (childD.kind === "text" || childD.kind === "button") wireTextField(childEl);
+      /* click-to-edit is an EDITOR affordance, so it's gated exactly the way
+         renderTileChildren() (the rebuild path for these same children) and
+         wireClickToEdit()'s own call site are: without this gate a reel's
+         bound textboxes/buttons came out contenteditable on the live page
+         too, since this builder runs on every load, not just in the editor */
+      if ((childD.kind === "text" || childD.kind === "button") &&
+          ((isPreviewMode() && isEditMode()) || isObjectMode())) wireTextField(childEl);
     });
     track.appendChild(tile);
   });
@@ -8607,7 +8745,7 @@ function copyDuplicateOverrides(pairs, skipMaps) {
   try { snap = raw ? JSON.parse(raw) : {}; } catch (e) { snap = {}; }
   var skip = skipMaps || [];
   var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "shade", "radius", "border", "links", "text_color", "theme_icons", "dark_colors", "dark_text_color", "dark_fill", "dark_border", "progress_fill", "dark_progress_fill", "progress_track", "dark_progress_track", "rotate", "hover_color", "dark_hover_color", "active_color", "dark_active_color"];
-  var flatLists = ["shadow", "flip_h", "flip_v"];
+  var flatLists = ["shadow", "flip_h", "flip_v"].concat(VIDEO_PLAYBACK_KEYS);
   pairs.forEach(function (p) {
     plainMaps.forEach(function (m) {
       if (skip.indexOf(m) !== -1) return;
@@ -9464,7 +9602,7 @@ function placeObject(objData, x, y) {
       if (idMap[oldId]) snap.text_styles[idMap[oldId]] = Object.assign({}, objData.text_styles[oldId]);
     });
   }
-  ["shadow", "locked"].forEach(function (m) {
+  ["shadow", "locked"].concat(VIDEO_PLAYBACK_KEYS).forEach(function (m) {
     if (!Array.isArray(objData[m])) return;
     snap[m] = snap[m] || [];
     objData[m].forEach(function (oldId) {
@@ -9533,6 +9671,7 @@ function placeObject(objData, x, y) {
   applyButtonStateColorOverrides(snap.hover_color, snap.dark_hover_color, snap.active_color, snap.dark_active_color);
   applyTintOverrides(snap.tint);
   applyShadeOverrides(snap.shade);
+  applyVideoPlaybackOverrides(snap.video_no_autoplay, snap.video_controls, snap.video_pausable);
   applyRadiusOverrides(snap.radius);
   applyBorderOverrides(snap.border, snap.dark_border);
   applyShadowOverrides(snap.shadow);
@@ -9746,6 +9885,29 @@ function renderCtxMenuRoot() {
       (isFixed(CTX_TARGET_ID) ? "Remove from navbar" : "Promote to navbar") +
       '</button>' +
       (groupOf(CTX_TARGET_ID) ? '<button type="button" data-ungroup="1">Ungroup</button>' : "");
+    /* how this particular clip plays, in its own labelled section rather than
+       mixed into the generic list above - none of it applies to any other
+       kind of element. A placed video has always been a muted, looping,
+       autoplaying wallpaper clip with no player chrome (see
+       buildCustomElementNode()); these three hand back the ordinary html5
+       video behaviours it was hiding, one at a time. Every label names the
+       state it's in FIRST and what clicking does second, the same
+       "current &rarr; next" shape the Container section below uses. */
+    if (CTX_TARGET_EL && CTX_TARGET_EL.tagName === "VIDEO") {
+      toggleHtml += '<div class="ctx-title">Video</div>' +
+        '<button type="button" data-video-play="video_no_autoplay">Autoplay: ' +
+        (videoPlaybackOn(CTX_TARGET_EL, "video_no_autoplay")
+          ? "off &rarr; play on load" : "on &rarr; wait for the visitor") +
+        '</button>' +
+        '<button type="button" data-video-play="video_controls">Player controls: ' +
+        (videoPlaybackOn(CTX_TARGET_EL, "video_controls")
+          ? "shown &rarr; hide" : "hidden &rarr; show") +
+        '</button>' +
+        '<button type="button" data-video-play="video_pausable">Click to play/pause: ' +
+        (videoPlaybackOn(CTX_TARGET_EL, "video_pausable")
+          ? "on &rarr; off" : "off &rarr; on") +
+        '</button>';
+    }
   }
   if (SELECTED_IDS.length >= 2) {
     toggleHtml += '<div class="ctx-title">Selection</div>' +
@@ -9940,6 +10102,12 @@ function renderCtxMenuRoot() {
       hideCtxMenu();
     });
   }
+  CTX_MENU.querySelectorAll("[data-video-play]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      toggleVideoPlayback(CTX_TARGET_ID, btn.getAttribute("data-video-play"));
+      hideCtxMenu();
+    });
+  });
   var linkEditBtn = CTX_MENU.querySelector("[data-link-edit]");
   if (linkEditBtn) {
     linkEditBtn.addEventListener("click", function () { renderCtxMenuLinkEditor(); });
@@ -11179,6 +11347,9 @@ function wireResizable() {
           (!FX_MENU || !FX_MENU.contains(e.target))) {
         RING_EL = null;
         RING.style.display = "none";
+        /* the grouping queue goes with it: it only ever exists relative to a
+           live selection, see toggleSelected() */
+        if (SELECTED_IDS.length) clearSelection();
       }
       return;
     }
@@ -11192,6 +11363,11 @@ function wireResizable() {
        itself contentEditable, so dragging across the text to select a few
        words would otherwise drag the whole element instead. */
     if (el.isContentEditable || (e.target && e.target.isContentEditable)) return;
+    /* a plain (no-shift) click starts a fresh selection: whatever was queued
+       for grouping is dropped the moment the ta moves on to a normal click,
+       rather than lingering (still outlined green) until Escape. Only
+       shift-held clicks keep building the queue, see toggleSelected(). */
+    if (!e.shiftKey && SELECTED_IDS.length) clearSelection();
     /* a reel tile is grabbed by its background and carried to a new place in
        the strip (see startReelTileDrag()), rather than dragged to a free
        position of its own the way everything below is - it lives in the
@@ -12557,6 +12733,9 @@ function redoEdit() {
  *  - "rotate": a whole-number degrees value, or 0 for the template default
  *  - "hovercolor"/"activecolor"/"darkhovercolor"/"darkactivecolor": a
  *    button's Hover color/Click color rows, same idea as "fill"/"darkfill"
+ *  - "videoplayback": no before/after value either, one of a video's three
+ *    playback switches (action.key, see VIDEO_PLAYBACK_KEYS) - flipping it
+ *    again is its own inverse, same as "shadow"
  * @param action the stack entry
  * @param side "before" or "after", which side of the action to restore
  */
@@ -12959,6 +13138,16 @@ function applyHistoryAction(action, side) {
     shEl.style.boxShadow = on ? BOX_SHADOW_VALUE : "none";
     saveEditedShadow(action.id, on);
     if (STYLE_MENU_ID === action.id) STYLE_MENU.querySelector(".sm-shadow").checked = on;
+    return;
+  }
+  if (action.type === "videoplayback") {
+    var vpEl = elByAnyId(action.id);
+    if (!vpEl) return;
+    /* self-inverse like "shadow" above: either side of the action just flips
+       whichever way the switch is currently sitting */
+    var vpOn = !videoPlaybackOn(vpEl, action.key);
+    setVideoPlaybackOption(vpEl, action.key, vpOn);
+    saveEditedVideoPlayback(action.id, action.key, vpOn);
     return;
   }
   if (action.type === "flip_h" || action.type === "flip_v") {
@@ -13548,6 +13737,26 @@ function saveEditedShadow(id, on) {
 }
 
 /**
+ * Persists one of a video's playback switches (see VIDEO_PLAYBACK_KEYS) into
+ * the preview snapshot, same flat-list-of-ids shape as saveEditedShadow()
+ * just above, one list per switch.
+ * @param id the video's data-resize-id
+ * @param key one of VIDEO_PLAYBACK_KEYS, which is also the content key
+ * @param on true to add the video to that list, false to drop it
+ */
+function saveEditedVideoPlayback(id, key, on) {
+  var raw;
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  if (!Array.isArray(snapshot[key])) snapshot[key] = [];
+  var vpIdx = snapshot[key].indexOf(id);
+  if (on && vpIdx === -1) snapshot[key].push(id);
+  else if (!on && vpIdx !== -1) snapshot[key].splice(vpIdx, 1);
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
  * Persists the style popover's Flip horizontal/Flip vertical toggle into
  * the preview snapshot, same shape/reasoning as saveEditedShadow() just
  * above - a flat list of ids per axis.
@@ -13805,6 +14014,7 @@ function applySharedOverridePasses(data, textMap) {
   applyButtonStateColorOverrides(data.hover_color, data.dark_hover_color, data.active_color, data.dark_active_color);
   applyTintOverrides(data.tint);
   applyShadeOverrides(data.shade);
+  applyVideoPlaybackOverrides(data.video_no_autoplay, data.video_controls, data.video_pausable);
   applyRadiusOverrides(data.radius);
   applyBorderOverrides(data.border, data.dark_border);
   VARIABLES = data.variables || [];
@@ -13989,6 +14199,7 @@ function initObjectCanvas() {
     applyButtonStateColorOverrides(data.hover_color, data.dark_hover_color, data.active_color, data.dark_active_color);
     applyTintOverrides(data.tint);
     applyShadeOverrides(data.shade);
+    applyVideoPlaybackOverrides(data.video_no_autoplay, data.video_controls, data.video_pausable);
     applyRadiusOverrides(data.radius);
     applyBorderOverrides(data.border, data.dark_border);
     /* the one thing an object canvas does NOT read out of its own scene:

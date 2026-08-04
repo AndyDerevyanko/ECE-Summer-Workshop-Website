@@ -226,6 +226,13 @@ DEFAULT_CONTENT = {
         {"big": "", "lbl": "Certificate of completion", "icon": True},
     ],
     "gallery": {
+        # how a clip plays inside a gallery image pane, chosen once for the
+        # whole gallery in the content manager's Gallery section (the panes
+        # themselves are placed elements a ta can have several of, but "how
+        # our videos play" is one decision about the gallery, not a per-pane
+        # one). Same three switches a placed video gets from its own right-
+        # click menu, see VIDEO_PLAYBACK_KEYS in js/main.js.
+        "video": {"autoplay": True, "controls": False, "pausable": False},
         "years": ["2026", "2025"],
         "images": {
             "2026": [
@@ -362,6 +369,15 @@ DEFAULT_CONTENT = {
     # in js/main.js), flat lists, same shape as shadow/locked.
     "flip_h": [],
     "flip_v": [],
+    # the three per-video playback switches on a placed video's right-click
+    # menu (see VIDEO_PLAYBACK_KEYS in js/main.js), flat lists of ids, same
+    # shape as shadow/flip_h above. A placed video autoplays muted on a loop
+    # with no player chrome, so each list only names the clips that deviate:
+    # ones that don't start on their own, ones showing the browser's native
+    # controls, and ones a plain click play/pauses.
+    "video_no_autoplay": [],
+    "video_controls": [],
+    "video_pausable": [],
     # visual editor style popover's Rotate slider, keyed by data-edit-id/
     # data-resize-id, a whole-number degrees value (-180 to 180).
     "rotate": {},
@@ -1862,8 +1878,31 @@ def get_content():
         data.setdefault(key, value)
     _backfill_extras_ids(data)
     _backfill_days_ids(data)
+    _backfill_gallery_video(data)
     _refresh_computed_variables(data)
     return data
+
+
+def _backfill_gallery_video(data):
+    """fills in the gallery's video playback settings for a blob saved before
+    they existed. the top-level setdefault() loop above can't reach these:
+    such a blob already HAS a "gallery" key, so the whole default gallery
+    (settings included) is skipped over. each flag is defaulted on its own,
+    to how the gallery has always behaved - clips start on their own, with no
+    player chrome and no click-to-pause.
+    @param data the content dict being read (mutated in place)
+    """
+    gallery = data.get("gallery")
+    if not isinstance(gallery, dict):
+        return
+    video = gallery.get("video")
+    if not isinstance(video, dict):
+        video = {}
+    gallery["video"] = {
+        "autoplay": video.get("autoplay", True) is not False,
+        "controls": bool(video.get("controls")),
+        "pausable": bool(video.get("pausable")),
+    }
 
 
 def _backfill_extras_ids(data):

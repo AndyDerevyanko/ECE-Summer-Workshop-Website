@@ -484,9 +484,11 @@ h1, h2, h3 {
    reel (addCustomElement()'s "reel" kind, js/main.js) - the panel (.reel)
    is a normal resizable/movable/deletable/colorable custom element; its
    tiles (.reel-tile) are individually selectable/stylable (color/radius/
-   border/opacity, generic via colorTarget()/elKind()) but can't be
-   independently moved/resized/deleted, since they live in the track's flex
-   flow (see the data-reel-tile guards throughout js/main.js). Drifts on its
+   border/opacity, generic via colorTarget()/elKind()), dragged along the
+   strip to reorder them (startReelTileDrag()) and resized all together
+   (startReelTileResize()) - what they can't do is leave the track's flex
+   flow, so they're never deleted or detached individually (see the
+   data-reel-tile guards throughout js/main.js). Drifts on its
    own via js/learn-reel.js (a compositor Web Animation, not rAF, so idle
    drift can't be throttled choppy - see initReel()), hovering a tile eases
    the drift to a stop and pops it instead of just pausing dead.
@@ -515,6 +517,15 @@ h1, h2, h3 {
   transition: transform .32s cubic-bezier(.2,.8,.2,1), box-shadow .32s ease, border-color .2s ease;
 }
 .reel-tile.popped { transform: scale(1.08); box-shadow: var(--shadow-pop); z-index: 5; }
+/* a tile mid-reorder-drag (see startReelTileDrag() in js/main.js): rides
+   above the tiles it's being carried past, and drops the transition that
+   would otherwise make it ease along a third of a second behind the cursor */
+.reel-tile.reel-dragging {
+  transition: none;
+  z-index: 6;
+  box-shadow: var(--shadow-pop);
+  cursor: grabbing;
+}
 
 .reel--vertical .reel-mask {
   padding: 0 30px;
@@ -533,8 +544,26 @@ h1, h2, h3 {
   margin: 0;
   -webkit-mask-image: none;
   mask-image: none;
+  /* the scrollbar is laid out INSIDE the panel's own box rather than added
+     underneath it: the panel is a free-placed element whose stored height is
+     what the live page uses too, so a scrollbar that grew the box only in the
+     editor left the reel hanging past its own bottom edge and over whatever
+     sits below it (the video row, on the landing page). Thin, for the same
+     reason - it's an editing affordance, not part of the design. */
+  height: 100%;
+  box-sizing: border-box;
+  scrollbar-width: thin;
+}
+.reel--editor-scroll .reel-mask::-webkit-scrollbar { width: 8px; height: 8px; }
+.reel--editor-scroll .reel-mask::-webkit-scrollbar-track { background: transparent; }
+.reel--editor-scroll .reel-mask::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text) 28%, transparent);
+  border-radius: 999px;
 }
 .reel--editor-scroll.reel--vertical .reel-mask { overflow-x: hidden; overflow-y: auto; max-height: 60vh; }
+/* the reorder grab (see startReelTileDrag() in js/main.js) is only a thing
+   inside the editor, so only the editor advertises it */
+body.edit-mode .reel-tile { cursor: grab; }
 
 .reel.static-grid .reel-mask {
   overflow: visible;
@@ -2151,16 +2180,17 @@ body.edit-mode .apply-bob { animation: none; }
   opacity: .5;
 }
 
-/* reel tile (see data-reel-tile in js/main.js): selectable enough to reach
-   the style popover (.sth), but not independently movable/resizable/
-   deletable/layer-reorderable - a tile lives in the reel's flex track,
-   detaching it via any of those would break the layout. Hidden outright
-   rather than dimmed like .locked above, since this isn't a toggleable
-   per-element state. */
-.sel-ring.reel-tile .rh,
-.sel-ring.reel-tile .mvh,
-.sel-ring.reel-tile .delh,
-.sel-ring.reel-tile .lyh {
+/* reel tile (see isReelTileEl() in js/main.js): moves (reordered along the
+   strip, startReelTileDrag()) and resizes (every tile at once,
+   startReelTileResize()) like anything else, so it keeps the move and resize
+   handles. What it can't do is leave its reel: deleting one or sending it up
+   and down the layer order both only make sense for elements that own their
+   own place on the page, and a tile's place is its slot in the track.
+   Deliberately NOT named .reel-tile - that's the tile's own content class
+   further up this file, and the ring wearing it painted an opaque tile-
+   coloured panel over whatever was selected. */
+.sel-ring.ring-reel-tile .delh,
+.sel-ring.ring-reel-tile .lyh {
   display: none;
 }
 

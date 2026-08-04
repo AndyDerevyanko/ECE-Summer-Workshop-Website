@@ -722,6 +722,41 @@ function isMoveLockedTileRole(el) {
 }
 
 /**
+ * True for one of a reel's content tiles (see buildReelElement()). A tile has
+ * no position/size of its own the override maps can carry - where it sits is
+ * its order in the track (see startReelTileDrag()) and how big it is belongs
+ * to the reel as a whole (d.tileW/d.tileH, shared by every tile, see
+ * startReelTileResize()) - which is why it stays move/resize-locked as far as
+ * the generic overrides are concerned while being fully draggable/resizable
+ * in the editor through those two reel-specific paths.
+ * @param el the element
+ * @return true if el is a reel tile
+ */
+function isReelTileEl(el) {
+  return !!(el && el.hasAttribute && el.hasAttribute("data-reel-tile"));
+}
+
+/**
+ * The reel panel el belongs to (itself, if el IS one), or null. Used wherever
+ * an edit made on a tile has to be applied to the whole reel - tile size,
+ * tile order and the two spacing sliders are all properties of the reel
+ * entry, not of the one tile that happened to be selected.
+ * @param el any element
+ * @return the .reel panel, or null
+ */
+function reelPanelOf(el) {
+  return el && el.closest ? el.closest(".reel") : null;
+}
+
+/* a reel's two spacing figures, when its entry doesn't carry its own (see
+   reelGap()/reelPad()). The gap matches .reel-track's own stylesheet gap, so
+   an untouched reel keeps looking exactly as it did before either slider
+   existed; the cross-axis pad starts at nothing, since the tiles used to sit
+   flush against the panel. */
+var REEL_DEFAULT_GAP = 20;
+var REEL_DEFAULT_PAD = 0;
+
+/**
  * True for one of the student dashboard's LIVE AREA containers - the "Extra
  * attachments" tile list and "The days" tile grid (buildCustomElement()'s
  * "extrasArea"/"daysArea" kinds, filled in by js/dashboard.js's renderExtras()/
@@ -1161,8 +1196,12 @@ function toggleAreaFlowWrap(id) {
 }
 
 /**
- * True for an element that can't be individually RESIZED: a reel tile, same
- * flex-track reasoning as isMoveLockedTileRole(). Attachments/day tile roles
+ * True for an element that can't carry a size override of its OWN: a reel
+ * tile, whose width/height is one figure shared by every tile in the reel
+ * (d.tileW/d.tileH on the reel's entry, see setReelTileSize()) rather than
+ * anything per-tile that content.sizes could hold. Dragging a tile's resize
+ * handles still works - it just resizes all of them at once, through the reel
+ * entry, see startReelTileResize(). Attachments/day tile roles
  * used to be listed here as well (the rect fills its tile via inset:0, the
  * text sizes itself from its content) but the spec is explicit that a ta can
  * resize the rectangle around a tile, its text and its button, so they're
@@ -1210,7 +1249,13 @@ function isTiledRoleEl(el) {
  */
 function moveBoundsContainer(el) {
   if (!el || !el.closest) return null;
-  var tile = el.closest("[data-extras-tile], [data-days-tile], [data-gallery-tile]");
+  /* a reel tile bounds its contents for the same reason, one step more
+     literally: what a ta drops onto one is absolutely positioned against
+     THAT tile (see placeInTile()), and its saved left/top are tile-relative,
+     so a child dragged past the tile's edge doesn't move to the tile it looks
+     like it landed on - it stays this tile's child at a huge offset, and
+     rides away over the others the moment the reel scrolls or drifts. */
+  var tile = el.closest("[data-extras-tile], [data-days-tile], [data-gallery-tile], [data-reel-tile]");
   if (tile) return tile;
   /* a login field/button/error line is the same kind of little container: its
      label, its input rectangle and its placeholder text all move freely
@@ -3106,6 +3151,9 @@ var RING_DRAGGING = false;
 var LAYER_BTN = null;
 /* the ring's one style (color/opacity) button, so the popover can anchor under it */
 var STYLE_BTN = null;
+/* the ring's one "select the container around this" button, so positionRing()
+   can name the container it would actually jump to */
+var PARENT_BTN = null;
 
 /* handle name -> [x edge, y edge] it drags: -1 left/top, 1 right/bottom */
 var RING_DIRS = {
@@ -3151,6 +3199,7 @@ function buildRing() {
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
     'stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/>' +
     '<path d="M5 12l7-7 7 7"/></svg>';
+  PARENT_BTN = par;
   par.addEventListener("mousedown", function (e) { e.preventDefault(); e.stopPropagation(); });
   par.addEventListener("click", function (e) {
     e.preventDefault();
@@ -3870,6 +3919,9 @@ var STYLE_SHADE_BEFORE = 0;
 var STYLE_RADIUS_BEFORE = "0";
 var STYLE_BORDER_BEFORE = { w: 0, color: "#000000" };
 var STYLE_ROTATE_BEFORE = "0";
+/* the reel spacing sliders' pre-drag values, one undo step each per drag -
+   see buildStyleMenu()'s spacing rows and primeStyleMenuReelRows() */
+var STYLE_REEL_BEFORE = { gap: REEL_DEFAULT_GAP, pad: REEL_DEFAULT_PAD };
 /* same "value right before this popover session's edit" convention as
    STYLE_COLOR_BEFORE etc. above, for each row's "dark mode color" sub-row */
 var STYLE_DARKCOLOR_BEFORE = "";
@@ -4074,6 +4126,21 @@ function buildStyleMenu() {
     '<div class="sm-row sm-dt-row sm-dt-target-row">' +
       '<label>Target</label>' +
       '<input type="datetime-local" class="sm-dt-target">' +
+    '</div>' +
+    /* a reel's two spacing figures (see reelGap()/reelPad()). Both rows show
+       for the panel AND for any tile inside it, since a tile is what a ta
+       actually clicks on - the panel behind them is almost entirely covered.
+       Which of the two is "horizontal" depends on which way the reel runs,
+       so the labels are written at open time rather than baked in here. */
+    '<div class="sm-row sm-reel-row sm-reel-gap-row">' +
+      '<label class="sm-reel-gap-label">Horizontal spacing</label>' +
+      '<input type="range" class="sm-reel-gap" min="0" max="160" step="1">' +
+      '<span class="sm-reel-gap-val">20px</span>' +
+    '</div>' +
+    '<div class="sm-row sm-reel-row sm-reel-pad-row">' +
+      '<label class="sm-reel-pad-label">Vertical spacing</label>' +
+      '<input type="range" class="sm-reel-pad" min="0" max="160" step="1">' +
+      '<span class="sm-reel-pad-val">0px</span>' +
     '</div>' +
     '<div class="sm-row">' +
       '<label>Opacity</label>' +
@@ -4707,6 +4774,37 @@ function buildStyleMenu() {
     }
     STYLE_SHADE_BEFORE = after;
   });
+
+  /* the reel spacing pair, both wired the same way: drag repaints the strip
+     live, letting go banks one undo step for the whole drag (same
+     input-then-change split every other slider in here uses). Resolved to
+     the PANEL rather than to whatever's selected, so the sliders work
+     identically whether a ta clicked the reel or one of its tiles. */
+  [["gap", ".sm-reel-gap", ".sm-reel-gap-val"], ["pad", ".sm-reel-pad", ".sm-reel-pad-val"]]
+    .forEach(function (row) {
+      var key = row[0];
+      var input = STYLE_MENU.querySelector(row[1]);
+      var out = STYLE_MENU.querySelector(row[2]);
+      input.addEventListener("input", function () {
+        var panel = reelPanelOf(STYLE_MENU_ID && styleMenuElById(STYLE_MENU_ID));
+        if (!panel) return;
+        var px = parseInt(input.value, 10) || 0;
+        out.textContent = px + "px";
+        setReelSpacing(panel, key, px);
+        positionRing();
+      });
+      input.addEventListener("change", function () {
+        var panel = reelPanelOf(STYLE_MENU_ID && styleMenuElById(STYLE_MENU_ID));
+        if (!panel) return;
+        var after = parseInt(input.value, 10) || 0;
+        if (after !== STYLE_REEL_BEFORE[key]) {
+          EDIT_UNDO.push({ type: "reelSpacing", id: elId(panel), key: key,
+            before: STYLE_REEL_BEFORE[key], after: after });
+          EDIT_REDO.length = 0;
+        }
+        STYLE_REEL_BEFORE[key] = after;
+      });
+    });
 
   radiusInput.addEventListener("input", function () {
     if (!STYLE_MENU_ID) return;
@@ -5548,6 +5646,13 @@ function toggleStyleMenu(anchorEl) {
   var isPlainBox = !!(customData && customData.kind === "box");
   var showTransform = isIcon || isImg || isPlainBox;
   STYLE_MENU.querySelectorAll(".sm-transform-row").forEach(function (row) { row.style.display = showTransform ? "" : "none"; });
+  /* the reel spacing pair, on the panel and on its tiles alike - see
+     primeStyleMenuReelRows() */
+  var reelPanel = reelPanelOf(el);
+  STYLE_MENU.querySelectorAll(".sm-reel-row").forEach(function (row) {
+    row.style.display = reelPanel ? "" : "none";
+  });
+  if (reelPanel) primeStyleMenuReelRows(reelPanel);
 
   var tintInput = STYLE_MENU.querySelector(".sm-tint");
   var shadeInput = STYLE_MENU.querySelector(".sm-shade");
@@ -5630,6 +5735,32 @@ function toggleStyleMenu(anchorEl) {
   STYLE_MENU.style.top = Math.max(0, Math.min(y, maxY)) + "px";
 }
 
+/**
+ * Fills the style popover's two reel spacing rows in from one reel's current
+ * state: which slider is the horizontal one depends on which way the reel
+ * runs (the gap is between tiles, so it's horizontal on a horizontal reel and
+ * vertical on a vertical one; the pad is the clear space across the other
+ * axis, so it's always the opposite). Split out from toggleStyleMenu() so
+ * undo/redo can refresh the sliders while the popover is still open, same as
+ * every other row's history branch does.
+ * @param panel the .reel element the popover is currently acting on
+ */
+function primeStyleMenuReelRows(panel) {
+  var d = customElementById(elId(panel));
+  if (!d) return;
+  var vertical = panel.classList.contains("reel--vertical");
+  var gap = reelGap(d), pad = reelPad(d);
+  STYLE_MENU.querySelector(".sm-reel-gap-label").textContent =
+    (vertical ? "Vertical" : "Horizontal") + " spacing";
+  STYLE_MENU.querySelector(".sm-reel-pad-label").textContent =
+    (vertical ? "Horizontal" : "Vertical") + " spacing";
+  STYLE_MENU.querySelector(".sm-reel-gap").value = gap;
+  STYLE_MENU.querySelector(".sm-reel-gap-val").textContent = gap + "px";
+  STYLE_MENU.querySelector(".sm-reel-pad").value = pad;
+  STYLE_MENU.querySelector(".sm-reel-pad-val").textContent = pad + "px";
+  STYLE_REEL_BEFORE = { gap: gap, pad: pad };
+}
+
 /** Closes the style popover, if open. */
 function hideStyleMenu() {
   if (STYLE_MENU) STYLE_MENU.classList.remove("show");
@@ -5652,7 +5783,12 @@ function positionRing() {
   RING.style.width = r.width + "px";
   RING.style.height = r.height + "px";
   RING.classList.toggle("locked", isLocked(elId(RING_EL)));
-  RING.classList.toggle("reel-tile", RING_EL.hasAttribute("data-reel-tile"));
+  /* deliberately NOT "reel-tile": that's a real content class (css/style.css
+     gives it the tile's own surface background, border and rounding), and
+     putting it on the ring painted an opaque panel straight over whatever
+     tile was selected - the icon, title and body of the tile a ta had just
+     clicked simply vanished until they clicked something else. */
+  RING.classList.toggle("ring-reel-tile", isReelTileEl(RING_EL));
   /* the download/open button and the attachment/day icons stay forever (see
      deleteElement()'s data-extras-fixed/data-days-fixed guard), so the trash
      handle is hidden on them rather than left as a button that silently does
@@ -5661,7 +5797,18 @@ function positionRing() {
     RING_EL.hasAttribute("data-extras-fixed") || RING_EL.hasAttribute("data-days-fixed"));
   /* a tile resizes but never moves, see isMoveLockedTileRole() */
   RING.classList.toggle("tile-box", isTileBoxEl(RING_EL));
-  RING.classList.toggle("has-parent", !!parentSelectableOf(RING_EL));
+  var parent = parentSelectableOf(RING_EL);
+  RING.classList.toggle("has-parent", !!parent);
+  /* an up arrow on a reel tile reads as "move this tile up the running order",
+     which is emphatically not what it does - it selects the reel around the
+     tile. Naming the actual container it jumps to is the difference between a
+     button whose tooltip explains it and one a ta clicks and sees nothing
+     happen. */
+  if (PARENT_BTN && parent) {
+    PARENT_BTN.title = parent.classList.contains("reel")
+      ? "Select the whole reel (drag the tile itself to reorder it)"
+      : "Select the container around this";
+  }
 }
 
 /**
@@ -5726,9 +5873,21 @@ function freezeDescendants(el) {
      their old spots while the tiles themselves reflowed out from under them,
      the resize half of the same tearing ancestorPos() describes. */
   if (isLiveAreaEl(el)) return;
+  /* a reel is the same shape of container, one step more literally: resizing
+     the panel resizes the VIEWPORT its tiles scroll/drift through (see
+     initReel() in js/learn-reel.js), and the tiles are supposed to keep
+     flowing in their track behind it exactly as they were. Pinning them
+     instead detached every tile out of that flex track and left the whole
+     reel visually empty the moment a ta grabbed a resize handle - the tiles
+     were still there, just absolutely positioned at their pre-drag spots
+     inside a track that had collapsed to nothing around them. */
+  if (el.classList && el.classList.contains("reel")) return;
   var wraps = [];
   el.querySelectorAll(RESIZABLE_SEL).forEach(function (d) {
     if (isGluedChild(d)) return;
+    /* same reasoning one level down, for the case where the element being
+       resized is something a reel happens to sit inside */
+    if (isReelTileEl(d) || (d.closest && d.closest(".reel-track"))) return;
     var wrap = detachFromFlow(d);
     if (wrap.dataset.pinned !== "1") wraps.push(wrap);
   });
@@ -5764,10 +5923,14 @@ function freezeDescendants(el) {
  * @param e the handle's mousedown
  */
 function startResizeDrag(e) {
-  /* this only ever fires from the ring's own (already CSS-hidden for a
-     locked-shape role, see positionRing()) handle buttons, so this is
-     defense in depth, not the real gate - see isResizeLockedTileRole(). */
-  if (!RING_EL || isResizeLockedTileRole(RING_EL)) return;
+  if (!RING_EL) return;
+  /* a reel tile's handles resize every tile in the reel at once, through the
+     reel's own entry rather than through a size override of its own, so it
+     takes its own drag entirely - see startReelTileResize() */
+  if (isReelTileEl(RING_EL)) { startReelTileResize(e, RING_EL); return; }
+  /* nothing else can be size-locked any more (see isResizeLockedTileRole()),
+     so this is defense in depth, not the real gate */
+  if (isResizeLockedTileRole(RING_EL)) return;
   e.preventDefault();
   e.stopPropagation();
   var el = RING_EL;
@@ -5886,8 +6049,21 @@ function startResizeDrag(e) {
  * @param e the handle's mousedown
  */
 function startMoveDrag(e) {
+  if (!RING_EL) return;
+  /* a reel tile CAN be moved, it just moves through the reel's own running
+     order rather than to a free position of its own - the handle drags it
+     along the strip and drops it between two other tiles, see
+     startReelTileDrag(). Same drag a grab anywhere on the tile's background
+     starts (see wireResizable()), so the handle and the tile itself behave
+     identically. */
+  if (isReelTileEl(RING_EL)) {
+    e.preventDefault();
+    e.stopPropagation();
+    startReelTileDrag(e, RING_EL);
+    return;
+  }
   /* see isMoveLockedTileRole() */
-  if (!RING_EL || isLocked(elId(RING_EL)) || isMoveLockedTileRole(RING_EL)) return;
+  if (isLocked(elId(RING_EL)) || isMoveLockedTileRole(RING_EL)) return;
   e.preventDefault();
   e.stopPropagation();
   var el = RING_EL;
@@ -5936,12 +6112,177 @@ function startMoveDrag(e) {
   document.addEventListener("mouseup", onUp);
 }
 
+/**
+ * One reel tile's drag: grab it anywhere on its background (or by the ring's
+ * move handle) and carry it to a different place in the strip. A tile can't
+ * be given a free position the way every other element can - it lives in the
+ * reel's flex track, and where it sits IS its index in that track - so the
+ * drag reorders instead: the tile follows the pointer along the reel's own
+ * axis, and the moment its centre passes a neighbour's, the two swap places
+ * for real in the dom, so the strip rearranges live under the cursor rather
+ * than only settling on drop.
+ *
+ * The translate is re-derived against the tile's CURRENT slot on every move
+ * (measure with the transform cleared, then re-apply), not accumulated from
+ * the drag's start: a swap moves the slot out from under the tile, and an
+ * offset measured against where it used to be would jump by a whole tile
+ * width each time. Same 5px threshold the ordinary drag-anywhere handler
+ * uses, so a plain click still just selects the tile.
+ * @param e the mousedown that started it
+ * @param tile the .reel-tile being dragged
+ */
+function startReelTileDrag(e, tile) {
+  var panel = reelPanelOf(tile);
+  var track = tile.parentElement;
+  if (!panel || !track) return;
+  var vertical = panel.classList.contains("reel--vertical");
+  var axis = vertical ? "Y" : "X";
+  var startX = e.clientX, startY = e.clientY;
+  var before = reelTileOrder(panel);
+  var moving = false;
+  var grab = 0; /* pointer's offset into the tile at grab time, along the axis */
+
+  /** @return el's leading edge along the reel's axis, in viewport px. */
+  function lead(el) {
+    var r = el.getBoundingClientRect();
+    return vertical ? r.top : r.left;
+  }
+  /** @return el's length along the reel's axis. */
+  function span(el) {
+    var r = el.getBoundingClientRect();
+    return vertical ? r.height : r.width;
+  }
+
+  function onMove(ev) {
+    if (!moving) {
+      if (Math.abs(ev.clientX - startX) < 5 && Math.abs(ev.clientY - startY) < 5) return;
+      moving = true;
+      RING_DRAGGING = true;
+      document.body.style.userSelect = "none";
+      /* kills .reel-tile's own transform transition for the duration, so the
+         tile tracks the pointer instead of easing after it */
+      tile.classList.add("reel-dragging");
+      grab = (vertical ? startY : startX) - lead(tile);
+    }
+    ev.preventDefault();
+    var want = (vertical ? ev.clientY : ev.clientX) - grab;
+    tile.style.transform = "";
+    tile.style.transform = "translate" + axis + "(" + (want - lead(tile)) + "px)";
+
+    /* the first tile whose middle the dragged one has passed: that's the slot
+       it should take, and inserting BEFORE it is what takes it (null = past
+       every other tile, ie the end of the strip) */
+    var centre = want + span(tile) / 2;
+    var target = null;
+    Array.prototype.forEach.call(track.children, function (other) {
+      if (other === tile || target) return;
+      var r = other.getBoundingClientRect();
+      if (centre < (vertical ? r.top + r.height / 2 : r.left + r.width / 2)) target = other;
+    });
+    if (target !== tile.nextElementSibling) {
+      track.insertBefore(tile, target);
+      /* the slot moved, so the offset that keeps the tile under the cursor
+         has to be measured again against the new one */
+      tile.style.transform = "";
+      tile.style.transform = "translate" + axis + "(" + (want - lead(tile)) + "px)";
+    }
+    positionRing();
+  }
+  function onUp() {
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    if (!moving) return; /* a plain click: leave the selection it already made */
+    RING_DRAGGING = false;
+    document.body.style.userSelect = "";
+    /* the click the browser fires next must not open a text edit, same as
+       every other drag, see wireResizable() */
+    JUST_DRAGGED = true;
+    setTimeout(function () { JUST_DRAGGED = false; }, 0);
+    tile.classList.remove("reel-dragging");
+    tile.style.transform = "";
+    positionRing();
+    var after = reelTileOrder(panel);
+    if (after.join(",") === before.join(",")) return;
+    saveReelOrder(panel, after);
+    EDIT_UNDO.push({ type: "reelOrder", id: elId(panel), before: before, after: after });
+    EDIT_REDO.length = 0;
+  }
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
+}
+
+/**
+ * One reel tile's resize drag, from any of the ring's 8 handles. Per the spec
+ * every tile in the reel follows the one being dragged, so this writes the
+ * reel's single shared tile size (see setReelTileSize()) instead of a size
+ * override for the tile that happens to be selected.
+ *
+ * No detachFromFlow()/freezeDescendants() and no opposite-edge pinning,
+ * unlike the generic drag: the tiles stay in their track and the track
+ * re-lays them out at the new size, which is exactly what "the rest mirror
+ * it" looks like. Whatever a ta has bound onto a tile keeps its own position
+ * inside it (they're absolutely placed against the tile, see placeInTile()),
+ * so growing a tile reveals more room around its contents rather than
+ * dragging them along.
+ * @param e the handle's mousedown
+ * @param tile the .reel-tile being resized
+ */
+function startReelTileResize(e, tile) {
+  var panel = reelPanelOf(tile);
+  if (!panel) return;
+  e.preventDefault();
+  e.stopPropagation();
+  var dir = RING_DIRS[e.target.getAttribute("data-dir")];
+  var startX = e.clientX, startY = e.clientY;
+  var r = tile.getBoundingClientRect();
+  var start = { w: r.width, h: r.height };
+  var last = { w: start.w, h: start.h };
+  RING_DRAGGING = true;
+
+  function onMove(ev) {
+    var w = dir[0] ? Math.max(40, start.w + dir[0] * (ev.clientX - startX)) : start.w;
+    var h = dir[1] ? Math.max(40, start.h + dir[1] * (ev.clientY - startY)) : start.h;
+    /* same shift-to-keep-the-shape the generic resize offers, see
+       startResizeDrag()'s aspectLocked() */
+    if (ev.shiftKey && start.w > 0 && start.h > 0) {
+      var f;
+      if (dir[0] && dir[1]) {
+        f = Math.abs(w / start.w - 1) > Math.abs(h / start.h - 1) ? w / start.w : h / start.h;
+      } else {
+        f = dir[0] ? w / start.w : h / start.h;
+      }
+      w = start.w * f;
+      h = start.h * f;
+    }
+    last = { w: Math.round(w), h: Math.round(h) };
+    applyReelTileSize(panel, last.w, last.h);
+    positionRing();
+  }
+  function onUp() {
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    RING_DRAGGING = false;
+    var beforeSize = { w: Math.round(start.w), h: Math.round(start.h) };
+    if (last.w === beforeSize.w && last.h === beforeSize.h) return;
+    setReelTileSize(panel, last.w, last.h);
+    EDIT_UNDO.push({ type: "reelTileSize", id: elId(panel), before: beforeSize, after: last });
+    EDIT_REDO.length = 0;
+  }
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
+}
+
 /** Double-click on a resize handle: back to the template's own size. */
 function resetSizeDbl(e) {
   e.preventDefault();
   e.stopPropagation();
   if (!RING_EL) return;
   var el = RING_EL;
+  /* a reel tile has no size of its own to restore - its box comes from the
+     reel's shared tileW/tileH (see setReelTileSize()), and writing a null
+     into content.sizes under a tile's id would be storing a fact about a
+     thing that never had one */
+  if (isReelTileEl(el)) return;
   var before = getSize(el);
   var pos = getPos(el);
   resetBox(el);
@@ -5957,6 +6298,9 @@ function resetPosDbl(e) {
   e.stopPropagation();
   if (!RING_EL) return;
   var el = RING_EL;
+  /* same as resetSizeDbl(): a reel tile's place in the strip is its running
+     order, not a position override there'd be anything to clear */
+  if (isReelTileEl(el)) return;
   var before = getPos(el);
   setOwnPos(el, 0, 0);
   saveEditedPosition(elId(el), null, null);
@@ -7742,14 +8086,17 @@ function placeInTile(tileEl, el, x, y) {
  * style-popover rows apply to them automatically, see colorTarget()/
  * elKind()) but are marked data-reel-tile="1" so they're excluded from
  * every path that would otherwise detachFromFlow() them out of the flex
- * track (deleteElement(), the delegated drag-anywhere mousedown handler,
- * arrow-key nudge, startResizeDrag()/startMoveDrag() - see those functions'
- * own data-reel-tile guards). Whatever a ta has already dropped onto a tile
+ * track (deleteElement(), the arrow-key nudge, and the generic override maps
+ * - see isMoveLockedTileRole()/isResizeLockedTileRole()). Dragging and
+ * resizing a tile ARE both available, they just run through the reel instead
+ * of through those maps: a drag reorders the track (startReelTileDrag()) and
+ * a resize sets the one tile size every tile in the reel shares
+ * (startReelTileResize()). Whatever a ta has already dropped onto a tile
  * (d.tiles[i].children) is built via buildCustomElementNode() and appended
  * straight into that tile via placeInTile(), so it's a real DOM descendant
  * that travels with its tile once js/learn-reel.js starts scrolling it -
  * not just a page element that happens to visually overlap it.
- * @param d {id, orientation, tileW, tileH, tiles: [{id, children}]}
+ * @param d {id, orientation, tileW, tileH, gap, pad, tiles: [{id, children}]}
  * @return the unplaced panel element (placeFreeElement()'d by the caller,
  *   buildCustomElement(), exactly like every other kind)
  */
@@ -7779,7 +8126,156 @@ function buildReelElement(d) {
     });
     track.appendChild(tile);
   });
+  applyReelSpacing(panel, d);
   return panel;
+}
+
+/**
+ * How far apart a reel's tiles sit along the axis they're laid out on - the
+ * gap between one tile and the next. Horizontal for a horizontal reel,
+ * vertical for a vertical one, which is why the style popover labels the same
+ * slider differently depending on which way the reel runs (see
+ * toggleStyleMenu()).
+ * @param d the reel's custom-element entry
+ * @return px
+ */
+function reelGap(d) {
+  return d && d.gap !== undefined ? d.gap : REEL_DEFAULT_GAP;
+}
+
+/**
+ * How much clear space a reel keeps between its tiles' borders and its own,
+ * across the axis the tiles DON'T run along: above/below the strip on a
+ * horizontal reel, left/right of it on a vertical one.
+ * @param d the reel's custom-element entry
+ * @return px
+ */
+function reelPad(d) {
+  return d && d.pad !== undefined ? d.pad : REEL_DEFAULT_PAD;
+}
+
+/**
+ * Paints a reel's two spacing figures onto its track: the gap as the flex
+ * gap (which is the between-tiles axis either way round, since the track's
+ * flex-direction is what decides that), the pad as track padding on the other
+ * axis only. Inline, not a stylesheet rule, because every reel carries its
+ * own pair - and inline is also what survives js/learn-reel.js cloning the
+ * track's tiles for the live loop, since the padding/gap sit on the track
+ * itself rather than on anything cloned.
+ * @param panel the .reel element
+ * @param d its custom-element entry
+ */
+function applyReelSpacing(panel, d) {
+  var track = panel.querySelector(".reel-track");
+  if (!track) return;
+  var pad = reelPad(d);
+  track.style.gap = reelGap(d) + "px";
+  track.style.padding = panel.classList.contains("reel--vertical")
+    ? "0 " + pad + "px" : pad + "px 0";
+}
+
+/**
+ * Sets one of a reel's spacing figures, live and saved. Both go on the reel's
+ * own entry rather than into any of the per-id override maps: they describe
+ * the strip as a whole, and there's no single element they could be keyed to
+ * (the track itself isn't a tracked element).
+ * @param panel the .reel element
+ * @param key "gap" or "pad"
+ * @param px the new value
+ */
+function setReelSpacing(panel, key, px) {
+  var d = customElementById(elId(panel));
+  if (!d) return;
+  d[key] = px;
+  applyReelSpacing(panel, d);
+  saveCustomElements(CUSTOM_ELEMENTS);
+}
+
+/**
+ * Resizes every tile in a reel at once. Per the spec a ta resizes ONE tile
+ * and "all other tiles will attempt to mirror it" - the same shared-template
+ * rule an attachments/day tile role already follows (see
+ * mirrorTiledRoleGeometry()), except a reel's tiles share one stored size on
+ * the reel entry instead of a per-id entry in content.sizes, so there's
+ * nothing to mirror across ids: painting them all here IS the mirror.
+ * Includes js/learn-reel.js's cloned loop copies, which are plain .reel-tile
+ * markup with their tracked attributes stripped and would otherwise keep the
+ * old size on the live page.
+ * @param panel the .reel element
+ * @param w new tile width in px
+ * @param h new tile height in px
+ */
+function applyReelTileSize(panel, w, h) {
+  panel.querySelectorAll(".reel-tile").forEach(function (t) {
+    t.style.width = w + "px";
+    t.style.height = h + "px";
+  });
+}
+
+/**
+ * applyReelTileSize() plus the save: the tail end of a tile resize drag, and
+ * of undo/redo replaying one.
+ * @param panel the .reel element
+ * @param w new tile width in px
+ * @param h new tile height in px
+ */
+function setReelTileSize(panel, w, h) {
+  var d = customElementById(elId(panel));
+  applyReelTileSize(panel, w, h);
+  if (!d) return;
+  d.tileW = w;
+  d.tileH = h;
+  saveCustomElements(CUSTOM_ELEMENTS);
+}
+
+/**
+ * The ids of a reel's tiles, in the order they currently sit in the track.
+ * @param panel the .reel element
+ * @return array of tile ids
+ */
+function reelTileOrder(panel) {
+  return Array.prototype.map.call(panel.querySelectorAll(".reel-tile[data-resize-id]"),
+    function (t) { return t.getAttribute("data-resize-id"); });
+}
+
+/**
+ * Persists the order a reel's tiles are currently in, by reordering the
+ * entry's own tiles[] to match. Each tile keeps its id and its bound children
+ * (they're the same objects, just moved), so nothing about a tile's contents
+ * has to be rewritten - which is the whole reason a reorder is a cheap edit
+ * and not a rebuild.
+ * @param panel the .reel element
+ * @param ids tile ids in their new order
+ */
+function saveReelOrder(panel, ids) {
+  var d = customElementById(elId(panel));
+  if (!d || !d.tiles) return;
+  var byId = {};
+  d.tiles.forEach(function (t) { byId[t.id] = t; });
+  var reordered = [];
+  ids.forEach(function (id) { if (byId[id]) { reordered.push(byId[id]); delete byId[id]; } });
+  /* anything the dom didn't account for keeps its place at the end rather
+     than being dropped - a tiles[] entry with no element on this page is not
+     something a reorder should be able to delete */
+  d.tiles.forEach(function (t) { if (byId[t.id]) reordered.push(t); });
+  d.tiles = reordered;
+  saveCustomElements(CUSTOM_ELEMENTS);
+}
+
+/**
+ * Puts a reel's tiles into the given order, in the dom and in the saved
+ * entry: what undo/redo replays for a reorder drag (see startReelTileDrag()).
+ * @param panel the .reel element
+ * @param ids tile ids in the wanted order
+ */
+function applyReelOrder(panel, ids) {
+  var track = panel.querySelector(".reel-track");
+  if (!track) return;
+  ids.forEach(function (id) {
+    var tile = track.querySelector('.reel-tile[data-resize-id="' + id + '"]');
+    if (tile) track.appendChild(tile);
+  });
+  saveReelOrder(panel, reelTileOrder(panel));
 }
 
 /**
@@ -7901,6 +8397,18 @@ function applyElementAnchors() {
     if (timer) clearTimeout(timer);
     timer = setTimeout(applyElementAnchors, 150);
   });
+  /* the first pass runs the instant the content lands, which is well before
+     the page above has finished settling: the landing page's own photos and
+     videos are still unsized, and the webfonts haven't swapped in. Anything
+     anchored below all that gets measured against a layout that isn't final
+     and then stays there, since nothing re-measured until the window was
+     resized - which is how the "What You'll Learn" reel ended up sitting 64px
+     below its own heading's reserved slot, overhanging the video row under
+     it. Both of these are cheap and idempotent (applyElementAnchors() just
+     re-reads each anchor's live rect), so they simply run again once the
+     layout is real. */
+  window.addEventListener("load", applyElementAnchors);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(applyElementAnchors);
 })();
 
 /**
@@ -10684,14 +11192,16 @@ function wireResizable() {
        itself contentEditable, so dragging across the text to select a few
        words would otherwise drag the whole element instead. */
     if (el.isContentEditable || (e.target && e.target.isContentEditable)) return;
-    /* a reel tile is selectable (so its style popover is reachable) but
-       can't move, resize, delete, or be shift-selected into a group -
-       any of those would detachFromFlow() it out of the flex track it
-       lives in (see buildReelElement()) - so it's selected and left at
-       that, skipping the shift-click/drag-start logic below entirely */
-    if (el.hasAttribute("data-reel-tile")) {
+    /* a reel tile is grabbed by its background and carried to a new place in
+       the strip (see startReelTileDrag()), rather than dragged to a free
+       position of its own the way everything below is - it lives in the
+       reel's flex track, and detaching it out of that track is exactly what
+       must never happen to it. Group-selection is skipped for the same
+       reason: a rigid group move would drag it out of the reel. */
+    if (isReelTileEl(el)) {
       RING_EL = el;
       positionRing();
+      startReelTileDrag(e, el);
       return;
     }
     /* shift-click toggles group-selection instead of starting a drag (see
@@ -12088,6 +12598,23 @@ function applyHistoryAction(action, side) {
   }
   if (action.type === "fixed") {
     toggleFixed(action.id);
+    return;
+  }
+  /* the three reel-wide edits (see startReelTileDrag()/startReelTileResize()/
+     buildStyleMenu()'s spacing rows): all keyed by the PANEL's id, since
+     what they change belongs to the reel as a whole even when the drag that
+     made the change started on one tile */
+  if (action.type === "reelOrder" || action.type === "reelTileSize" || action.type === "reelSpacing") {
+    var reelEl = elByAnyId(action.id);
+    if (!reelEl) return;
+    if (action.type === "reelOrder") applyReelOrder(reelEl, val);
+    else if (action.type === "reelTileSize") setReelTileSize(reelEl, val.w, val.h);
+    else setReelSpacing(reelEl, action.key, val);
+    if (STYLE_MENU_ID && STYLE_MENU && STYLE_MENU.classList.contains("show") &&
+        reelPanelOf(styleMenuElById(STYLE_MENU_ID)) === reelEl) {
+      primeStyleMenuReelRows(reelEl);
+    }
+    positionRing();
     return;
   }
   if (action.type === "locked") {

@@ -1468,6 +1468,7 @@ function openPreview() {
 var EDITOR_TAB_PAGES = {
   landing: "index.html?preview=1&edit=1",
   dashboard: "dashboard.html?preview=1&edit=1",
+  login: "login.html?preview=1&edit=1",
   gallery: "gallery.html?preview=1&edit=1"
 };
 var editorSubTab = "landing";
@@ -1475,7 +1476,7 @@ var editorSubTab = "landing";
 /**
  * Points the Visual editor's iframe at the given sub-tab's page and marks
  * it active.
- * @param name "landing", "dashboard", or "gallery"
+ * @param name "landing", "dashboard", "login", or "gallery"
  */
 function showEditorSubTab(name) {
   if (!EDITOR_TAB_PAGES[name]) name = "landing";

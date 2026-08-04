@@ -164,109 +164,17 @@ var UNLOCK_SVG =
   '<rect x="5" y="11" width="14" height="9" rx="2"/>' +
   '<path d="M8 11V8a4 4 0 0 1 7.5-2"/><path d="M12 14.5v2"/></svg>';
 
-/**
- * Checks whether this page was opened from the ta portal's preview page
- * (see js/preview.js, js/ta.js) rather than by a real student.
- * @return true if ?preview=1 is set
- */
-function isPreviewMode() {
-  return /[?&]preview=1(&|$)/.test(window.location.search);
-}
-
-/* windows-1252's 0x80-0x9f block, the only range where it disagrees with
-   latin-1 (euro sign, smart quotes, en/em dash, etc). used by
-   repairMojibake() to reverse text that got typed as utf-8 then saved
-   somewhere that read those bytes back as cp1252. */
-var CP1252_C1 = [
-  0x20AC, 0x81, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
-  0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x8D, 0x017D, 0x8F,
-  0x90, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
-  0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x9D, 0x017E, 0x0178
-];
-
-/**
- * Reverses "typed/pasted as utf-8, misread as windows-1252" mojibake (eg.
- * an en dash saved somewhere that reads bytes back as cp1252), without
- * touching genuinely accented text: only fires if every character maps to
- * a single cp1252 byte AND those bytes form valid utf-8, which plain
- * latin-1 text almost never does by chance. Loops so text corrupted more
- * than once unwraps fully in one call, capped so a weird string can't loop
- * forever.
- * @param str the string to check/repair
- * @return the repaired string, or the original untouched if it wasn't mojibake
- */
-function repairMojibake(str) {
-  if (typeof str !== "string" || !str.length) return str;
-  for (var pass = 0; pass < 4; pass++) {
-    var next = repairMojibakeOnce(str);
-    if (next === str) break;
-    str = next;
-  }
-  return str;
-}
-
-/**
- * Reverses a single level of the mojibake described in repairMojibake().
- * @param str the string to check/repair
- * @return the repaired string, or the original untouched if it isn't mojibake
- */
-function repairMojibakeOnce(str) {
-  var hasHighChar = false;
-  for (var j = 0; j < str.length; j++) {
-    if (str.charCodeAt(j) > 0x7f) { hasHighChar = true; break; }
-  }
-  if (!hasHighChar) return str;
-  var bytes = [];
-  for (var i = 0; i < str.length; i++) {
-    var code = str.charCodeAt(i);
-    if (code <= 0x7f || (code >= 0xa0 && code <= 0xff)) {
-      bytes.push(code);
-    } else {
-      var b = CP1252_C1.indexOf(code);
-      if (b === -1) return str; /* not representable as a single cp1252 byte, wasn't mojibake */
-      bytes.push(0x80 + b);
-    }
-  }
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(bytes));
-  } catch (e) {
-    return str; /* not valid utf-8 once reinterpreted, so it wasn't mojibake */
-  }
-}
-
-/**
- * Walks a content blob and runs repairMojibake() on every string in it, so
- * corrupted text anywhere in a loaded/restored blob fixes itself.
- * @param val any content value (object, array, string, or other)
- * @return the same shape with any mojibake strings repaired
- */
-function repairMojibakeDeep(val) {
-  if (typeof val === "string") return repairMojibake(val);
-  if (Array.isArray(val)) return val.map(repairMojibakeDeep);
-  if (val && typeof val === "object") {
-    var out = {};
-    for (var k in val) out[k] = repairMojibakeDeep(val[k]);
-    return out;
-  }
-  return val;
-}
-
-/**
- * Resolves to the site content: the ta portal's unsaved snapshot in
- * preview mode, otherwise the live content from /api/content. Either way
- * runs it through repairMojibakeDeep() first, so a stale corrupted preview
- * snapshot or old saved blob never reaches a real student's screen.
- * @return a promise resolving to the content object
- */
-function fetchContent() {
-  if (isPreviewMode()) {
-    try {
-      var raw = localStorage.getItem("preview_content");
-      if (raw) return Promise.resolve(repairMojibakeDeep(JSON.parse(raw)));
-    } catch (e) {}
-  }
-  return fetch("/api/content").then(function (res) { return res.json(); }).then(repairMojibakeDeep);
-}
+/* isPreviewMode()/repairMojibake*()/fetchContent() used to be declared here
+   too, character for character the same as js/main.js's. They weren't
+   harmless duplicates: this file is loaded AFTER main.js, so each of those
+   top-level declarations quietly REPLACED main.js's own, and every call in
+   both files - main.js's initDashboardPage() included - ran this copy. The
+   moment main.js's fetchContent() grew the seeded-element top-up
+   (mergeSeededElements(), the thing that keeps a ta's older draft from
+   previewing a page with its live areas missing and then applying that over
+   the real site), the dashboard silently didn't get it. Deleted outright
+   rather than kept in sync: main.js is already loaded on this page, so there
+   is exactly one copy now and no way for the two to drift again. */
 
 /**
  * Formats a day panel's date for its card ("Mon, Jan 5").
@@ -366,7 +274,8 @@ function buildDayLockedTileHtml(dayId, dayNum, style, titleHtml, badgeHtml) {
   if (style.rectRadius) rectStyle += "border-radius:" + style.rectRadius + "px;";
   var iconStyle = style.iconSize ? ("width:" + style.iconSize.w + "px;height:" + style.iconSize.h + "px;") : "";
   return (
-    '<div class="day-card soon" data-days-tile="1" data-days-id="' + escapeHtml(dayId) +
+    '<div class="day-card soon" data-days-tile="1" data-resize-id="days.tile"' +
+      ' data-days-id="' + escapeHtml(dayId) +
       '" data-days-locked="1" data-days-number="' + dayNum +
       '" data-days-var="Day' + dayNum + '">' +
       '<div class="day-tile-rect" data-resize-id="days.locked.rect" data-days-role="locked.rect" aria-hidden="true"' +
@@ -417,10 +326,11 @@ function buildDayOpenTileHtml(day, style, text, extrasStyle) {
   }
   if (style.rectRadius) rectStyle += "border-radius:" + style.rectRadius + "px;";
   var chips = (day.files || []).map(function (f, j) {
-    return buildExtrasTileHtml(f, extrasStyle, text, varBase + "Attachment" + (j + 1));
+    return buildExtrasTileHtml(f, extrasStyle, text, varBase + "Attachment" + (j + 1), "days.attach.tile");
   }).join("");
   return (
-    '<div class="day-card" data-days-tile="1" data-days-id="' + escapeHtml(day.id || "") +
+    '<div class="day-card" data-days-tile="1" data-resize-id="days.tile"' +
+      ' data-days-id="' + escapeHtml(day.id || "") +
       '" data-days-locked="0" data-days-number="' + day.day +
       '" data-days-var="' + escapeHtml(varBase) +
       '" data-days-title="' + escapeHtml(day.title || "") +
@@ -445,7 +355,19 @@ function buildDayOpenTileHtml(day, style, text, extrasStyle) {
         'data-default-html="' + escapeHtml(DEFAULT_DAYS_OPEN_BLURB_HTML) + '">' +
         (blurbHtml !== undefined ? blurbHtml : DEFAULT_DAYS_OPEN_BLURB_HTML) +
       '</p>' +
-      (chips ? '<div class="res-list extras-tile-list" style="margin-top:14px">' + chips + '</div>' : "") +
+      /* the third tile flow container (see applyTileFlow() in js/main.js): a
+         real tracked element of its own, so a ta can move it around inside the
+         card, resize it, and lock or unlock either of its axes - all of which
+         mirror onto every day card at once through the shared id, "so all
+         tiles in the row become taller (mirror one another)". Undeletable
+         (data-days-fixed) for the same reason a tile is: it's where a day's
+         real attachments render, not decoration. Both axes are locked by
+         default, so one day with eight files can't stretch its card past every
+         other card in the row - it scrolls instead. */
+      (chips ? '<div class="tile-flow" style="margin-top:14px"' +
+        ' data-resize-id="days.open.attachments" data-days-role="open.attachments"' +
+        ' data-days-fixed="1" data-flow-area="1" data-tile-id="days.attach.tile">' +
+        chips + '</div>' : "") +
     '</div>'
   );
 }
@@ -549,9 +471,10 @@ function renderDays() {
 window.renderDays = renderDays;
 
 /**
- * Builds one attachment tile's markup: a plain, untracked flex wrapper
- * (data-extras-tile, bound to this specific attachment via data-extras-id/
- * data-extras-filename) holding FOUR INDEPENDENT SIBLING elements - the
+ * Builds one attachment tile's markup: a wrapper (data-extras-tile, bound to
+ * this specific attachment via data-extras-id/data-extras-filename, and
+ * tracked under the shared tileId below so a ta can resize it - see the
+ * @param) holding FOUR INDEPENDENT SIBLING elements - the
  * colored rect, the file-type icon, the filename text, and the Download/
  * Open button - rather than nesting them inside the rect, so a ta deleting
  * the rect (js/main.js's deleteElement(), which explicitly allows it) never
@@ -592,9 +515,16 @@ window.renderDays = renderDays;
  *   "Day3Attachment2" - the filename chip renders as ${varBase + "Name"}
  *   while a ta is editing the field (see js/main.js's localChipVarToken()).
  *   These names are deliberately per-tile and never enter content.variables.
+ * @param tileId the shared data-resize-id for the tile BOX itself, which is
+ *   what a ta resizes to re-tile the container around it (see isTileBoxEl()/
+ *   applyTileFlow() in js/main.js). Deliberately NOT shared between the two
+ *   places this template renders, unlike every role inside it: the main
+ *   section's column is three times the width of a day card's attachment
+ *   sub-area, so one tile width across both would mean sizing either one
+ *   silently mis-sizes the other. Defaults to the main section's own id.
  * @return an HTML string for one tile
  */
-function buildExtrasTileHtml(f, style, text, varBase) {
+function buildExtrasTileHtml(f, style, text, varBase, tileId) {
   var filename = itemLabel(f) || "";
   var link = isLink(f);
   var defaultButtonText = link ? "Open" : "Download";
@@ -610,7 +540,9 @@ function buildExtrasTileHtml(f, style, text, varBase) {
   var btnSize = link ? style.buttonLinkSize : style.buttonSize;
   var btnStyle = btnSize ? ("width:" + btnSize.w + "px;height:" + btnSize.h + "px;") : "";
   return (
-    '<div class="res-row extras-tile" data-extras-tile="1" data-extras-id="' + escapeHtml((f && f.id) || "") +
+    '<div class="res-row extras-tile" data-extras-tile="1" data-resize-id="' +
+      escapeHtml(tileId || "extras.tile.box") +
+      '" data-extras-id="' + escapeHtml((f && f.id) || "") +
       '" data-extras-filename="' + escapeHtml(filename) +
       '" data-extras-kind="' + itemIconKey(f) +
       '" data-extras-var="' + escapeHtml(varBase || "") + '">' +
@@ -672,16 +604,18 @@ function renderExtras() {
   var style = extrasTileStyleFrom(data);
   var emptyHtml = text["dash.extras.empty"] !== undefined ? text["dash.extras.empty"] : DEFAULT_EXTRAS_EMPTY_HTML;
 
+  /* the tiles are DIRECT children of the area, not wrapped in a list of their
+     own: the area itself is the tile flow container (see applyTileFlow() in
+     js/main.js), and an intermediate wrapper would be the thing the tiles
+     actually tiled inside, leaving the container a ta resizes with nothing to
+     lay out. The empty-state text isn't a tile, so it spans the whole row. */
   var html =
-    '<p class="muted extras-empty' + (EXTRAS.length ? " has-attachments" : "") + '" data-edit-id="dash.extras.empty" ' +
+    '<p class="muted extras-empty tile-flow-full' + (EXTRAS.length ? " has-attachments" : "") +
+      '" data-edit-id="dash.extras.empty" ' +
       'data-default-html="' + escapeHtml(DEFAULT_EXTRAS_EMPTY_HTML) + '">' + emptyHtml + '</p>';
-  if (EXTRAS.length) {
-    html += '<div class="res-list extras-tile-list">' +
-      EXTRAS.map(function (f, i) {
-        return buildExtrasTileHtml(f, style, text, "Attachment" + (i + 1));
-      }).join("") +
-      '</div>';
-  }
+  html += EXTRAS.map(function (f, i) {
+    return buildExtrasTileHtml(f, style, text, "Attachment" + (i + 1), "extras.tile.box");
+  }).join("");
   host.innerHTML = html;
 
   (data.hidden || []).forEach(function (id) {

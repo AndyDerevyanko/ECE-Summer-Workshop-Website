@@ -383,6 +383,15 @@ DEFAULT_CONTENT = {
     "dark_border": {},
     "dark_hover_color": {},
     "dark_active_color": {},
+    # per-axis sizing behaviour for the student dashboard's three tile
+    # containers (the Extra attachments area, the days area, and the
+    # attachments sub-area inside each open day tile), keyed by
+    # data-resize-id, {id: {x, y}} with each axis "lock" or "expand".
+    # "lock" keeps the container's own size and makes the tiles fit inside
+    # it (scrolling if they can't); "expand" sizes the container to whatever
+    # its tiles come to. empty means "use each container's own default",
+    # see AREA_FLOW_DEFAULTS/applyTileFlow() in js/main.js.
+    "area_flow": {},
     # "progress" custom-element kind's two colors (the fill and the track/
     # background behind it), keyed by data-resize-id, a css color string.
     # same paired light/dark-override shape as colors/dark_colors above -
@@ -464,6 +473,53 @@ _DASH_DAYS_AREA_ENTRY = {
     "w": 1160, "h": 40,
 }
 DEFAULT_CONTENT["custom_elements"].append(_DASH_DAYS_AREA_ENTRY)
+
+# the login page's form, same treatment the dashboard's progress bar and tile
+# areas already got (_DASH_PROGRESS_ENTRY above): what used to be hardcoded
+# markup in templates/login.html (the two <input> fields, the submit button
+# and the error line) is now four real placed custom elements a ta can move,
+# resize, restyle, delete and re-add from the visual editor's Login page tab.
+# Each one anchors to its own reserved spacer inside the auth card
+# (#loginUserAnchor/#loginPassAnchor/#loginSubmitAnchor/#loginErrorAnchor),
+# same mechanism as every other migrated element, so the card still lays
+# itself out in normal flow and the page ships working out of the box for a
+# real visitor instead of loading as an empty box a ta has to build up.
+#
+# These four kinds only exist here: the right-click menu only offers them on
+# the login page (see renderCtxMenuRoot() in js/main.js), because a username
+# box or a submit button has nothing to do anywhere else. js/login.js binds
+# to them by their data-login-* markers rather than by id, so a ta's own
+# added/deleted/re-added copies keep working with no bookkeeping.
+_LOGIN_USER_ENTRY = {
+    "id": "seed.login.field.username", "kind": "loginField", "field": "username",
+    "page": "login",
+    "anchor": "#loginUserAnchor", "left": 0, "top": 0,
+    "w": 300, "h": 74,
+}
+_LOGIN_PASS_ENTRY = {
+    "id": "seed.login.field.password", "kind": "loginField", "field": "password",
+    "page": "login",
+    "anchor": "#loginPassAnchor", "left": 0, "top": 0,
+    "w": 300, "h": 74,
+}
+_LOGIN_SUBMIT_ENTRY = {
+    "id": "seed.login.submit", "kind": "loginButton",
+    "page": "login",
+    "anchor": "#loginSubmitAnchor", "left": 0, "top": 0,
+    "w": 300, "h": 42,
+}
+_LOGIN_ERROR_ENTRY = {
+    "id": "seed.login.error", "kind": "loginError",
+    "page": "login",
+    "anchor": "#loginErrorAnchor", "left": 0, "top": 0,
+    "w": 300, "h": 40,
+}
+_LOGIN_ENTRIES = [_LOGIN_USER_ENTRY, _LOGIN_PASS_ENTRY, _LOGIN_SUBMIT_ENTRY, _LOGIN_ERROR_ENTRY]
+DEFAULT_CONTENT["custom_elements"].extend(_LOGIN_ENTRIES)
+# matches the old hardcoded .field input / .btn-primary rules so the migration
+# is a visual no-op by default (see css/style.css's .login-field-box)
+DEFAULT_CONTENT["radius"]["seed.login.field.username.box"] = 10
+DEFAULT_CONTENT["radius"]["seed.login.field.password.box"] = 10
 
 # starter "objects" library entries (see the objects table below): reusable
 # element bundles a ta can drop onto the page from the visual editor's
@@ -832,6 +888,7 @@ def init_db():
     _migrate_dashboard_progress(conn)
     _migrate_dashboard_extras_area(conn)
     _migrate_dashboard_days_area(conn)
+    _migrate_login_page(conn)
     _migrate_custom_elements_page_scope(conn)
     _migrate_progress_bar_object(conn)
     conn.close()
@@ -1259,6 +1316,56 @@ def _migrate_dashboard_days_area(conn):
             return data, False
         data.setdefault("custom_elements", []).append(json.loads(json.dumps(_DASH_DAYS_AREA_ENTRY)))
         return data, True
+
+    row = conn.execute("SELECT data FROM content WHERE id = 1").fetchone()
+    if row:
+        data, changed = patch(json.loads(row["data"]))
+        if changed:
+            conn.execute("UPDATE content SET data = ? WHERE id = 1", (json.dumps(data),))
+
+    for prow in conn.execute("SELECT id, data FROM profiles").fetchall():
+        data, changed = patch(json.loads(prow["data"]))
+        if changed:
+            conn.execute("UPDATE profiles SET data = ? WHERE id = ?", (json.dumps(data), prow["id"]))
+
+    conn.commit()
+
+
+def _migrate_login_page(conn):
+    """one-time patch (same meta-flag trick as _migrate_dashboard_days_area())
+    adding the four migrated login-page elements (_LOGIN_ENTRIES) and their
+    default corner rounding to every already-existing content blob/profile
+    that predates them, same reasoning: the static form markup they replace is
+    gone from templates/login.html, so an old saved blob that only has the
+    anchor spacers would render a login page with no fields, no button and no
+    error line at all.
+
+    Entries already present (by id) are skipped one by one rather than the
+    whole patch being skipped on the first hit, so a blob that somehow has
+    only some of them still ends up complete.
+    @param conn an open db connection
+    """
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO meta (key, value) VALUES ('login_page_migrated', '1')"
+    )
+    conn.commit()
+    if cur.rowcount == 0:
+        return
+
+    def patch(data):
+        ids = [c.get("id") for c in data.get("custom_elements", [])]
+        changed = False
+        for entry in _LOGIN_ENTRIES:
+            if entry["id"] in ids:
+                continue
+            data.setdefault("custom_elements", []).append(json.loads(json.dumps(entry)))
+            changed = True
+        radius = data.setdefault("radius", {})
+        for box_id in ("seed.login.field.username.box", "seed.login.field.password.box"):
+            if box_id not in radius:
+                radius[box_id] = 10
+                changed = True
+        return data, changed
 
     row = conn.execute("SELECT data FROM content WHERE id = 1").fetchone()
     if row:

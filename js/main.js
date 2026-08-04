@@ -263,18 +263,86 @@ function repairMojibakeDeep(val) {
 }
 
 /**
+ * Backfills any SEEDED custom element (app/db.py's _LOGIN_ENTRIES,
+ * _DASH_*_ENTRY, _LEARN_REEL_ENTRY - every id the server owns rather than a
+ * ta, marked by its "seed."/"learn." prefix) that the live content has but a
+ * preview snapshot doesn't.
+ *
+ * A ta's snapshot is a full copy of content taken whenever they opened the
+ * portal, and preview mode renders it INSTEAD of the live blob, not merged
+ * over it. So the moment a new seeded element ships, every ta still carrying
+ * an older draft previews a page missing it - which for the login page means
+ * an empty card with no form at all, and, if they then hit Apply, that stale
+ * list being written straight back over the live content, deleting the real
+ * site's login form. This is the one thing in a snapshot that isn't the ta's
+ * to be stale about.
+ *
+ * Only ever ADDS ids that are absent entirely, which is safe against a ta who
+ * deliberately deleted one: deleting in the editor keeps the descriptor and
+ * records the id in content.hidden (see setElementHidden()), so a missing
+ * descriptor can only mean "this draft predates that element", never "I got
+ * rid of it".
+ * @param snapshot the parsed preview snapshot (mutated in place)
+ * @param live the live content from /api/content
+ * @return snapshot
+ */
+function mergeSeededElements(snapshot, live) {
+  var have = {};
+  var added = false;
+  (snapshot.custom_elements || []).forEach(function (c) { have[c.id] = true; });
+  (live.custom_elements || []).forEach(function (c) {
+    if (have[c.id] || !/^(seed|learn)\./.test(String(c.id))) return;
+    (snapshot.custom_elements = snapshot.custom_elements || []).push(c);
+    added = true;
+    /* the styling those elements ship with is seeded alongside them (eg the
+       login boxes' corner rounding, the progress bar's fill/track colors), so
+       it has to come across too or a restored element renders unstyled */
+    ["radius", "progress_fill", "progress_track", "text", "font_sizes", "text_styles", "colors"].forEach(function (map) {
+      if (!live[map]) return;
+      Object.keys(live[map]).forEach(function (id) {
+        if (id.indexOf(c.id) !== 0) return;
+        snapshot[map] = snapshot[map] || {};
+        if (snapshot[map][id] === undefined) snapshot[map][id] = live[map][id];
+      });
+    });
+  });
+  /* written straight back, not just handed to the renderer: js/ta.js's
+     Apply/Save reads this same draft back out of localStorage
+     (pullStateFromEditor()) and posts it wholesale, so a heal that only
+     existed in memory would render correctly and then be undone the moment
+     the ta applied - taking the live site's own copy down with it */
+  if (added) {
+    try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
+  }
+  return snapshot;
+}
+
+/**
  * Resolves to the site content: the ta portal's unsaved snapshot in
  * preview mode, otherwise the live content from /api/content. Either way
  * runs it through repairMojibakeDeep() first, so a stale corrupted preview
  * snapshot or old saved blob never reaches a real visitor's screen.
+ *
+ * In preview mode the live blob is fetched as well, purely to top the
+ * snapshot back up with any seeded element it's missing - see
+ * mergeSeededElements() for why a draft is allowed to be stale about
+ * everything except those. If that fetch fails the snapshot is used as-is,
+ * exactly as it was before.
  * @return a promise resolving to the content object
  */
 function fetchContent() {
   if (isPreviewMode()) {
+    var snapshot = null;
     try {
       var raw = localStorage.getItem(snapshotKey());
-      if (raw) return Promise.resolve(repairMojibakeDeep(JSON.parse(raw)));
+      if (raw) snapshot = repairMojibakeDeep(JSON.parse(raw));
     } catch (e) {}
+    if (snapshot) {
+      return fetch("/api/content")
+        .then(function (res) { return res.json(); })
+        .then(function (live) { return mergeSeededElements(snapshot, repairMojibakeDeep(live)); })
+        .catch(function () { return snapshot; });
+    }
   }
   return fetch("/api/content").then(function (res) { return res.json(); }).then(repairMojibakeDeep);
 }
@@ -528,8 +596,9 @@ function isEditMode() {
 /**
  * Identifies which real page this document is, regardless of the shared
  * ?preview=1/?edit=1 query params: "dashboard" if the student dashboard's
- * own progress-bar anchor is present, "gallery" if the gallery's own
- * year-picker marker is present, else "index" (the landing page - also the
+ * own progress-bar anchor is present, "login" if the login page's own auth
+ * card is, "gallery" if the gallery's own year-picker marker is present,
+ * else "index" (the landing page - also the
  * default for the reusable-object mini editor's blank canvas, since a saved
  * object has no page of its own until it's actually dropped somewhere, see
  * placeObject()).
@@ -539,10 +608,15 @@ function isEditMode() {
  * the ones that belong here, instead of every page rendering every other
  * page's placed elements too (a landing-page-only element, eg the reel,
  * showing up on the dashboard at its raw landing-page pixel offset).
- * @return "index", "dashboard", or "gallery"
+ * @return "index", "dashboard", "login", or "gallery"
  */
 function currentPageKey() {
   if (document.getElementById("dashProgressAnchor")) return "dashboard";
+  /* the auth card itself, not one of the four form spacers: those are what
+     the login page's own elements anchor TO, and a page identity that could
+     be knocked out by a ta deleting an element would take the whole page's
+     custom_elements filter down with it (see renderCustomElements()) */
+  if (document.getElementById("loginCard")) return "login";
   /* gallery.html's current year-picker marker; the gallery visual-editor
      rewrite will replace this with its own anchor id - update this check
      alongside that, see the gallery-parity plan */
@@ -608,34 +682,385 @@ var RESIZABLE_SEL = "[data-edit-id], [data-resize-id]";
  * mirrorTiledRoleGeometry(), and on reload by applyPositionOverrides()
  * matching every element carrying the id).
  *
- * The tiles THEMSELVES still never move - not because of this check, but
- * because a tile ([data-extras-tile]/[data-days-tile]) carries no
- * data-edit-id/data-resize-id at all, so it's not a tracked element and
- * never gets a ring, handles or a drag in the first place. Only the
- * transparent live-area container around them is movable, and everything
- * inside rides along with it (see ancestorPos()).
+ * The tiles THEMSELVES are the other entry, and they DO need the check now:
+ * a tile carries a real data-resize-id these days (so a ta can resize one and
+ * re-tile the container around it, see isTileBoxEl()), which used to be the
+ * only reason it couldn't be dragged. Its position isn't its own to set - it
+ * is whatever its container's packing order puts it at - so moving stays off
+ * while resizing is on. The transparent flow container around the tiles is
+ * what moves, and everything inside rides along with it (see ancestorPos()).
  * @param el the element
  * @return true if el must never carry a position override
  */
 function isMoveLockedTileRole(el) {
-  return el.hasAttribute("data-reel-tile");
+  return el.hasAttribute("data-reel-tile") || isTileBoxEl(el);
 }
 
 /**
- * True for one of the student dashboard's two LIVE AREA containers - the
- * "Extra attachments" tile list and "The days" tile grid (buildCustomElement()'s
+ * True for one of the student dashboard's LIVE AREA containers - the "Extra
+ * attachments" tile list and "The days" tile grid (buildCustomElement()'s
  * "extrasArea"/"daysArea" kinds, filled in by js/dashboard.js's renderExtras()/
- * renderDays()). Unlike every other tracked element, a live area isn't a piece
- * of content in its own right: it's the transparent box the tiles lie in, so
- * it's always background-less in the style popover (see toggleStyleMenu()),
- * always auto-height (see buildCustomElement()/applySizeOverrides()), and
- * everything inside it belongs TO it rather than merely sitting on top of it
- * (see ancestorPos()/freezeDescendants()).
+ * renderDays()), plus the attachments sub-area inside each open day tile,
+ * which is a flow container in every way that matters here (see
+ * isFlowAreaEl()). Unlike every other tracked element, a live area isn't a
+ * piece of content in its own right: it's the transparent box the tiles lie
+ * in, so it's always background-less in the style popover (see
+ * toggleStyleMenu()), sized on each axis by its own lock rather than by a
+ * stored box (see areaFlowFor()/applySizeOverrides()), and everything inside
+ * it belongs TO it rather than merely sitting on top of it (see
+ * ancestorPos()/freezeDescendants()).
  * @param el the element
- * @return true if el is an extrasArea/daysArea container
+ * @return true if el is one of the tile containers
  */
 function isLiveAreaEl(el) {
-  return !!(el.hasAttribute && (el.hasAttribute("data-extras-area") || el.hasAttribute("data-days-area")));
+  return !!(el.hasAttribute && (el.hasAttribute("data-extras-area") ||
+    el.hasAttribute("data-days-area") || el.hasAttribute("data-flow-area")));
+}
+
+/**
+ * True for one of the three TILE FLOW CONTAINERS - the "Extra attachments"
+ * area, "The days" area, and the attachments sub-area embedded in each open
+ * day tile (js/dashboard.js's buildDayOpenTileHtml()). All three carry
+ * data-flow-area plus a data-tile-id naming the shared id of the tiles they
+ * lay out, and all three are laid out by applyTileFlow() through the one
+ * .tile-flow rule in css/style.css.
+ *
+ * A superset of isLiveAreaEl()'s original two: the day-embedded sub-area is a
+ * plain role element inside a tile rather than a placed custom element, but
+ * it wants every one of the same exceptions (contents belong TO it, no
+ * generic Color row, no descendant pinning on resize), so isLiveAreaEl() now
+ * matches it too.
+ * @param el the element
+ * @return true if el is a tile flow container
+ */
+function isFlowAreaEl(el) {
+  return !!(el && el.hasAttribute && el.hasAttribute("data-flow-area"));
+}
+
+/**
+ * True for one TILE inside a flow container: a day card, or an attachment
+ * tile (in the Extra attachments area or in a day's own sub-area). Resizable
+ * - that's how a ta decides how many fit per row, see startResizeDrag() - but
+ * never movable (isMoveLockedTileRole()) and never deletable (deleteElement()),
+ * since a tile isn't decoration a ta placed, it's one rendering of a piece of
+ * real content.
+ * @param el the element
+ * @return true if el is a tile box
+ */
+function isTileBoxEl(el) {
+  return !!(el && el.hasAttribute &&
+    (el.hasAttribute("data-days-tile") || el.hasAttribute("data-extras-tile")));
+}
+
+/* how each flow container behaves on each axis when a ta hasn't said
+   otherwise, per the spec's "default behaviour right now" list: the two
+   top-level areas grow downwards to fit however many tiles exist, while a day
+   tile's attachment sub-area is pinned on both axes (a day card can't be
+   allowed to grow without limit just because one day has eight files, so that
+   one scrolls instead). "lock" = keep the container's size and scroll/squeeze
+   the tiles to fit; "expand" = size the container to its content. */
+var AREA_FLOW_DEFAULTS = {
+  "seed.dashboard.extras.area": { x: "lock", y: "expand" },
+  "seed.dashboard.days.area": { x: "lock", y: "expand" },
+  "days.open.attachments": { x: "lock", y: "lock" }
+};
+/* content.area_flow, {id: {x, y, dir, wrap}} - only what a ta has actually
+   changed */
+var AREA_FLOW = {};
+
+/**
+ * The layout behaviour in force for one flow container, its saved override
+ * over its default (see AREA_FLOW_DEFAULTS). A container with no default
+ * listed falls back to the shape the two top-level areas have always had.
+ *
+ * "dir"/"wrap" are the tile STACKING controls, the flexbox model a ta already
+ * has an intuition for: "dir" picks the axis tiles run along and which way
+ * along it ("row" = left to right, "column" = top to bottom, plus their
+ * -reverse pair), and "wrap" picks which side the overflow goes to when a
+ * line fills up (for a row: below by default, above when reversed; for a
+ * column: to the right by default, to the left when reversed). Every
+ * container defaults to row/normal, which is the grid layout that shipped
+ * before this existed - see applyTileFlow()/.tile-flow in css/style.css for
+ * why only that one combination stays on grid.
+ * @param id the container's data-resize-id
+ * @return {x, y} (each "lock" or "expand"), dir, wrap
+ */
+function areaFlowFor(id) {
+  var saved = AREA_FLOW[id] || {};
+  var def = AREA_FLOW_DEFAULTS[id] || { x: "lock", y: "expand" };
+  return {
+    x: saved.x || def.x,
+    y: saved.y || def.y,
+    dir: saved.dir || def.dir || "row",
+    wrap: saved.wrap || def.wrap || "normal"
+  };
+}
+
+/**
+ * True if this container's stacking is anything other than the shipped
+ * default (tiles left-to-right, overflowing downwards). Only that one
+ * combination is laid out by css grid - see the .tile-flex block in
+ * css/style.css for why the other seven switch to flexbox instead.
+ * @param flow an areaFlowFor() result
+ * @return true if the flex path applies
+ */
+function areaFlowIsFlex(flow) {
+  return flow.dir !== "row" || flow.wrap !== "normal";
+}
+
+/**
+ * The flow container that lays out one tile: its own parent, which is always
+ * the container itself (a tile is a direct grid item, never wrapped - see
+ * renderExtras()/renderDays()/buildDayOpenTileHtml() in js/dashboard.js).
+ * @param tile a tile box
+ * @return the container, or null
+ */
+function flowAreaOf(tile) {
+  var p = tile && tile.parentElement;
+  return p && isFlowAreaEl(p) ? p : null;
+}
+
+/**
+ * Measures how narrow an element can get before its own contents start
+ * bleeding out of it: css's `min-content` width, which for an attachment tile
+ * is icon + gaps + button + padding (its filename column is minmax(0, 1fr),
+ * the one part allowed to shrink to nothing) and for a day card is whatever
+ * its widest unshrinkable child needs.
+ *
+ * Measured by actually laying el out at min-content and reading the result
+ * back, rather than adding up its parts here: the parts differ per template
+ * (and change whenever either template does), while `min-content` is the
+ * browser's own answer to the exact question being asked. The write/read/
+ * restore is a synchronous forced reflow, so callers do this ONCE at the top
+ * of a resize drag, never per mousemove.
+ * @param el the element to measure
+ * @return its min-content width in css px
+ */
+function minContentWidthOf(el) {
+  var w = el.style.width, mw = el.style.minWidth, xw = el.style.maxWidth;
+  el.style.width = "min-content";
+  el.style.minWidth = "min-content";
+  el.style.maxWidth = "none";
+  var out = el.getBoundingClientRect().width;
+  el.style.width = w;
+  el.style.minWidth = mw;
+  el.style.maxWidth = xw;
+  return out;
+}
+
+/**
+ * The narrowest a flow container can be dragged: wide enough for its widest
+ * tile's own min-content width (see minContentWidthOf()) plus whatever the
+ * container itself spends on padding/border. This is the spec's hard stop -
+ * "if that is impossible because the elements within them would BLEED over
+ * the edges of the tile, then the resizing is STOPPED at that point, where
+ * the thing physically refuses to move its edges beyond that". Everything
+ * looser than that (a tile squeezing rather than bleeding) is already handled
+ * by the grid itself, see the .tile-flow rule in css/style.css.
+ *
+ * An empty container has no tiles to protect, so it gets a small floor
+ * instead of collapsing to nothing and becoming ungrabbable.
+ * @param area a flow container
+ * @return its minimum width in css px
+ */
+function flowAreaMinWidth(area) {
+  var min = 0;
+  area.querySelectorAll(":scope > [data-days-tile], :scope > [data-extras-tile]").forEach(function (t) {
+    min = Math.max(min, minContentWidthOf(t));
+  });
+  if (!min) return 40;
+  var cs = getComputedStyle(area);
+  return Math.ceil(min +
+    (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0) +
+    (parseFloat(cs.borderLeftWidth) || 0) + (parseFloat(cs.borderRightWidth) || 0));
+}
+
+/**
+ * The widest/tallest one tile may be dragged to: its container's own inner
+ * box, per "resizing the tiles will CAP once one tile reaches the WIDTH or
+ * HEIGHT of the container". A container with an expanding axis has no cap on
+ * that axis - it grows to fit whatever the tile becomes - so Infinity stands
+ * in for "no limit" there.
+ * @param tile a tile box
+ * @return {w, h} maximums in css px
+ */
+function tileSizeCap(tile) {
+  var area = flowAreaOf(tile);
+  if (!area) return { w: Infinity, h: Infinity };
+  var flow = areaFlowFor(elId(area));
+  var cs = getComputedStyle(area);
+  var r = area.getBoundingClientRect();
+  var w = r.width - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0);
+  var h = r.height - (parseFloat(cs.paddingTop) || 0) - (parseFloat(cs.paddingBottom) || 0);
+  return {
+    w: flow.x === "expand" ? Infinity : Math.max(16, w),
+    h: flow.y === "expand" ? Infinity : Math.max(12, h)
+  };
+}
+
+/**
+ * Applies one tile's size by re-tiling its CONTAINER rather than by writing a
+ * box onto the tile: a tile is a grid item, so what "this tile is 200px wide"
+ * actually means is "this container's tracks are 200px wide", which is also
+ * precisely why one tile's resize re-tiles every sibling at once - the shared-
+ * template mirroring rule, for free, with no second code path.
+ *
+ * The size is still recorded on the tile's own dataset under the id every
+ * tile of that kind shares, so commitSize()/getSize()/applySizeOverrides()
+ * keep working on it exactly as they do for any other tracked element, and it
+ * reloads through the same content.sizes map.
+ * @param tile the tile being resized
+ * @param w new tile width in css px
+ * @param h new tile height in css px
+ */
+function setTileTrackSize(tile, w, h) {
+  tile.dataset.ovW = w;
+  tile.dataset.ovH = h;
+  var id = elId(tile);
+  if (id) EDIT_SIZES[id] = { w: w, h: h };
+  applyTileFlow();
+}
+
+/**
+ * Lays out all three tile flow containers from the current saved state: each
+ * one's axis locks (see areaFlowFor()) and the tile size its tiles share (see
+ * setTileTrackSize()). Idempotent and cheap enough to re-run after any edit
+ * that could change either.
+ *
+ * Containers are handled in ID GROUPS, not one at a time, because a day tile's
+ * attachment sub-area renders once per day - same id, many elements - and the
+ * spec wants them to agree: "the parent container size is mirrored across all
+ * in that row, so all tiles in the row become taller (mirror one another)".
+ * With the y axis locked and no explicit height saved, that shared height is
+ * the TALLEST of their natural heights, so locking by default clips nobody and
+ * every day card in a row still lines up.
+ */
+function applyTileFlow() {
+  var byId = {};
+  document.querySelectorAll("[data-flow-area]").forEach(function (area) {
+    var id = elId(area);
+    if (!id) return;
+    (byId[id] = byId[id] || []).push(area);
+  });
+  Object.keys(byId).forEach(function (id) {
+    var areas = byId[id];
+    var flow = areaFlowFor(id);
+    var tileSize = EDIT_SIZES[areas[0].getAttribute("data-tile-id")];
+    var tw = tileSize && tileSize.w ? tileSize.w + "px" : null;
+    var th = tileSize && tileSize.h ? tileSize.h + "px" : null;
+    /* the container's own untouched-tile default: "100%" (one per row) for
+       both attachment lists, a real px track for the days grid, see
+       buildCustomElementNode()'s "daysArea" kind */
+    var defW = areas[0].getAttribute("data-tile-w") || "100%";
+    areas.forEach(function (area) {
+      area.classList.add("tile-flow");
+      area.classList.toggle("flow-x-lock", flow.x === "lock");
+      area.classList.toggle("flow-x-expand", flow.x === "expand");
+      area.classList.toggle("flow-y-lock", flow.y === "lock");
+      /* stacking (see areaFlowFor()): the shipped default stays on grid, the
+         other seven combinations are flexbox, which is the only one of the
+         two that can run tiles up/leftwards or wrap to the opposite side */
+      area.classList.toggle("tile-flex", areaFlowIsFlex(flow));
+      area.classList.toggle("flow-dir-row-reverse", flow.dir === "row-reverse");
+      area.classList.toggle("flow-dir-column", flow.dir === "column");
+      area.classList.toggle("flow-dir-column-reverse", flow.dir === "column-reverse");
+      area.classList.toggle("flow-wrap-reverse", flow.wrap === "reverse");
+      area.style.setProperty("--tile-w", tw || defW);
+      area.style.setProperty("--tile-wa", tw || (defW === "100%" ? "max-content" : defW));
+      area.style.setProperty("--tile-h", th || "auto");
+      /* an expanding axis is sized by its content, so any px the container is
+         still carrying from a previous lock has to come back off */
+      if (flow.x === "expand") area.style.width = "";
+      if (flow.y === "expand") area.style.height = "";
+    });
+    if (flow.y !== "lock") return;
+    var saved = EDIT_SIZES[id];
+    var h = saved && saved.h;
+    if (!h) {
+      /* no explicit height: measure every member of the group at its own
+         natural height and pin them all to the tallest, so mirroring them
+         together can only ever make a card taller, never clip one */
+      areas.forEach(function (area) { area.style.height = ""; });
+      areas.forEach(function (area) { h = Math.max(h || 0, area.scrollHeight); });
+    }
+    if (h) areas.forEach(function (area) { area.style.height = h + "px"; });
+  });
+}
+window.applyTileFlow = applyTileFlow;
+
+/**
+ * Reads content.area_flow into AREA_FLOW, so areaFlowFor()/applyTileFlow()
+ * see whichever axes a ta has locked or unlocked. Runs on every load, live
+ * site included: a locked axis is a real layout decision students see, not an
+ * editor affordance.
+ * @param flow content.area_flow, {id: {x, y}}
+ */
+function applyAreaFlowOverrides(flow) {
+  AREA_FLOW = flow && typeof flow === "object" ? flow : {};
+}
+
+/**
+ * Writes one field of one flow container's layout state and persists it (see
+ * saveAreaFlow()). Always saves the COMPLETE resolved state, not just the
+ * field that changed, so a container whose defaults later move doesn't
+ * silently re-lay-out under a ta who had already arranged it.
+ * @param id the container's data-resize-id
+ * @param key "x", "y", "dir" or "wrap"
+ * @param value the new value for that key
+ */
+function setAreaFlowProp(id, key, value) {
+  var cur = areaFlowFor(id);
+  var next = { x: cur.x, y: cur.y, dir: cur.dir, wrap: cur.wrap };
+  next[key] = value;
+  AREA_FLOW[id] = next;
+  saveAreaFlow(id, next);
+  applyTileFlow();
+  positionRing();
+}
+
+/**
+ * Flips one axis of one flow container between locked and expanding.
+ * @param id the container's data-resize-id
+ * @param axis "x" or "y"
+ */
+function toggleAreaFlowAxis(id, axis) {
+  setAreaFlowProp(id, axis, areaFlowFor(id)[axis] === "lock" ? "expand" : "lock");
+}
+
+/**
+ * Flips which axis one flow container's tiles run along - left-to-right
+ * (row) or top-to-bottom (column) - keeping whichever direction along that
+ * axis is currently in force. See areaFlowFor() for the whole model.
+ * @param id the container's data-resize-id
+ */
+function toggleAreaFlowAxisDir(id) {
+  var cur = areaFlowFor(id);
+  var reversed = cur.dir.indexOf("-reverse") !== -1;
+  var base = cur.dir.indexOf("column") === 0 ? "row" : "column";
+  setAreaFlowProp(id, "dir", reversed ? base + "-reverse" : base);
+}
+
+/**
+ * Flips one flow container's tiles between running forwards and backwards
+ * along whichever axis they already run on (left-to-right vs right-to-left,
+ * top-to-bottom vs bottom-to-top).
+ * @param id the container's data-resize-id
+ */
+function toggleAreaFlowReverse(id) {
+  var cur = areaFlowFor(id);
+  var reversed = cur.dir.indexOf("-reverse") !== -1;
+  var base = reversed ? cur.dir.slice(0, -"-reverse".length) : cur.dir;
+  setAreaFlowProp(id, "dir", reversed ? base : base + "-reverse");
+}
+
+/**
+ * Flips which side one flow container's overflow wraps to: for a row of
+ * tiles, the next line goes below (normal) or above (reverse); for a column,
+ * to the right (normal) or to the left (reverse).
+ * @param id the container's data-resize-id
+ */
+function toggleAreaFlowWrap(id) {
+  setAreaFlowProp(id, "wrap", areaFlowFor(id).wrap === "reverse" ? "normal" : "reverse");
 }
 
 /**
@@ -689,6 +1114,15 @@ function moveBoundsContainer(el) {
   if (!el || !el.closest) return null;
   var tile = el.closest("[data-extras-tile], [data-days-tile]");
   if (tile) return tile;
+  /* a login field/button/error line is the same kind of little container: its
+     label, its input rectangle and its placeholder text all move freely
+     inside it and grind to a stop at its edge rather than escaping onto the
+     card. Looked up from the PARENT so the container itself isn't its own
+     bounds (a login element is freely placeable, unlike a tile) - the tile
+     branch above doesn't need that because a tile can't be moved at all, see
+     isMoveLockedTileRole(). */
+  var loginBox = el.parentElement && el.parentElement.closest("[data-login-el]");
+  if (loginBox) return loginBox;
   var area = el.parentElement && el.parentElement.closest("[data-extras-area], [data-days-area]");
   return area || null;
 }
@@ -751,16 +1185,17 @@ function elId(el) {
  * wireTextField(), wired directly on the label and independent of
  * selection), it only changes what gets selected/right-clicked/styled.
  *
- * A live-area tile is the second place `closest()` alone lands wrong, for
- * the mirror-image reason. Most of a tile's surface is UNTRACKED markup -
- * a day card's own <h3> title and <p> blurb, plus the card's padding - with
- * the only tracked thing behind it being the rect role that fills it (see
- * .day-tile-rect/.extras-tile-rect in css/style.css). A click on any of
- * that walked straight past the tile and selected the whole area container
- * instead, so the tile's "underlay" was effectively unreachable except in
- * the few gaps between its own text. Redirecting to the tile's own rect
- * keeps a click on a tile selecting THAT tile, and leaves the container
- * selectable exactly where it should be - the empty space around the tiles.
+ * A live-area tile used to be a second such place, for the mirror-image
+ * reason: a tile carried no id of its own, so a click on any of the untracked
+ * markup filling most of its surface (a day card's <p> blurb, its padding)
+ * walked straight past it and selected the whole area container, and the tile
+ * had to be faked by redirecting to the rect role behind it. It carries a real
+ * data-resize-id now (see isTileBoxEl()), so `closest()` lands on the tile
+ * itself and that IS the right answer - the tile is the bounds everything
+ * inside it is clamped to, and the thing a ta resizes to re-tile the
+ * container. The rect stays reachable by clicking it directly (it fills the
+ * tile behind the content, so most of a card's surface is still the rect),
+ * and everything else by the ring's own parent handle, see parentSelectableOf().
  * @param target the event's target (e.g. e.target)
  * @return the element to select, or null
  */
@@ -769,16 +1204,6 @@ function resolveSelectableTarget(target) {
   if (el && el.classList.contains("tic-label")) {
     var toggle = el.closest("[data-theme-toggle], #themeBtn");
     if (toggle) return toggle;
-  }
-  /* only when the click landed on untracked tile markup: a hit on a real
-     role element (rect/icon/text/button, or an element bound onto the tile)
-     already resolved to itself just above, and that's the right answer */
-  var tile = target && target.closest ? target.closest("[data-extras-tile], [data-days-tile]") : null;
-  if (tile && (!el || !tile.contains(el))) {
-    /* the rect is deletable (unlike the icon/button), so it may genuinely
-       be gone - fall through to the container rather than swallow the click */
-    var rect = tile.querySelector('[data-extras-role="rect"], [data-days-role$=".rect"]');
-    if (rect) return rect;
   }
   return el;
 }
@@ -854,9 +1279,15 @@ function getSize(el) {
   var w = parseFloat(el.dataset.ovW);
   var h = parseFloat(el.dataset.ovH);
   if (!isNaN(w) && !isNaN(h)) return { w: w, h: h };
-  if (el.dataset.natW !== undefined) {
-    return { w: parseFloat(el.dataset.natW), h: parseFloat(el.dataset.natH) };
-  }
+  var nw = parseFloat(el.dataset.natW), nh = parseFloat(el.dataset.natH);
+  /* both halves or neither: an element seeded with a natW but no natH (a
+     live area, whose height is never a stored figure - see
+     buildCustomElement()'s isAutoHeightArea branch) would otherwise start a
+     resize drag from {w: seed, h: NaN}, and the first mousemove would snap it
+     to that stale seed width. That's what put the extras/days containers -
+     and the progress bar before them - visibly past the right edge of the
+     page column the instant they were grabbed. */
+  if (!isNaN(nw) && !isNaN(nh)) return { w: nw, h: nh };
   var r = el.getBoundingClientRect();
   return { w: r.width, h: r.height };
 }
@@ -1224,6 +1655,12 @@ function pushResizeUndo(id, before, after) {
   EDIT_REDO.length = 0;
 }
 
+/* the last content.sizes seen by applySizeOverrides(), so applyTileFlow() can
+   look up a tile's/container's saved size without being handed the whole
+   content blob by every one of its callers (a tile resize mid-session updates
+   this in place, see setTileTrackSize()) */
+var EDIT_SIZES = {};
+
 /**
  * Applies saved size overrides (from a resize-handle drag, see
  * startResizeDrag()) on top of the page's own default sizing, for every
@@ -1236,30 +1673,37 @@ function pushResizeUndo(id, before, after) {
  * A tile role's id repeats identically across every rendered tile, so a size
  * stored under one applies to all of them here - that IS the shared-template
  * mirroring the spec asks for (mirrorTiledRoleGeometry() does the same thing
- * live, mid-session), not a bug to filter out. Only an isResizeLockedTileRole()
- * element (a reel tile, which would break its flex track) is skipped.
+ * live, mid-session), not a bug to filter out. Two things are skipped: an
+ * isResizeLockedTileRole() element (a reel tile, which would break its flex
+ * track), and a TILE, whose saved size is a container track size rather than
+ * a box of its own and is applied by applyTileFlow() instead.
  * @param sizes content.sizes, {id: {w, h}}
  */
 function applySizeOverrides(sizes) {
   sizes = sizes || {};
+  EDIT_SIZES = sizes;
   document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
     var s = sizes[elId(el)];
     if (!s || s.w === undefined || isResizeLockedTileRole(el)) return;
+    /* a tile's saved size isn't a box of its own: it's the track size of the
+       container laying it out, applied there by applyTileFlow(). Writing a
+       width onto a grid item here instead would pin one tile inside a track
+       still sized by everything else, which is neither what a ta dragged nor
+       something the other tiles would follow. */
+    if (isTileBoxEl(el)) return;
     detachFromFlow(el);
-    /* an extrasArea/daysArea container (see buildCustomElement()'s
-       isAutoHeightArea branch) is only ever meant to be WIDTH-draggable -
-       js/dashboard.js's renderExtras()/renderDays() force its real height
-       from whatever tiles are actually painted into it on every render, a
-       stored height here is legacy/stale (nothing currently offers a way
-       to drag one, but an old saved value can still be sitting in a
-       profile/draft from before that was true) and would just fight that
-       auto-sizing: the container gets pinned to the stale px figure while
-       its tiles keep rendering at their own natural size, leaving a big
-       dead gap (stored height too tall) or clipping tiles (too short) the
-       instant this runs on load. */
+    /* a flow container's HEIGHT is only its own to keep while its y axis is
+       locked (see areaFlowFor()). With y expanding - the default for both
+       top-level areas - the height is whatever the tiles currently painted
+       into it come to, re-derived on every render, and pinning it to a stored
+       px figure just fights that: a stale value too tall leaves a dead gap
+       below the tiles, too short clips them. Width is applied either way; an
+       x-expanding container has applyTileFlow() clear it again straight
+       after, since that axis is content-sized. */
     if (isLiveAreaEl(el)) {
       el.dataset.ovW = s.w;
       el.style.width = s.w + "px";
+      if (s.h !== undefined) el.dataset.ovH = s.h;
       return;
     }
     setBox(el, s.w, s.h === undefined ? parseFloat(el.dataset.natH) : s.h);
@@ -1385,10 +1829,19 @@ function applyHiddenOverrides(hidden) {
  * Used to tell a plain leaf element (a hero CTA button, nothing tracked
  * nested inside it) from a wrapper other tagged elements depend on staying
  * visible/present when it's deleted.
+ *
+ * A login-page element (see buildCustomElementNode()'s "loginField"/
+ * "loginButton"/"loginError" kinds) is the one deliberate "no": its label,
+ * its input rectangle, its placeholder and its two error strings are PARTS of
+ * it, not independent content that happened to be nested inside, so deleting
+ * a credential box has to take the whole box with it. Leaving it on the
+ * wrapper path would hide the outline and nothing else - the real <input>
+ * would stay on the card, still focusable, still typed into, still posted.
  * @param el the element
  * @return true if el has a tracked descendant
  */
 function hasTrackedDescendants(el) {
+  if (el.hasAttribute && el.hasAttribute("data-login-el")) return false;
   return el.querySelectorAll(RESIZABLE_SEL).length > 0;
 }
 
@@ -2234,6 +2687,26 @@ function buildRing() {
   mv.addEventListener("mousedown", startMoveDrag);
   mv.addEventListener("dblclick", resetPosDbl);
   RING.appendChild(mv);
+
+  /* "select the container around this" - see parentSelectableOf() for why a
+     click alone can't always reach one */
+  var par = document.createElement("span");
+  par.className = "parh";
+  par.title = "Select the container around this";
+  par.innerHTML =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+    'stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/>' +
+    '<path d="M5 12l7-7 7 7"/></svg>';
+  par.addEventListener("mousedown", function (e) { e.preventDefault(); e.stopPropagation(); });
+  par.addEventListener("click", function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    var up = parentSelectableOf(RING_EL);
+    if (!up) return;
+    RING_EL = up;
+    positionRing();
+  });
+  RING.appendChild(par);
 
   var del = document.createElement("span");
   del.className = "delh";
@@ -4732,6 +5205,34 @@ function positionRing() {
      nothing - everything else about them is still fully editable */
   RING.classList.toggle("undeletable",
     RING_EL.hasAttribute("data-extras-fixed") || RING_EL.hasAttribute("data-days-fixed"));
+  /* a tile resizes but never moves, see isMoveLockedTileRole() */
+  RING.classList.toggle("tile-box", isTileBoxEl(RING_EL));
+  RING.classList.toggle("has-parent", !!parentSelectableOf(RING_EL));
+}
+
+/**
+ * The tracked element enclosing el, if any - the one the ring's "select the
+ * container around this" handle jumps to. Walks the same nearest-tracked-
+ * ancestor path ancestorPos() does, and skips a theme toggle's own label for
+ * the same reason (it isn't an independent element, see isThemeToggleLabel()).
+ *
+ * Exists because the live areas are the one place on the page where a tracked
+ * element can be completely unreachable by clicking: a tile is covered edge to
+ * edge by its own rect, and a flow container is covered by its tiles, so every
+ * click inside either one lands on something painted on top. This is the way
+ * out - and the way to select a tile at all, which a ta needs in order to
+ * resize one and re-tile the container.
+ * @param el the currently selected element
+ * @return the enclosing tracked element, or null
+ */
+function parentSelectableOf(el) {
+  if (!el || isThemeToggleLabel(el)) return null;
+  var p = el.parentElement;
+  while (p && p !== document.body) {
+    if (p.matches && p.matches(RESIZABLE_SEL)) return p;
+    p = p.parentElement;
+  }
+  return null;
 }
 
 /**
@@ -4812,8 +5313,24 @@ function startResizeDrag(e) {
   var el = RING_EL;
   var dir = RING_DIRS[e.target.getAttribute("data-dir")];
   var kind = elKind(el);
-  detachFromFlow(el);
-  freezeDescendants(el);
+  /* a tile resizes by re-tiling its container, not by taking a box of its
+     own (see setTileTrackSize()), so it must stay exactly where the grid put
+     it: detaching it would take it out of that grid entirely, and pinning its
+     descendants would freeze the rect/icon/text/button at their old spots
+     while the tile they belong to changes shape underneath them. A flow
+     container skips freezeDescendants() for the same reason it always has -
+     reflowing its contents IS the point of resizing it, see freezeDescendants(). */
+  var tileBox = isTileBoxEl(el);
+  var minW = 0, cap = null;
+  if (tileBox) {
+    cap = tileSizeCap(el);
+    minW = minContentWidthOf(el);
+  } else {
+    detachFromFlow(el);
+    freezeDescendants(el);
+    /* measured once, here, not per mousemove - it's a forced reflow */
+    if (isFlowAreaEl(el)) minW = flowAreaMinWidth(el);
+  }
   var startX = e.clientX, startY = e.clientY;
   var start = getSize(el);
   var base = getPos(el);
@@ -4822,6 +5339,16 @@ function startResizeDrag(e) {
   function onMove(ev) {
     var w = dir[0] ? Math.max(16, start.w + dir[0] * (ev.clientX - startX)) : start.w;
     var h = dir[1] ? Math.max(12, start.h + dir[1] * (ev.clientY - startY)) : start.h;
+    /* the spec's "grinds against the edge" stop, applied to sizes: a
+       container refuses to go narrower than its tiles can squeeze to, and a
+       tile refuses to go wider/taller than the container holding it */
+    if (minW) w = Math.max(w, minW);
+    if (cap) { w = Math.min(w, cap.w); h = Math.min(h, cap.h); }
+    if (tileBox) {
+      setTileTrackSize(el, w, h);
+      positionRing();
+      return;
+    }
     if (kind === "icon" || (kind === "img" && ev.shiftKey)) {
       var f;
       if (dir[0] && dir[1]) {
@@ -4847,6 +5374,11 @@ function startResizeDrag(e) {
     var s = getSize(el), p = getPos(el);
     commitSize(el);
     commitPosition(el);
+    /* a container's own new size changes what its tiles have to fit into (and
+       a locked y axis re-derives its pinned height from that), so re-run the
+       layout once the drag settles - a tile drag already did this on every
+       move, through setTileTrackSize() */
+    if (isFlowAreaEl(el)) applyTileFlow();
     pushResizeUndo(elId(el),
       { w: start.w, h: start.h, tx: base.tx, ty: base.ty },
       { w: s.w, h: s.h, tx: p.tx, ty: p.ty });
@@ -4991,6 +5523,17 @@ function deleteElement(el) {
      daytag text) stays normally deletable, see buildExtrasTileHtml()/
      renderDays() in js/dashboard.js */
   if (el.hasAttribute("data-extras-fixed") || el.hasAttribute("data-days-fixed")) return;
+  /* same exception on the login page: the rectangle a credential is actually
+     typed into (see buildCustomElementNode()'s "loginField" kind) stays put,
+     since deleting it would leave a label hovering over nothing and no way to
+     log in. The field it belongs to is deletable as a whole, and re-addable
+     from the right-click menu's "Login page only" section. */
+  if (el.hasAttribute("data-login-fixed")) return;
+  /* a tile isn't decoration a ta placed, it's one rendering of a real piece
+     of content (an attachment, a day) - and every tile of a kind shares one
+     id, so "delete" here would mean "hide every day card on the page". Days
+     and attachments are added and removed in the content manager. */
+  if (isTileBoxEl(el)) return;
   var id = elId(el);
   if (!id) return;
   /* a grouped element (see groupOf()) takes every other member down with
@@ -5877,7 +6420,12 @@ function buildCustomElement(d) {
      (nothing ever writes a new one back, height-resize isn't offered for
      these), so applying it as a fixed inline height here silently clipped
      every tile's content down to that seed's height on every load. */
-  var isAutoHeightArea = d.kind === "extrasArea" || d.kind === "daysArea";
+  /* a login field/error line is auto-height for the same reason: its stored
+     h is only there to size the spacer it anchors to (see app/db.py's
+     _LOGIN_USER_ENTRY), and pinning it would clip the label or the second
+     error string the moment a ta bumps the font size */
+  var isAutoHeightArea = d.kind === "extrasArea" || d.kind === "daysArea" ||
+    d.kind === "loginField" || d.kind === "loginError";
   if (d.h && !isAutoHeightArea) { el.style.height = d.h + "px"; el.dataset.natH = d.h; }
   return el;
 }
@@ -5934,13 +6482,19 @@ function buildCustomElementNode(d) {
        empty shell. Deliberately no background (kept transparent, unlike
        "box") - see toggleStyleMenu()'s isExtrasArea handling, which hides
        the generic Color row for it the same way it does for "progress".
-       Height is intentionally not left resize-tracked in practice -
-       renderExtras() forces height:auto on every render since the tile
-       count varies - only width is meant to be dragged, so tiles reflow to
-       whatever width a ta picks. */
+       Both axes are draggable, but what a stored size MEANS depends on the
+       container's own axis locks (see areaFlowFor()): a locked axis keeps
+       that size and makes the tiles fit inside it, an unlocked one is sized
+       by its content and ignores the stored figure. Width is locked by
+       default, height grows to fit. */
     el = document.createElement("div");
     el.setAttribute("data-resize-id", d.id);
     el.setAttribute("data-extras-area", "1");
+    /* laid out by applyTileFlow()/.tile-flow: the tiles are direct children,
+       one per row by default, repacking into columns as a ta narrows a tile */
+    el.setAttribute("data-flow-area", "1");
+    el.setAttribute("data-tile-id", "extras.tile.box");
+    el.className = "tile-flow";
     el.style.width = "100%";
     el.style.minHeight = "40px";
   } else if (d.kind === "daysArea") {
@@ -5948,17 +6502,144 @@ function buildCustomElementNode(d) {
        tile grid (see app/db.py's _DASH_DAYS_AREA_ENTRY) - js/dashboard.js's
        renderDays() finds it by data-resize-id and renders the actual
        per-day tiles inside; this only builds the empty shell. Same shape as
-       the "extrasArea" kind just above, see its doc comment for why height
-       isn't left resize-tracked in practice. className carries over the old
-       static #dayGrid's own "grid grid-3" (css/style.css), the exact 3-
-       column layout (with its existing responsive breakpoints) students
-       already see today, rather than duplicating that in a new selector. */
+       the "extrasArea" kind just above, see its doc comment for how its axis
+       locks decide what a stored size means.
+       The old static #dayGrid's fixed "grid grid-3" is gone: three columns
+       was a constant, so neither dragging the container narrower nor dragging
+       a day card wider changed anything about the tiling. .tile-flow's
+       auto-fill tracks give the same three columns at the page's own width
+       (the --tile-gap and data-tile-w below are the old .grid gap and an
+       equivalent track size) while making the count a real function of both,
+       which is what lets a ta
+       re-tile the grid at all - and it keeps collapsing to 2 and 1 columns on
+       narrow screens the way .grid-3's media queries did. */
     el = document.createElement("div");
     el.setAttribute("data-resize-id", d.id);
     el.setAttribute("data-days-area", "1");
-    el.className = "grid grid-3";
+    el.setAttribute("data-flow-area", "1");
+    el.setAttribute("data-tile-id", "days.tile");
+    /* the tile width to tile AT until a ta resizes a day card themselves -
+       read by applyTileFlow() as this container's own --tile-w default,
+       rather than set here, so it doesn't fight what that writes */
+    el.setAttribute("data-tile-w", "320px");
+    el.className = "tile-flow";
+    el.style.setProperty("--tile-gap", "22px");
     el.style.width = "100%";
     el.style.minHeight = "40px";
+  } else if (d.kind === "loginField") {
+    /* one of the login page's two credential boxes (see app/db.py's
+       _LOGIN_USER_ENTRY/_LOGIN_PASS_ENTRY), the first of the three kinds the
+       right-click menu only offers on that page - "under elements, with an
+       indicator", see renderCtxMenuRoot()'s "Login page only" section.
+
+       Built out of three tracked pieces rather than one opaque widget,
+       because the spec asks for exactly that: the label is a plain
+       click-to-edit text field, the box around the input is "a regular
+       rectangle with text in it" (a data-resize-id div - so the radius/
+       border/color/shadow rows of the style popover all already work on it
+       with no new plumbing), and the greyed placeholder inside it is another
+       plain text field rather than the <input>'s own placeholder attribute,
+       which is the only way it could be edited, moved and restyled like
+       every other piece of text on the site. js/login.js hides it the moment
+       the field has a value, so it still READS as a placeholder to a real
+       visitor. The real <input> is still a real <input> (autocomplete,
+       password masking, autofill all intact), just visually transparent
+       inside that rectangle.
+
+       The box carries data-login-fixed: a field with its rectangle deleted
+       would be a label floating over nothing, so it's the same deliberate
+       exception the attachments tile's download button already makes (see
+       deleteElement()) - move/resize/restyle it freely, just never delete
+       it. The field as a WHOLE is deletable and re-addable like anything
+       else. */
+    var lfName = d.field === "password" ? "password" : "username";
+    el = document.createElement("div");
+    el.className = "login-field";
+    el.setAttribute("data-resize-id", d.id);
+    el.setAttribute("data-login-el", "field");
+    el.setAttribute("data-login-field", lfName);
+    /* like a live area, this is meant to span the card it's anchored into
+       rather than sit at a hand-measured width, see applyElementAnchors() */
+    el.setAttribute("data-login-fill", "1");
+    var lfLabel = document.createElement("span");
+    lfLabel.className = "login-field-label";
+    lfLabel.setAttribute("data-edit-id", d.id + ".label");
+    lfLabel.textContent = lfName === "password" ? "Password" : "Username";
+    el.appendChild(lfLabel);
+    var lfBox = document.createElement("div");
+    lfBox.className = "login-field-box";
+    lfBox.setAttribute("data-resize-id", d.id + ".box");
+    lfBox.setAttribute("data-login-fixed", "1");
+    var lfInput = document.createElement("input");
+    lfInput.className = "login-field-input";
+    lfInput.type = lfName === "password" ? "password" : "text";
+    lfInput.autocomplete = lfName === "password" ? "current-password" : "username";
+    lfInput.setAttribute("aria-label", lfName === "password" ? "Password" : "Username");
+    lfInput.setAttribute("data-login-input", lfName);
+    lfBox.appendChild(lfInput);
+    var lfPh = document.createElement("span");
+    lfPh.className = "login-field-ph";
+    lfPh.setAttribute("data-edit-id", d.id + ".placeholder");
+    lfPh.textContent = lfName === "password" ? "and its password" : "the username you were given";
+    lfBox.appendChild(lfPh);
+    el.appendChild(lfBox);
+  } else if (d.kind === "loginButton") {
+    /* the login page's submit button (app/db.py's _LOGIN_SUBMIT_ENTRY).
+       Everything cosmetic about it is a ta's to change - its label is a
+       normal click-to-edit field, its box takes size/rounding/color/border/
+       shadow like any other button - but what it DOES is not: js/login.js
+       binds the actual credential post to the data-login-el marker, not to
+       an id or a link, so it can't be pointed somewhere else by accident.
+       That's why it draws in the login-page outline color in edit mode (see
+       css/style.css's [data-login-el] rule), same "this one is wired up"
+       signal the navbar-fixed and linked elements already get. */
+    el = document.createElement("button");
+    el.type = "button";
+    el.className = "btn btn-primary login-submit";
+    el.setAttribute("data-resize-id", d.id);
+    el.setAttribute("data-login-el", "submit");
+    el.setAttribute("data-login-fill", "1");
+    var lbLabel = document.createElement("span");
+    lbLabel.className = "login-submit-label";
+    lbLabel.setAttribute("data-edit-id", d.id + ".label");
+    lbLabel.textContent = "Log in";
+    el.appendChild(lbLabel);
+  } else if (d.kind === "loginError") {
+    /* the login page's failure line (app/db.py's _LOGIN_ERROR_ENTRY).
+       Invisible to a real visitor until something actually goes wrong, which
+       is precisely why it needs the faint diagonal hazard hatching in the
+       editor (see css/style.css): without it a ta is looking at a line of
+       red text that never appears on the live page with nothing to say so.
+
+       Carries BOTH strings it can show - wrong credentials, and the
+       "you were idled out" line js/idle.js bounces people here with
+       (?expired=1) - as two independently editable fields, rather than one
+       field js/login.js overwrites at runtime: a ta who reworded the login
+       failure shouldn't find their wording silently replaced on an expired
+       bounce, and the expired copy would otherwise be the one string on this
+       page that nobody could edit at all. Only one of them is ever visible
+       at a time on the real page; edit mode shows both, same "keep it
+       reachable even when the live page wouldn't show it" rule
+       .extras-empty already follows on the dashboard. */
+    el = document.createElement("div");
+    el.className = "login-error";
+    el.setAttribute("data-resize-id", d.id);
+    el.setAttribute("data-login-el", "error");
+    /* spans the card like the fields above it, so its two strings wrap the
+       same way the old .form-msg paragraph did, see applyElementAnchors() */
+    el.setAttribute("data-login-fill", "1");
+    var leBad = document.createElement("span");
+    leBad.className = "login-error-msg";
+    leBad.setAttribute("data-edit-id", d.id + ".text");
+    leBad.setAttribute("data-login-msg", "bad");
+    leBad.textContent = "Wrong username or password. Check with a staff member.";
+    el.appendChild(leBad);
+    var leExpired = document.createElement("span");
+    leExpired.className = "login-error-msg";
+    leExpired.setAttribute("data-edit-id", d.id + ".expired");
+    leExpired.setAttribute("data-login-msg", "expired");
+    leExpired.textContent = "You were logged out after a while of inactivity. Log in again.";
+    el.appendChild(leExpired);
   } else if (d.kind === "image" && d.url) {
     el = document.createElement("img");
     el.src = d.url;
@@ -6258,8 +6939,23 @@ function applyElementAnchors() {
        Same fix, for the same reason: a bar pinned to a full-width in-flow
        spacer is meant to span that column, whatever the column measures
        today, and a ta dragging their own width still wins. */
-    if ((isLiveAreaEl(el) || el.hasAttribute("data-progress")) && el.dataset.ovW === undefined) {
-      el.style.width = anchor.getBoundingClientRect().width + "px";
+    /* a login field/button spans its auth card for exactly the same reason a
+       live area spans its section: the card's width is whatever the shared
+       column resolves to today, not the hand-measured seed in app/db.py */
+    if ((isLiveAreaEl(el) || el.hasAttribute("data-progress") ||
+         el.hasAttribute("data-login-fill")) && el.dataset.ovW === undefined) {
+      var colW = anchor.getBoundingClientRect().width;
+      el.style.width = colW + "px";
+      /* and this IS the element's natural size now, not just what it happens
+         to be painted at: natW is what getSize() falls back to when a resize
+         drag starts (and what resetBox() restores to on a double-click), so
+         leaving the seeded d.w in there meant the first mousemove of a drag
+         snapped the element straight to that stale figure - roughly 84px past
+         the page column at a 1440px viewport, its right edge hanging off the
+         section. natH follows so getSize() sees a complete pair (a live area
+         is never seeded with one, see buildCustomElement()). */
+      el.dataset.natW = colW;
+      if (el.dataset.natH === undefined) el.dataset.natH = el.getBoundingClientRect().height;
     }
   });
 }
@@ -6728,6 +7424,18 @@ function finishAddedElement(el, d, kind, extra) {
        need to wait for the next full reload's applyProgressBindings() pass */
     paintProgressElement(el, d);
   }
+  if (kind === "loginField" || kind === "loginButton" || kind === "loginError") {
+    /* same shape as "theme" just below: the element a ta placed carries only
+       data-resize-id, and the click-to-edit fields are the spans nested
+       inside it (label/placeholder, button label, the two error strings), so
+       each of those needs its own wireTextField() call to be typeable
+       straight away rather than only after the next reload. */
+    el.querySelectorAll("[data-edit-id]").forEach(wireTextField);
+    /* and the new box has to start out showing its placeholder / hidden,
+       which is js/login.js's job (this page's own script, same window.-hook
+       convention window.renderExtras uses on the dashboard) */
+    if (window.refreshLoginPage) window.refreshLoginPage();
+  }
   if (kind === "theme") {
     /* the button itself only carries data-resize-id; its nested ".tic-label"
        is the actual data-edit-id field, so it needs its own wireTextField()
@@ -6783,6 +7491,11 @@ function addCustomElement(kind, x, y, extra) {
   var d = { id: prefix + uid, kind: kind, page: currentPageKey(), left: Math.round(x), top: Math.round(y) };
   if (kind === "icon") { d.icon = extra.icon; d.url = extra.url; }
   if (kind === "image" || kind === "video") d.url = extra.url;
+  /* which credential this box collects, picked before placing (see
+     renderCtxMenuLoginFieldPicker()); it decides the input type, the
+     autocomplete hint and the default label/placeholder text, so it's baked
+     into the descriptor rather than resolved at render time */
+  if (kind === "loginField") d.field = extra.field === "password" ? "password" : "username";
   if (kind === "datetime") {
     d.target = extra.target || new Date(Date.now() + 30 * 86400000).toISOString();
     d.format = extra.format || "countdown";
@@ -6997,12 +7710,26 @@ function applyLiveAreaOverrides(data) {
   if (!data) return;
   applyTextOverrides(data.text || {});
   applySizeOverrides(data.sizes);
+  applyAreaFlowOverrides(data.area_flow);
+  /* between the size and position sweeps, not after both. It reads the tile
+     and container sizes applySizeOverrides() has just loaded, and what it
+     does with them - how many columns, therefore how wide a tile, therefore
+     how much room an element inside one has - is exactly what
+     applyPositionOverrides()' clamp pass then measures against. Run the other
+     way round, that pass clamps every saved offset against a grid still laid
+     out at its pre-load defaults, and silently rewrites offsets that are
+     perfectly legal once the real layout lands. */
+  applyTileFlow();
   applyFontSizeOverrides(data.font_sizes);
   applyTextStyleOverrides(data.text_styles);
   applyPositionOverrides(data.positions);
   applyColorOverrides(data.colors, data.dark_colors);
   applyRadiusOverrides(data.radius);
   applyHiddenOverrides(data.hidden);
+  /* again, now that everything is painted: a y-locked container's mirrored
+     height is measured from its tiles' real natural heights, which the sweeps
+     above (a resized icon, a hidden row, a longer filename) can change */
+  applyTileFlow();
   repaintLocalTileContent();
 }
 window.applyLiveAreaOverrides = applyLiveAreaOverrides;
@@ -7222,6 +7949,19 @@ function ctxTileFor(kind) {
   return last && last.isConnected ? last : null;
 }
 
+/**
+ * The tile flow container the context menu's Container section should act on:
+ * the innermost one the right-click landed inside. A right-click on a day
+ * card's attachment therefore offers that day's attachment sub-area (the
+ * closest container that actually owns what was clicked), while one on the
+ * day card itself offers the days area around it.
+ * @return the container element, or null if the click wasn't inside one
+ */
+function ctxFlowArea() {
+  if (!CTX_TARGET_EL || !CTX_TARGET_EL.closest) return null;
+  return CTX_TARGET_EL.closest("[data-flow-area]");
+}
+
 /** Builds the context menu once, lazily. */
 function buildCtxMenu() {
   CTX_MENU = document.createElement("div");
@@ -7271,7 +8011,21 @@ function renderCtxMenuRoot() {
     var isDaysFixed = CTX_TARGET_EL && CTX_TARGET_EL.hasAttribute("data-days-fixed");
     var isDaysRole = CTX_TARGET_EL && CTX_TARGET_EL.hasAttribute("data-days-role");
     var daysTile = ctxTileFor("days");
-    var isSpecial = isDatetime || isTile || isExtrasFixed || isDaysFixed || CTX_TARGET_ID.indexOf("logistics.") === 0 || CTX_TARGET_ID.indexOf("countdown.") === 0 ||
+    /* a day/attachment tile: undeletable (see deleteElement()) and not
+       duplicable either - a copy would render nothing, since what a tile
+       shows comes from the day/attachment it was rendered FOR, not from its
+       own markup, exactly the reasoning that already excludes the countdown
+       and logistics tiles below */
+    var isTileBox = CTX_TARGET_EL && isTileBoxEl(CTX_TARGET_EL);
+    /* the login field's own input rectangle, undeletable for the same reason
+       the attachments tile's download button is - see deleteElement() */
+    var isLoginFixed = CTX_TARGET_EL && CTX_TARGET_EL.hasAttribute("data-login-fixed");
+    /* the failure line has two strings but only ever shows one (see
+       buildCustomElementNode()'s "loginError" kind), so reaching the other
+       one to edit it needs a way to say which is on show */
+    var loginErrorEl = CTX_TARGET_EL && CTX_TARGET_EL.closest &&
+      CTX_TARGET_EL.closest('[data-login-el="error"]');
+    var isSpecial = isDatetime || isTile || isTileBox || isExtrasFixed || isDaysFixed || isLoginFixed || CTX_TARGET_ID.indexOf("logistics.") === 0 || CTX_TARGET_ID.indexOf("countdown.") === 0 ||
       (CTX_TARGET_EL && CTX_TARGET_EL.querySelector && CTX_TARGET_EL.querySelector("#heroCountdown, #logisticsGrid"));
     /* a progress bar is a readout, not a control: it displays two variables
        (see renderCtxMenuProgressVars(), offered in its place below) and has
@@ -7284,6 +8038,10 @@ function renderCtxMenuRoot() {
       ((isSpecial || isExtrasRole || isDaysRole) ? "" : '<button type="button" data-dup="1">Duplicate</button>') +
       (isSpecial ? "" : '<button type="button" data-delete="1">Delete</button>') +
       (extrasTile ? '<button type="button" data-extras-add-filename="1">Create textbox with filename variable</button>' : "") +
+      (loginErrorEl ? '<button type="button" data-login-msg-swap="1">' +
+        (loginErrorEl.classList.contains("edit-show-expired")
+          ? "Show wrong-password wording" : "Show timed-out wording") +
+        '</button>' : "") +
       (daysTile ? '<button type="button" data-days-add-number="1">Insert day number</button>' +
         '<button type="button" data-days-add-date="1">Insert unlock date</button>' +
         '<button type="button" data-days-add-locked="1">Insert locked-state text</button>' +
@@ -7305,6 +8063,44 @@ function renderCtxMenuRoot() {
     toggleHtml += '<div class="ctx-title">Selection</div>' +
       '<button type="button" data-group="1">Group ' + SELECTED_IDS.length + ' elements</button>';
   }
+  /* the tile containers' own per-axis "keep this size" / "grow to fit"
+     switch (see areaFlowFor()). Offered on the container itself AND on
+     anything inside one, since the container is usually completely covered by
+     its tiles - the same reachability problem the ring's parent handle solves
+     for selection, see parentSelectableOf(). */
+  var flowArea = ctxFlowArea();
+  if (flowArea) {
+    var flowId = elId(flowArea);
+    var flowState = areaFlowFor(flowId);
+    /* the stacking half of the same section (see areaFlowFor()): which axis
+       the tiles run along, which way along it, and which side a full line
+       overflows to. Every label names the state it's in FIRST and what
+       clicking does second, same "current &rarr; next" shape as the two axis
+       locks above, and the overflow one words itself against whichever axis
+       is actually in force - "below/above" reads as nonsense on a column. */
+    var isCol = flowState.dir.indexOf("column") === 0;
+    var isRev = flowState.dir.indexOf("-reverse") !== -1;
+    toggleHtml += '<div class="ctx-title">Container</div>' +
+      '<button type="button" data-flow-axis="x">Width: ' +
+      (flowState.x === "lock" ? "locked &rarr; grow to fit tiles" : "grows to fit &rarr; lock size") +
+      '</button>' +
+      '<button type="button" data-flow-axis="y">Height: ' +
+      (flowState.y === "lock" ? "locked &rarr; grow to fit tiles" : "grows to fit &rarr; lock size") +
+      '</button>' +
+      '<button type="button" data-flow-dir="axis">Tiles: ' +
+      (isCol ? "stacked vertically &rarr; side by side" : "side by side &rarr; stacked vertically") +
+      '</button>' +
+      '<button type="button" data-flow-dir="reverse">Order: ' +
+      (isRev
+        ? (isCol ? "bottom to top &rarr; top to bottom" : "right to left &rarr; left to right")
+        : (isCol ? "top to bottom &rarr; bottom to top" : "left to right &rarr; right to left")) +
+      '</button>' +
+      '<button type="button" data-flow-wrap="1">Overflow: ' +
+      (flowState.wrap === "reverse"
+        ? (isCol ? "wraps left &rarr; wrap right" : "wraps above &rarr; wrap below")
+        : (isCol ? "wraps right &rarr; wrap left" : "wraps below &rarr; wrap above")) +
+      '</button>';
+  }
   /* the one element kind that only exists inside an attachments tile: it
      draws whatever icon THAT tile's attachment type calls for (see
      buildCustomElementNode()'s "extrasIcon" kind), so offering it anywhere
@@ -7325,6 +8121,20 @@ function renderCtxMenuRoot() {
     '<button type="button" data-add="datetime">Date/time</button>' +
     '<button type="button" data-add="progress">Progress bar</button>' +
     '<button type="button" data-add="object">Object...</button>' +
+    /* the login page's own three kinds, in their own labelled section rather
+       than mixed into the generic list above: a credential box or a submit
+       button has nothing to resolve against on any other page, exactly the
+       reasoning that already keeps "Attachment icon" tile-scoped. The
+       heading IS the indicator that these are page-exclusive; they also draw
+       in their own outline colour once placed, see css/style.css's
+       [data-login-el] rule. */
+    (currentPageKey() === "login"
+      ? '<div class="ctx-title">Login page only</div>' +
+        '<button type="button" data-add="loginUsername">Username box</button>' +
+        '<button type="button" data-add="loginPassword">Password box</button>' +
+        '<button type="button" data-add="loginButton">Log in button</button>' +
+        '<button type="button" data-add="loginError">Error message</button>'
+      : "") +
     /* page-scoped rather than element-scoped, so it sits in its own section
        below "Add element" instead of under "This element" - see
        renderCtxMenuLinkList() for why the whole link inventory belongs in
@@ -7348,6 +8158,17 @@ function renderCtxMenuRoot() {
       hideCtxMenu();
     });
   }
+  var loginMsgSwapBtn = CTX_MENU.querySelector("[data-login-msg-swap]");
+  if (loginMsgSwapBtn) {
+    loginMsgSwapBtn.addEventListener("click", function () {
+      /* a pure view toggle - which of the failure line's two strings a ta is
+         currently looking at. Never saved: what a real visitor sees is
+         decided by what actually happened to them, see js/login.js */
+      var el = CTX_TARGET_EL && CTX_TARGET_EL.closest('[data-login-el="error"]');
+      if (el) el.classList.toggle("edit-show-expired");
+      hideCtxMenu();
+    });
+  }
   var extrasFilenameBtn = CTX_MENU.querySelector("[data-extras-add-filename]");
   if (extrasFilenameBtn) {
     extrasFilenameBtn.addEventListener("click", function () {
@@ -7367,6 +8188,30 @@ function renderCtxMenuRoot() {
       hideCtxMenu();
     });
   });
+  CTX_MENU.querySelectorAll("[data-flow-axis]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var area = ctxFlowArea();
+      if (area) toggleAreaFlowAxis(elId(area), btn.getAttribute("data-flow-axis"));
+      hideCtxMenu();
+    });
+  });
+  CTX_MENU.querySelectorAll("[data-flow-dir]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var area = ctxFlowArea();
+      if (!area) { hideCtxMenu(); return; }
+      if (btn.getAttribute("data-flow-dir") === "reverse") toggleAreaFlowReverse(elId(area));
+      else toggleAreaFlowAxisDir(elId(area));
+      hideCtxMenu();
+    });
+  });
+  var flowWrapBtn = CTX_MENU.querySelector("[data-flow-wrap]");
+  if (flowWrapBtn) {
+    flowWrapBtn.addEventListener("click", function () {
+      var area = ctxFlowArea();
+      if (area) toggleAreaFlowWrap(elId(area));
+      hideCtxMenu();
+    });
+  }
   var linkEditBtn = CTX_MENU.querySelector("[data-link-edit]");
   if (linkEditBtn) {
     linkEditBtn.addEventListener("click", function () { renderCtxMenuLinkEditor(); });
@@ -8183,6 +9028,16 @@ function handleCtxAdd(kind) {
     return;
   }
   if (kind === "button") { renderCtxMenuButtonLink(); return; }
+  /* the username and password boxes are two separate entries in the menu
+     rather than one that asks which: they're different things (different
+     input type, different autocomplete hint, different value js/login.js
+     posts), and a ta placing one always already knows which they want */
+  if (kind === "loginUsername" || kind === "loginPassword") {
+    addCustomElement("loginField", CTX_POS.x, CTX_POS.y,
+      { field: kind === "loginPassword" ? "password" : "username" });
+    hideCtxMenu();
+    return;
+  }
   if (kind === "image") { renderCtxMenuImagePicker(); return; }
   if (kind === "video") { renderCtxMenuVideoPicker(); return; }
   if (kind === "object") { renderCtxMenuObjectPicker(); return; }
@@ -8389,6 +9244,9 @@ function wireResizable() {
 
     /* locked: don't even start tracking a possible drag, see isLocked() */
     if (isLocked(elId(el))) return;
+    /* a tile selects (so its resize handles and style popover are reachable)
+       but never drags, see isMoveLockedTileRole() */
+    if (isMoveLockedTileRole(el)) return;
 
     var startX = e.clientX, startY = e.clientY;
     var base = getPos(el);
@@ -8573,7 +9431,12 @@ function isDuplicatable(el) {
   var isExtrasRole = el.hasAttribute("data-extras-role");
   var isDaysFixed = el.hasAttribute("data-days-fixed");
   var isDaysRole = el.hasAttribute("data-days-role");
-  var isSpecial = isDatetime || isTile || isExtrasFixed || isDaysFixed ||
+  /* a login field's own input rectangle: undeletable (see deleteElement())
+     and not duplicable either - a second copy inside the same field would be
+     a second box js/login.js never reads. Adding another FIELD is what the
+     right-click menu's "Login page only" section is for. */
+  var isLoginFixed = el.hasAttribute("data-login-fixed");
+  var isSpecial = isDatetime || isTile || isExtrasFixed || isDaysFixed || isLoginFixed ||
     (id && (id.indexOf("logistics.") === 0 || id.indexOf("countdown.") === 0)) ||
     (el.querySelector && el.querySelector("#heroCountdown, #logisticsGrid"));
   return !(isSpecial || isExtrasRole || isDaysRole);
@@ -10019,6 +10882,22 @@ function saveEditedField(id, html, defaultHtml) {
 }
 
 /**
+ * Persists one flow container's axis locks (see toggleAreaFlowAxis()) into
+ * the preview snapshot, same shape/draft as every other override here.
+ * @param id the container's data-resize-id
+ * @param flow {x, y}, each "lock" or "expand"
+ */
+function saveAreaFlow(id, flow) {
+  var raw;
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  if (!snapshot.area_flow || typeof snapshot.area_flow !== "object") snapshot.area_flow = {};
+  snapshot.area_flow[id] = flow;
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
  * Persists a resize-handle drag (see startResizeDrag()) into the preview
  * snapshot, the same localStorage draft saveEditedField() uses, so a
  * resized element round-trips through Apply/profiles exactly like an
@@ -10611,6 +11490,9 @@ function applySharedEditorOverrides(data, textMap) {
   applyRadiusOverrides(data.radius);
   applyBorderOverrides(data.border, data.dark_border);
   VARIABLES = data.variables || [];
+  /* before the renderExtras/renderDays hooks below, which build the tiles
+     these containers lay out - see applyTileFlow() */
+  applyAreaFlowOverrides(data.area_flow);
   applyProgressBindings(data.progress_fill, data.dark_progress_fill, data.progress_track, data.dark_progress_track);
   repaintFormulaChips();
   applyShadowOverrides(data.shadow);
@@ -10636,6 +11518,12 @@ function applySharedEditorOverrides(data, textMap) {
      same window.-gated cross-script pattern as window.initAllReels above */
   if (window.renderExtras) window.renderExtras();
   if (window.renderDays) window.renderDays();
+  /* same cross-script hook, for the login page's own four placed elements
+     (see buildCustomElementNode()'s "loginField"/"loginButton"/"loginError"
+     kinds): js/login.js owns their live behaviour - placeholder visibility,
+     which error string is showing - and only this pass knows when they
+     actually exist in the dom */
+  if (window.refreshLoginPage) window.refreshLoginPage();
   if (isPreviewMode() && isEditMode()) {
     wireResizable();
     wireClickToEdit();
@@ -10687,6 +11575,36 @@ function initDashboardPage() {
       applySharedEditorOverrides(data, textMap);
     })
     .catch(function () {});
+}
+
+/**
+ * Boots the shared visual-editor engine on the login page
+ * (templates/login.html, identified by its #loginCard auth card - see
+ * currentPageKey()). Nothing to hydrate here beyond the generic override
+ * pipeline: the form itself is four ordinary placed custom elements (see
+ * app/db.py's _LOGIN_ENTRIES) which renderCustomElements() builds like any
+ * other, and everything around them (nav, card heading/subtitle, the note
+ * and legal lines) is plain click-to-edit template markup. js/login.js
+ * wires the real behaviour on top, off the same window.refreshLoginPage
+ * hook applySharedEditorOverrides() calls.
+ *
+ * Gated into edit affordances the same isPreviewMode() && isEditMode() way
+ * every other page is, so a real visitor logging in never sees a drag
+ * handle - and js/login.js refuses to post credentials at all inside the
+ * ta portal's preview iframe, see its doc comment.
+ */
+function initLoginPage() {
+  fetchContent()
+    .then(function (data) { applySharedEditorOverrides(data); })
+    .catch(function () {
+      /* the content api being unreachable must not take the login page down
+         with it: every other page degrades to its own hardcoded template
+         copy here, but this page's form IS content now, so js/login.js puts
+         a plain unstyled one up instead of leaving an empty card. Only on
+         this path - a ta who deliberately deleted a field on a working site
+         is making a real choice, and this must never undo it. */
+      if (window.buildLoginFallback) window.buildLoginFallback();
+    });
 }
 
 /**
@@ -10778,11 +11696,13 @@ document.addEventListener("DOMContentLoaded", function () {
   var slot = document.getElementById("heroCountdown");
   var grid = document.getElementById("logisticsGrid");
   if (!slot) {
-    /* not the landing page - the only other page this file's shared editor
-       engine is wired onto right now is the student dashboard, identified
-       by its #dashProgressAnchor spacer (see initDashboardPage()); anything
-       else (gallery.html, login.html, ...) just isn't wired up yet */
+    /* not the landing page - the other two this file's shared editor engine
+       is wired onto are the student dashboard (its #dashProgressAnchor
+       spacer, see initDashboardPage()) and the login page (its #loginCard,
+       see initLoginPage()); anything else (gallery.html, ...) just isn't
+       wired up yet */
     if (document.getElementById("dashProgressAnchor")) initDashboardPage();
+    else if (document.getElementById("loginCard")) initLoginPage();
     return;
   }
 

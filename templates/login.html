@@ -17,61 +17,76 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/style.css?v=7" />
+  <link rel="stylesheet" href="css/style.css?v=8" />
 </head>
 <body class="mono">
 
-  <nav class="nav">
+  <!-- the nav is tagged with the exact same ids the landing page and student
+       dashboard use (nav.brand, box.themeBtn, nav.themeBtn.label, ...), so one
+       edit to the wordmark or the theme toggle applies on all three at once -
+       and the toggle here is the real thing, not a copy: js/theme.js's
+       delegated [data-theme-toggle] listener drives every instance on the
+       site through the same setTheme() -->
+  <nav class="nav" data-resize-id="box.nav">
     <div class="wrap nav-inner">
-      <a href="index.html" class="brand"><img src="assets/logo.png" class="brand-logo" alt="ECE Workshops" /> ECE Workshops</a>
+      <a href="index.html" class="brand" data-resize-id="box.brand"><img src="assets/logo.png" class="brand-logo"
+          data-resize-id="img.brand.nav" alt="ECE Workshops" /> <span data-edit-id="nav.brand">ECE Workshops</span></a>
       <div class="nav-links">
-        <a href="index.html#about">About</a>
-        <a href="index.html#schedule">Schedule</a>
+        <a href="index.html#about" data-edit-id="login.nav.link.about">About</a>
+        <a href="index.html#schedule" data-edit-id="login.nav.link.schedule">Schedule</a>
       </div>
       <div class="nav-right">
-        <button id="themeBtn" class="theme-btn" type="button" aria-label="Toggle theme">
-          <svg class="tic sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
-            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <circle cx="12" cy="12" r="4" />
-            <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
-          </svg>
-          <svg class="tic moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
-            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />
-          </svg>
-          <span class="tic-label"></span>
+        <button id="themeBtn" class="theme-btn" type="button" aria-label="Toggle theme" data-resize-id="box.themeBtn" data-theme-toggle="1">
+          <span class="tic-icon" data-resize-id="box.themeBtn.icon">
+            <svg class="tic sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="4" />
+              <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+            </svg>
+            <svg class="tic moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />
+            </svg>
+          </span>
+          <span class="tic-label" data-edit-id="nav.themeBtn.label">Light mode</span>
         </button>
-        <a class="nav-back" href="index.html">Home</a>
+        <a class="nav-back" href="index.html" data-edit-id="login.nav.home">Home</a>
       </div>
     </div>
   </nav>
 
   <main class="auth-wrap">
-    <div class="auth-card">
-      <h1>Welcome back :)</h1>
-      <p class="sub">Log in to get to your workshop dashboard.</p>
+    <!-- #loginCard is also this page's identity to the shared editor engine,
+         see currentPageKey() in js/main.js -->
+    <div class="auth-card" id="loginCard" data-resize-id="box.login.card">
+      <h1 data-edit-id="login.title">Welcome back :)</h1>
+      <p class="sub" data-edit-id="login.sub">Log in to get to your workshop dashboard.</p>
 
-      <!-- accounts removed for now, login goes straight in -->
-      <form id="loginForm">
-        <div class="field">
-          <label for="liUser">Username</label>
-          <input id="liUser" type="text" autocomplete="username" placeholder="the username you were given" />
-        </div>
-        <div class="field">
-          <label for="liPass">Password</label>
-          <input id="liPass" type="password" autocomplete="current-password" placeholder="and its password" />
-        </div>
-        <button class="btn btn-primary" type="submit">Log in</button>
-        <p class="form-msg" id="loginMsg"></p>
-      </form>
+      <!-- reserved space for the four placed login-page custom elements (see
+           app/db.py's _LOGIN_ENTRIES, js/main.js's applyElementAnchors()):
+           the two credential boxes, the submit button and the failure line
+           are real visual-editor elements now, movable/resizable/restylable
+           and deletable from the instructor portal's Visual editor > Login
+           page tab, so what used to be hardcoded <input>/<button>/<p> markup
+           here is these spacers instead - each one just keeps its element's
+           default spot reserved in normal document flow, exactly the way
+           #dashProgressAnchor does on the dashboard. Their heights are what
+           the old markup measured (see .login-anchor in css/style.css, which
+           is also where the editor-only taller error slot lives), so an
+           untouched page lays out identically to before. -->
+      <div class="login-anchor" id="loginUserAnchor" aria-hidden="true"></div>
+      <div class="login-anchor" id="loginPassAnchor" aria-hidden="true"></div>
+      <div class="login-anchor" id="loginSubmitAnchor" aria-hidden="true"></div>
+      <div class="login-anchor" id="loginErrorAnchor" aria-hidden="true"></div>
 
-      <p class="note auth-note">Access credentials are provided only to accepted participants. <a href="https://www.youtube.com/watch?v=dQw4w9WgXcQ" target="_blank" rel="noopener">Apply here.</a></p>
+      <p class="note auth-note" data-edit-id="login.note">Access credentials are provided only to accepted participants. <a href="https://www.youtube.com/watch?v=dQw4w9WgXcQ" target="_blank" rel="noopener">Apply here.</a></p>
     </div>
 
-    <p class="auth-legal"><a href="#">Privacy Policy</a> · <a href="#">Terms of Service</a></p>
+    <p class="auth-legal" data-edit-id="login.legal"><a href="#">Privacy Policy</a> · <a href="#">Terms of Service</a></p>
   </main>
 
   <script src="js/theme.js?v=3"></script>
-  <script src="js/login.js?v=3"></script>
+  <script src="js/main.js?v=9"></script>
+  <script src="js/login.js?v=4"></script>
 </body>
 </html>

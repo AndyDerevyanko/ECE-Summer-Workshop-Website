@@ -887,6 +887,134 @@ h1, h2, h3 {
 .form-msg.ok  { color: var(--good); }
 .form-msg.err { color: #ff6b6b; }
 
+/* ---------------------------------------------------------------------------
+   THE LOGIN PAGE'S PLACED ELEMENTS (js/main.js's buildCustomElementNode(),
+   kinds "loginField"/"loginButton"/"loginError"; app/db.py's _LOGIN_ENTRIES).
+
+   Deliberately identical to the .field/.btn-primary/.form-msg.err rules just
+   above, which is what the login form used to be built out of: turning the
+   form into visual-editor elements has to be a visual no-op on an untouched
+   site, exactly the bar the dashboard's progress-bar migration was held to.
+   Every one of these values is a default a ta's own saved override lands on
+   top of (see applySizeOverrides()/applyRadiusOverrides()/... in js/main.js),
+   never a fixed look.
+   --------------------------------------------------------------------------- */
+/* the four spacers in templates/login.html that hold the placed elements'
+   default slots open in normal document flow. Their heights are what the old
+   hardcoded .field/.btn/.form-msg markup measured, so an untouched card lays
+   out exactly as it did before any of this was editable. */
+.login-anchor { min-height: 74px; }
+#loginSubmitAnchor { min-height: 42px; margin-top: 4px; }
+#loginErrorAnchor { min-height: 20px; margin-top: 12px; }
+/* the failure line is always drawn in the editor, where a real visitor only
+   sees it when something went wrong - so the slot holds room for it there,
+   rather than letting it overlap the note underneath. One message's worth:
+   only ever one of its two strings is on show (see .login-error below). */
+body.edit-mode #loginErrorAnchor { min-height: 50px; }
+
+.login-field { position: relative; }
+.login-field-label {
+  display: block;
+  font-size: .82rem;
+  margin-bottom: 6px;
+  color: var(--muted);
+}
+/* "a regular rectangle with text in it": a plain tracked div, so the style
+   popover's radius/border/color/shadow rows all act on it with no special
+   casing anywhere in js */
+.login-field-box {
+  position: relative;
+  border-radius: 10px;
+  background: var(--surface-2);
+  transition: box-shadow .15s ease;
+}
+.login-field-box:focus-within {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+/* the real input, made visually transparent so the rectangle around it is
+   what a ta styles - the input keeps every behaviour that matters (masking,
+   autocomplete, autofill, ime) and contributes none of the look */
+.login-field-input {
+  display: block;
+  width: 100%;
+  padding: 12px 14px;
+  border: none;
+  border-radius: inherit;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: .95rem;
+}
+.login-field-input:focus { outline: none; }
+/* the greyed placeholder as a real editable text field laid over the input
+   rather than the input's own placeholder attribute - the only way it could
+   be reworded, recoloured, resized and moved like any other text on the site.
+   js/login.js's syncPlaceholder() hides it the moment something's typed. */
+.login-field-ph {
+  position: absolute;
+  left: 14px;
+  top: 12px;
+  pointer-events: none;
+  color: color-mix(in srgb, var(--muted) 70%, transparent);
+  font-size: .95rem;
+  line-height: 1.25;
+}
+.login-field-box.has-value .login-field-ph { display: none; }
+.login-submit { width: 100%; justify-content: center; }
+
+/* the failure line: invisible until something actually fails, and never
+   showing both of its two strings at once (see buildCustomElementNode()'s
+   "loginError" kind for why it carries both) */
+.login-error { font-size: .88rem; color: #ff6b6b; display: none; }
+.login-error.show { display: block; }
+.login-error .login-error-msg { display: none; }
+.login-error.show-bad [data-login-msg="bad"] { display: block; }
+.login-error.show-expired [data-login-msg="expired"] { display: block; }
+
+/* in the editor it's always there, or a ta would have no way to reach the
+   copy for a state the page isn't currently in - the same "keep it editable
+   even when a real visitor wouldn't see it" rule .extras-empty already
+   follows on the dashboard. ONE string at a time though, exactly like the
+   live page shows: two stacked red paragraphs read as two error messages the
+   page might really print, which it never does. Which one is on show is a
+   view toggle in the right-click menu (see renderCtxMenuRoot()), not a saved
+   setting - it only decides what a ta is currently looking at. */
+body.edit-mode .login-error { display: block; }
+body.edit-mode .login-error [data-login-msg="bad"] { display: block; }
+body.edit-mode .login-error [data-login-msg="expired"] { display: none; }
+body.edit-mode .login-error.edit-show-expired [data-login-msg="bad"] { display: none; }
+body.edit-mode .login-error.edit-show-expired [data-login-msg="expired"] { display: block; }
+/* and it wears the faint diagonal hazard hatching that says so: this is the
+   one element on the page that only ever appears when something has gone
+   wrong. Greyscale and barely-there on purpose - it's a marker over the
+   element, not a restyle of it - and editor-only, since on the live page it's
+   just an error message and stripes would be noise. */
+body.edit-mode .login-error { position: relative; }
+body.edit-mode .login-error::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  pointer-events: none;
+  border-radius: 4px;
+  background: repeating-linear-gradient(45deg,
+    rgba(128, 128, 128, .14) 0 5px,
+    rgba(128, 128, 128, 0) 5px 11px);
+}
+
+/* the input never eats a click in the editor: the rectangle around it and the
+   placeholder text over it are what a ta is aiming at, and a focused text
+   caret inside a real <input> would swallow the selection ring's own
+   mousedown entirely */
+body.edit-mode .login-field-input { pointer-events: none; }
+/* the placeholder is the opposite: it ignores the pointer on the live page
+   (clicking "the username you were given" has to focus the box underneath
+   it, the way a real placeholder does), but in the editor it's a text field
+   like any other and has to take the click itself, or the box behind it
+   swallows it and the one string on this page a ta is most likely to reword
+   would be unreachable */
+body.edit-mode .login-field-ph { pointer-events: auto; }
+
+
 /* tabs on auth card */
 .tabs { display: flex; gap: 6px; margin-bottom: 22px; background: var(--bg-2); padding: 5px; border-radius: 12px; }
 .tab {
@@ -949,22 +1077,28 @@ h1, h2, h3 {
   background: var(--accent);
 }
 
+/* the tile's BOX only: layout, padding and bounds. Its look (surface colour,
+   border, radius) lives entirely on the .day-tile-rect child below, exactly
+   the same split .extras-tile/.extras-tile-rect already uses. The card used
+   to paint an identical background/border of its own underneath the rect,
+   which meant moving/resizing/recolouring the rect left a second, unchanged
+   copy of the card's own surface sitting behind it. The border is kept as a
+   TRANSPARENT 1px so removing the paint is a pixel-exact no-op: the rect is
+   inset:0 against the padding box, so dropping the border outright would
+   shift it (and everything else in the card) by 1px on every side. */
 .day-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: var(--radius);
   padding: 22px;
   position: relative;
   overflow: hidden;
 }
 /* the rect layer a ta can independently select/restyle/delete, an absolute-
-   fill sibling kept separate from .day-card's own background/border/padding
-   (left untouched, same "dead code once the rect sibling paints over it"
-   technique as .extras-tile-rect) rather than baked into the card itself -
-   see js/dashboard.js's renderDays(). Shared by both the locked and open
-   templates (data-days-role="locked.rect"/"open.rect"), matches .day-card's
-   own default look 1:1 so adding it is a visual no-op until a ta restyles
-   one of the two roles. */
+   fill sibling kept separate from .day-card's own box (see above) rather than
+   baked into the card itself - see js/dashboard.js's renderDays(). Shared by
+   both the locked and open templates (data-days-role="locked.rect"/
+   "open.rect"), and now the ONLY thing painting a day tile's surface. */
 .day-tile-rect {
   position: absolute;
   inset: 0;
@@ -1088,7 +1222,8 @@ h1, h2, h3 {
 /* min-width:0 on both the tile and its filename is what lets this same
    template survive a container far narrower than the full-width "Extra
    attachments" column it was designed against - a day tile's own attachment
-   sub-area is a ~326px grid track (see .day-card below). Without it the tile
+   sub-area is only as wide as one .tile-flow track of the days grid, which a
+   ta can drag narrower still (see .tile-flow below). Without it the tile
    is a grid item at the default min-width:auto, so it refuses to shrink
    below the min-content width of icon + whole filename + whole button,
    overflows its track, and gets sliced off by .day-card's overflow:hidden -
@@ -1187,6 +1322,112 @@ h1, h2, h3 {
    shared-template rule requires. */
 .day-card .extras-tile { padding: 9px 12px; gap: 10px; }
 .day-card .extras-tile-btn { padding: 8px 12px; font-size: .8rem; }
+
+/* ---------------------------------------------------------------------------
+   the three tile containers (js/main.js's applyTileFlow()): the "Extra
+   attachments" area, "The days" area, and the attachments sub-area embedded in
+   each open day tile. One shared layout so all three answer a container resize
+   the same way, driven entirely by two custom properties a ta's own edits set:
+
+   --tile-w  the width one tile wants (a ta's saved tile resize), or 100% for
+             "one tile per row" - the default for the two attachment lists.
+   --tile-h  the height one tile wants, applied as a min-height so every tile
+             in a row matches whichever is tallest, never as a hard height.
+
+   auto-fill + minmax is what makes the reflow automatic: the number of columns
+   is a pure function of the container's current width, so dragging a container
+   narrower repacks the tiles (fewer per row) and dragging a tile narrower
+   packs more of them per row, with no js measuring anything. min(...,100%) is
+   the "either the tile becomes thinner" half of the spec rule - a track never
+   demands more than the container has, so a tile squeezes rather than bleeding
+   out of its box; js/main.js's flowAreaMinWidth() supplies the other half,
+   stopping the container's own resize once the tiles cannot squeeze further.
+   --------------------------------------------------------------------------- */
+.tile-flow {
+  display: grid;
+  gap: var(--tile-gap, 10px);
+  align-content: start;
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--tile-w, 100%), 100%), 1fr));
+}
+/* a non-tile child of a flow container (the "nothing here yet" placeholder)
+   spans the whole row instead of taking a tile's column */
+.tile-flow > .tile-flow-full { grid-column: 1 / -1; }
+.tile-flow > [data-days-tile],
+.tile-flow > [data-extras-tile] {
+  min-width: 0;
+  min-height: var(--tile-h, auto);
+}
+/* an unlocked axis means "grow to fit the content" (see areaFlowFor()): on x
+   that's one single row of tiles at their own width, with the container itself
+   sized to whatever that comes to, rather than a wrapping grid inside a fixed
+   width. --tile-wa is the same tile width as --tile-w but expressed so it
+   still means something without a definite container width to resolve against
+   (max-content instead of 100%). */
+.tile-flow.flow-x-expand {
+  width: max-content;
+  grid-template-columns: none;
+  grid-auto-flow: column;
+  grid-auto-columns: var(--tile-wa, max-content);
+}
+/* a locked axis is the opposite promise: the container keeps its size and the
+   tiles live within it, so anything that still doesn't fit scrolls instead of
+   bleeding out. (Per css, one auto axis forces the other out of `visible`
+   anyway - harmless here, an unlocked axis is sized to its content so it has
+   nothing to scroll.) */
+.tile-flow.flow-x-lock { overflow-x: auto; }
+.tile-flow.flow-y-lock { overflow-y: auto; }
+
+/* ---------------------------------------------------------------------------
+   TILE STACKING (js/main.js's areaFlowFor()/applyTileFlow(), right-click >
+   Container). A ta picks which axis the tiles run along, which way along it,
+   and which side a full line overflows to - the flexbox model, because that
+   IS the model being asked for ("think flex direction").
+
+   Only the default combination (tiles left-to-right, overflowing downwards)
+   stays on the grid above; every other one adds .tile-flex and switches the
+   container to flexbox. Grid has no row-reverse and no wrap-reverse, so the
+   other seven combinations simply aren't expressible in it without flipping
+   the container with a transform - which would collide head-on with the
+   editor's own transform-based move/resize (see setOwnPos()/paintPos()).
+   Keeping the default on grid means nothing that already shipped re-lays-out:
+   auto-fill's "as many equal tracks as fit, stretched to fill the row" and
+   flexbox's "as many as fit at their own width" differ on a part-full last
+   line, and that difference should only ever appear for a ta who went and
+   asked for a different stacking.
+
+   All three containers (both dashboard areas and the attachments sub-area
+   inside a day card) share this, same as they share the grid above. */
+.tile-flow.tile-flex {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+}
+.tile-flow.tile-flex > [data-days-tile],
+.tile-flow.tile-flex > [data-extras-tile] {
+  /* a fixed basis, never flex-grow: a tile is the size the ta dragged it to
+     (--tile-w, or 100% for the one-per-line default), and growing a lone
+     trailing tile to fill its whole line is exactly the surprise this path
+     exists to avoid */
+  flex: 0 0 auto;
+  width: var(--tile-w, 100%);
+  max-width: 100%;
+  min-width: 0;
+  min-height: var(--tile-h, auto);
+}
+/* the "nothing here yet" placeholder spans a full line here too (grid-column
+   above means nothing to a flex container) */
+.tile-flow.tile-flex > .tile-flow-full { flex: 1 1 100%; width: 100%; }
+.tile-flow.tile-flex.flow-dir-row-reverse { flex-direction: row-reverse; }
+/* running down a column needs a definite height to wrap AT, which is what a
+   locked y axis gives it (see areaFlowFor()); with y expanding there's
+   nothing to overflow, so the tiles just stack into one long column - the
+   same way an expanding x axis means one long row */
+.tile-flow.tile-flex.flow-dir-column { flex-direction: column; }
+.tile-flow.tile-flex.flow-dir-column-reverse { flex-direction: column-reverse; }
+.tile-flow.tile-flex.flow-wrap-reverse { flex-wrap: wrap-reverse; }
+/* an expanding x axis is still "one line, container sized to it" here, same
+   promise as the grid rule above makes */
+.tile-flow.tile-flex.flow-x-expand { width: max-content; }
 
 /* the section's always-in-DOM (see the "always editable" requirement)
    "nothing here yet" text: a standalone callout, not a plain paragraph, so
@@ -1597,6 +1838,21 @@ body.edit-mode [data-resize-id].edit-link.edit-fixed {
   outline-color: orange;
 }
 
+/* one of the login page's own three element kinds (see
+   buildCustomElementNode()'s "loginField"/"loginButton"/"loginError"), and
+   the input rectangle inside a credential box: violet instead of the default
+   accent, the same "this one is wired up to something, it isn't just a shape"
+   signal .edit-fixed and .edit-link already give. These are the elements that
+   actually collect and post credentials, so a ta can tell at a glance which
+   box on the card is the real one and which is decoration they added. The
+   text nested inside them (label, placeholder, button label) deliberately
+   keeps the normal accent colour, since that part IS just ordinary editable
+   text. */
+body.edit-mode [data-resize-id][data-login-el],
+body.edit-mode [data-resize-id][data-login-fixed] {
+  outline-color: #a06bff;
+}
+
 /* an element locked against moving (right-click > Lock element, see
    toggleLocked()/applyLockHighlight() in js/main.js): grey instead of
    whatever color it'd otherwise be, so a locked element reads as
@@ -1714,6 +1970,40 @@ body.edit-mode .apply-bob { animation: none; }
    Everything else about them - move, resize, colour, rounding, text - stays
    available, so only the trash handle goes, not the whole ring. */
 .sel-ring.undeletable .delh { display: none; }
+
+/* a day/attachment tile box (see isTileBoxEl() in js/main.js): freely
+   resizable - that's how a ta re-tiles the container around it - but never
+   movable, since a tile's position IS its container's packing order. Same
+   hidden-outright treatment as .reel-tile above, for the same reason: it's a
+   structural fact about the element, not a per-element toggle. */
+.sel-ring.tile-box .mvh { display: none; }
+
+/* one "select the container around this" handle, inset into the top-centre
+   (move/delete take the top corners): the only way to reach an element that
+   is entirely covered by its own contents - a tile under its rect/icon/text,
+   or a flow container under its tiles - since a click there always lands on
+   whatever is painted on top. Only rendered when there IS an enclosing
+   tracked element, see parentSelectableOf()/positionRing() in js/main.js. */
+.sel-ring .parh {
+  position: absolute;
+  left: 50%;
+  top: 3px;
+  margin-left: -8.5px;
+  width: 17px;
+  height: 17px;
+  border-radius: 4px;
+  background: var(--surface, #222);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.sel-ring.has-parent .parh { display: flex; }
+.sel-ring .parh svg { width: 11px; height: 11px; }
+.sel-ring .parh:hover { background: var(--accent); color: #fff; }
 
 /* delete handle, inset into the top-right corner (move handle mirrors it
    top-left) so it stays reachable even on an element flush against the

@@ -19,12 +19,13 @@ function gateCheck() {
 var TAB_PAGES = {
   landing: "index.html?preview=1",
   dashboard: "dashboard.html?preview=1",
+  login: "login.html?preview=1",
   gallery: "gallery.html?preview=1"
 };
 
 /**
  * Points the iframe at the given tab's page and marks it active.
- * @param name "landing", "dashboard", or "gallery"
+ * @param name "landing", "dashboard", "login", or "gallery"
  */
 function showTab(name) {
   if (!TAB_PAGES[name]) name = "landing";

@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/style.css?v=15" />
+  <link rel="stylesheet" href="css/style.css?v=16" />
 </head>
 <body class="mono">
 
@@ -298,6 +298,17 @@
                   <span class="ed-switch-text" id="edNavStateText">Signed out</span>
                 </button>
               </div>
+              <!-- which half of the student dashboard the editor is showing:
+                   the dashboard itself, or the "You need to log in" page a
+                   visitor without a session gets. Dashboard tab only, same as
+                   the navbar switch above - ta.js hides this row elsewhere. -->
+              <div class="ed-switch-row" id="edDashViewRow" hidden>
+                <span class="ed-switch-cap">Page</span>
+                <button class="ed-switch" id="edDashView" type="button" role="switch" aria-checked="false">
+                  <span class="ed-switch-track"><span class="ed-switch-knob"></span></span>
+                  <span class="ed-switch-text" id="edDashViewText">Dashboard</span>
+                </button>
+              </div>
             </div>
             <div class="ed-undo-row">
               <button class="btn btn-ghost" id="edUndo" type="button" disabled>Undo</button>
@@ -321,6 +332,6 @@
 
   <script src="js/theme.js?v=3"></script>
   <script src="js/idle.js?v=3"></script>
-  <script src="js/ta.js?v=8"></script>
+  <script src="js/ta.js?v=9"></script>
 </body>
 </html>

@@ -1554,6 +1554,13 @@ body.edit-mode .extras-empty.has-attachments {
   text-align: center;
 }
 
+/* the student dashboard ships two pages in one file - the real dashboard and
+   the gate above - and only one is in the document at a time (see
+   applyDashView() in js/main.js, and the pair in templates/dashboard.html).
+   Same deal as .nav-state-off: out of the document, not merely invisible, so
+   the one on show sits exactly where a page of its own would. */
+.dash-view-off { display: none !important; }
+
 /* ---------- ta portal ---------- */
 .ta-panel, .ta-card {
   background: var(--surface);
@@ -1751,10 +1758,12 @@ body.edit-mode .extras-empty.has-attachments {
 /* a sliding on/off switch for the editor's own chrome: a rounded track with a
    knob that travels left to right, plus a caption naming what it switches and
    a label reading out the state it's currently in. Used for the landing page's
-   navbar state (js/ta.js's syncNavStateSwitch()), which is a view toggle - not
-   a saved setting - so it deliberately doesn't look like the save/apply
-   buttons next to it. `display: flex` would beat the [hidden] attribute's
-   display: none on its own, hence the explicit rule. */
+   navbar state (js/ta.js's syncNavStateSwitch()) and the dashboard's
+   dashboard/locked-out page (syncDashViewSwitch()), each of which is a view
+   toggle - not a saved setting - so it deliberately doesn't look like the
+   save/apply buttons next to it. Only one is ever shown at a time, since each
+   belongs to a single page tab. `display: flex` would beat the [hidden]
+   attribute's display: none on its own, hence the explicit rule. */
 .ed-switch-row { display: flex; align-items: center; gap: 8px; }
 .ed-switch-row[hidden] { display: none; }
 .ed-switch-cap {

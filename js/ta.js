@@ -1362,6 +1362,7 @@ function showEditorSubTab(name) {
     btn.classList.toggle("active", btn.getAttribute("data-tab") === name);
   });
   syncNavStateSwitch();
+  syncDashViewSwitch();
 }
 
 /* ---------------------------------------------------------------------------
@@ -1428,6 +1429,62 @@ function pushNavStateToFrame() {
   if (editorNavState !== "in") return;
   var win = editorFrameWindow();
   try { if (win && win.applyNavState) win.applyNavState("in"); } catch (e) {}
+}
+
+/* ---------------------------------------------------------------------------
+   THE STUDENT DASHBOARD'S PAGE SWITCH
+
+   The dashboard is two pages in one file - the dashboard itself and the "You
+   need to log in" page a visitor with no session gets - and only one is in the
+   document at a time (js/main.js's applyDashView()). A ta is always signed in
+   while they're editing, so the locked-out half would otherwise be unreachable
+   in the editor, exactly the dead end the signed-in navbar used to be in. Same
+   switch, same reasons for living out here in the portal chrome rather than in
+   the iframe, same "view state, never saved" rule: what a real student gets is
+   decided by whether they're actually logged in.
+   --------------------------------------------------------------------------- */
+
+/* which half of the dashboard the editor is showing, "app" or "gate" */
+var editorDashView = "app";
+
+/**
+ * Redraws the switch from editorDashView, and shows it only on the dashboard
+ * tab - it's the only page with two halves like this.
+ */
+function syncDashViewSwitch() {
+  var row = document.getElementById("edDashViewRow");
+  var sw = document.getElementById("edDashView");
+  if (!row || !sw) return;
+  row.hidden = editorSubTab !== "dashboard";
+  var on = editorDashView === "gate";
+  sw.setAttribute("aria-checked", on ? "true" : "false");
+  document.getElementById("edDashViewText").textContent = on ? "Locked out" : "Dashboard";
+  sw.title = on
+    ? "Editing the page a visitor without a login sees. Switch off to edit the dashboard itself."
+    : "Editing the dashboard itself. Switch on to edit the page a visitor without a login sees.";
+}
+
+/** Flips which half of the dashboard the editor's iframe is showing (the switch next to the page tabs). */
+function toggleEditorDashView() {
+  var win = editorFrameWindow();
+  /* let the iframe do the flipping - it also has to move the selection ring off
+     whatever just left the page and re-pin anchored elements */
+  try { if (win && win.toggleDashView) win.toggleDashView(); } catch (e) {}
+  editorDashView = editorDashView === "gate" ? "app" : "gate";
+  syncDashViewSwitch();
+}
+
+/**
+ * Re-asserts the switch onto a freshly (re)loaded editor iframe, which always
+ * starts on the dashboard itself. Runs on the frame's load event for the same
+ * reason pushNavStateToFrame() does - before the content fetch inside it
+ * resolves, so the override pipeline in there applies saved geometry with the
+ * state already correct.
+ */
+function pushDashViewToFrame() {
+  if (editorDashView !== "gate") return;
+  var win = editorFrameWindow();
+  try { if (win && win.applyDashView) win.applyDashView("gate"); } catch (e) {}
 }
 
 /**
@@ -2208,6 +2265,11 @@ document.addEventListener("DOMContentLoaded", function () {
   document.getElementById("edNavState").addEventListener("click", toggleEditorNavState);
   document.getElementById("edFrame").addEventListener("load", pushNavStateToFrame);
   syncNavStateSwitch();
+
+  /* the dashboard's dashboard/locked-out page switch */
+  document.getElementById("edDashView").addEventListener("click", toggleEditorDashView);
+  document.getElementById("edFrame").addEventListener("load", pushDashViewToFrame);
+  syncDashViewSwitch();
 
   document.getElementById("edFullscreen").addEventListener("click", toggleEditorFullscreen);
   document.addEventListener("keydown", function (e) {

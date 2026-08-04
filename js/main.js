@@ -3827,6 +3827,56 @@ function applyBorderOverrides(border, darkBorder) {
   });
 }
 
+/* the width an empty progress bar is previewed at, as a percentage, and the
+   one element (if any) currently showing that preview.
+
+   A bar whose bound variables come to zero paints no fill at all, so its fill
+   colour - very often the exact thing a ta selected it to look at or change -
+   is invisible precisely when they're looking at it. So while it's the
+   selected element in the visual editor, an empty bar is drawn part-filled.
+   Editor-only and never persisted, same deal as the style popover's own
+   hover preview (see wireProgressFillHoverPreview(), which forces the same
+   width so hovering the colour swatch doesn't make the bar jump): the real
+   percentage stays on the fill bar's dataset throughout, and the moment the
+   selection moves on the bar is repainted from it. */
+var PROGRESS_PREVIEW_PCT = 60;
+var PROGRESS_PREVIEW_EL = null;
+
+/**
+ * The width one progress bar's fill should actually be painted at: its real
+ * percentage, or the preview width while it's selected and empty. Everything
+ * that writes a fill width goes through this, so a repaint that lands
+ * mid-preview - a colour edit, a theme flip, a rebind - can't quietly drop the
+ * bar back to an invisible 0%.
+ * @param fillEl the bar's inner .progress-el-fill
+ * @return the width to paint, as a percentage number
+ */
+function progressFillWidthFor(fillEl) {
+  var pct = +(fillEl.dataset.pct || 0);
+  /* only a genuinely empty bar is previewed: the moment its variables read
+     anything at all, what a ta is looking at has to be the real figure */
+  if (pct > 0 || !PROGRESS_PREVIEW_EL || !PROGRESS_PREVIEW_EL.contains(fillEl)) return pct;
+  return PROGRESS_PREVIEW_PCT;
+}
+
+/**
+ * Moves the empty-bar preview onto whatever the selection ring is on now
+ * (nothing, if that isn't a progress element) and repaints the bar losing it
+ * and the bar gaining it. Called from positionRing(), so every path that
+ * changes the selection - a click, the links view's reveal, the ring's own
+ * parent handle, a delete, clicking empty space - keeps this right for free.
+ */
+function syncProgressPreview() {
+  var el = RING_EL && RING_EL.hasAttribute && RING_EL.hasAttribute("data-progress") ? RING_EL : null;
+  if (el === PROGRESS_PREVIEW_EL) return;
+  var prev = PROGRESS_PREVIEW_EL;
+  PROGRESS_PREVIEW_EL = el;
+  [prev, el].forEach(function (bar) {
+    var fillEl = bar && bar.querySelector(".progress-el-fill");
+    if (fillEl) fillEl.style.width = progressFillWidthFor(fillEl) + "%";
+  });
+}
+
 /**
  * Paints one "progress" element's live fill width (off its two bound
  * variables, VARIABLES/variableNumericValue()) and its two theme-paired
@@ -3845,12 +3895,15 @@ function paintProgressElement(el, d) {
   var pct = tot > 0 ? Math.max(0, Math.min(100, (cur / tot) * 100)) : 0;
   var fillEl = el.querySelector(".progress-el-fill");
   if (fillEl) {
-    /* stashed on the fill bar itself (not just computed on demand) so the
-       style popover's fill-color hover preview (see buildStyleMenu()) can
-       restore the real width after temporarily forcing a visible one,
-       without having to re-run this whole calc just to leave preview mode */
+    /* stashed on the fill bar itself (not just computed on demand) so the two
+       preview paths (the style popover's fill-color hover preview, see
+       buildStyleMenu(), and the selected-and-empty one, see
+       progressFillWidthFor()) can restore the real width after temporarily
+       forcing a visible one, without having to re-run this whole calc just to
+       leave preview mode - and so this pass can tell whether the bar it's
+       repainting is one of them */
     fillEl.dataset.pct = pct;
-    fillEl.style.width = pct + "%";
+    fillEl.style.width = progressFillWidthFor(fillEl) + "%";
   }
   var trackColor = resolveThemedColor(THEMED_OVERRIDE_MAPS.progressTrack[id], THEMED_OVERRIDE_MAPS.darkProgressTrack[id]);
   if (trackColor) el.style.background = trackColor;
@@ -4458,23 +4511,25 @@ function buildStyleMenu() {
 
   /**
    * Previews the progress bar's fill at a visible, non-zero width while a ta
-   * is choosing its color - at 0% (or a low %) the color swatch's own
-   * choice is otherwise invisible on the actual bar, exactly the gap the
-   * "let a ta see the fill color in action" ask calls out. Purely a visual
-   * preview: the real width (stashed on the fill bar's own dataset by
-   * paintProgressElement()) is restored on mouseleave, no data changes.
+   * is choosing its color - at a low (but non-zero) % the color swatch's own
+   * choice is otherwise invisible on the actual bar. An empty bar is already
+   * being previewed at this exact width just for being selected (see
+   * progressFillWidthFor()), so hovering the swatch doesn't make it jump.
+   * Purely a visual preview: the real width (stashed on the fill bar's own
+   * dataset by paintProgressElement()) is restored on mouseleave, no data
+   * changes.
    * @param input the row's own <input type=color> (light or dark side)
    */
   function wireProgressFillHoverPreview(input) {
     input.addEventListener("mouseenter", function () {
       var el = STYLE_MENU_ID && styleMenuElById(STYLE_MENU_ID);
       var fillEl = el && el.querySelector(".progress-el-fill");
-      if (fillEl) fillEl.style.width = "60%";
+      if (fillEl) fillEl.style.width = PROGRESS_PREVIEW_PCT + "%";
     });
     input.addEventListener("mouseleave", function () {
       var el = STYLE_MENU_ID && styleMenuElById(STYLE_MENU_ID);
       var fillEl = el && el.querySelector(".progress-el-fill");
-      if (fillEl) fillEl.style.width = (fillEl.dataset.pct || 0) + "%";
+      if (fillEl) fillEl.style.width = progressFillWidthFor(fillEl) + "%";
     });
   }
   wireProgressFillHoverPreview(progressFillInput);
@@ -5965,6 +6020,11 @@ function hideStyleMenu() {
  * (see isLocked()/startMoveDrag()).
  */
 function positionRing() {
+  /* the selection may have just changed (this runs on every path that changes
+     it, including the ones that clear it), and an empty progress bar shows a
+     preview fill only while it's the selected element - see
+     syncProgressPreview(), which no-ops unless the selection really moved */
+  syncProgressPreview();
   if (!RING || !RING_EL) return;
   var r = RING_EL.getBoundingClientRect();
   RING.style.display = "";
@@ -6601,6 +6661,8 @@ function deleteElement(el) {
   hideTextToolbar();
   RING_EL = null;
   if (RING) RING.style.display = "none";
+  /* nothing is selected any more, so nothing is being previewed either */
+  syncProgressPreview();
 }
 
 /* every group of ids a ta has tied together (right-click > "Group N
@@ -7822,6 +7884,18 @@ function freezeFreeElement(el) {
 function buildCustomElement(d) {
   var el = buildCustomElementNode(d);
   placeFreeElement(el, d.left, d.top);
+  /* the student dashboard is two pages in one file (see applyDashView()), so
+     a free-placed element there belongs to one of them: whichever half was on
+     show when it was placed, defaulting to the dashboard itself - which is
+     where everything placed before the locked-out page became editable
+     belongs, the seeded progress bar and the two tile areas included. Without
+     this they'd all float over the gate, and pinned to 0,0 at that, since the
+     in-flow spacers they anchor to measure nothing while #dashApp is out of
+     the document. A bound child (see buildReelElement()) needs none of this:
+     it lives inside its tile and follows it. */
+  if (currentPageKey() === "dashboard") {
+    el.parentNode.setAttribute("data-dash-view", d.dashView === "gate" ? "gate" : "app");
+  }
   if (d.w) { el.style.width = d.w + "px"; el.dataset.natW = d.w; }
   /* extrasArea/daysArea (and galleryDirArea) are always auto-height, sized
      by whatever tiles js/dashboard.js's renderExtras()/renderDays() paint
@@ -8574,6 +8648,13 @@ function renderCustomElements(list) {
  * next to initAllReels() in fetchContent()'s success handler.
  */
 function applyElementAnchors() {
+  /* every position below is a document coordinate read off a live spacer, so
+     this can't run while a two-state page has both of its states in flow at
+     once - the spare half is above these spacers and pushes them down by its
+     own full height, which would pin the reel (or the dashboard's progress bar
+     and tile areas) that far down the page. Deferred to the moment the layout
+     is the real one again, see withStateViewsLaidOut(). */
+  if (STATE_VIEWS_LAID_OUT) { ANCHOR_PASS_PENDING = true; return; }
   CUSTOM_ELEMENTS.forEach(function (d) {
     if (!d.anchor) return;
     var anchor = document.querySelector(d.anchor);
@@ -8984,9 +9065,10 @@ var EDITOR_CLIP_KEY = "editor_clipboard";
  *   same reason buildDuplicateClone() strips them
  * - the editor-only outline classes, which are recomputed per page anyway
  * - contenteditable, in case the source was mid-edit when it was copied
- * - data-nav-state, which marks an element as belonging to one of the landing
- *   page's two navbars (see applyNavState()) - on any other page nothing ever
- *   flips that state back on, so a copy carrying it in could arrive hidden
+ * - data-nav-state/data-dash-view, which mark an element as belonging to one
+ *   state of a two-state page (see applyNavState()/applyDashView()) - on any
+ *   other page nothing ever flips that state back on, so a copy carrying one
+ *   in could arrive hidden
  * - the ROOT's own data-ov-tx/ovTy (its record of having been dragged): the
  *   paste is placed wherever it's dropped, not wherever the source was pushed
  *   to. Kept on everything below the root, where an offset is a real part of
@@ -9000,7 +9082,8 @@ function stripClipAttrs(root) {
     el.removeAttribute("id");
     el.removeAttribute("contenteditable");
     el.removeAttribute("data-nav-state");
-    el.classList.remove("edit-fixed", "edit-link", "edit-locked", "nav-state-off");
+    el.removeAttribute("data-dash-view");
+    el.classList.remove("edit-fixed", "edit-link", "edit-locked", "nav-state-off", "dash-view-off");
   });
   delete root.dataset.ovTx;
   delete root.dataset.ovTy;
@@ -9383,6 +9466,10 @@ function addCustomElement(kind, x, y, extra) {
      whose glyph is resolved per tile, see buildCustomElementNode() */
   var prefix = kind === "icon" ? "icon.custom." : kind === "extrasIcon" ? "icon.extras." : "custom." + kind + ".";
   var d = { id: prefix + uid, kind: kind, page: currentPageKey(), left: Math.round(x), top: Math.round(y) };
+  /* on the dashboard, WHICH of its two pages this was placed on (see
+     applyDashView()); anywhere else the page has only one and this stays off
+     the descriptor entirely */
+  if (currentPageKey() === "dashboard" && dashView() === "gate") d.dashView = "gate";
   if (kind === "icon") { d.icon = extra.icon; d.url = extra.url; }
   if (kind === "image" || kind === "video") d.url = extra.url;
   /* which credential this box collects, picked before placing (the right-
@@ -11450,6 +11537,9 @@ function wireResizable() {
           (!FX_MENU || !FX_MENU.contains(e.target))) {
         RING_EL = null;
         RING.style.display = "none";
+        /* and with the selection gone, so is any preview that only existed
+           for it, see syncProgressPreview() */
+        syncProgressPreview();
         /* the grouping queue goes with it: it only ever exists relative to a
            live selection, see toggleSelected() */
         if (SELECTED_IDS.length) clearSelection();
@@ -13966,25 +14056,82 @@ function navStateIsIn() { return NAV_STATE === "in"; }
 function applyNavState(state) {
   NAV_STATE = state === "in" ? "in" : "out";
   document.querySelectorAll("[data-nav-state]").forEach(function (el) {
-    el.classList.toggle("nav-state-off", el.getAttribute("data-nav-state") !== NAV_STATE);
+    setStateViewOff(el, "nav-state-off", el.getAttribute("data-nav-state") !== NAV_STATE);
   });
 }
 
 /**
- * Runs fn with BOTH navbars in the document, then puts the inactive one back.
- * The whole override pipeline measures elements as it applies saved geometry
- * (detachFromFlow() sizes an element's wrap from its live rect), and an
- * element inside a display:none navbar measures zero - so a size or position a
+ * Takes one half of a two-state page out of the document, or puts it back -
+ * the one primitive behind applyNavState() and applyDashView().
+ *
+ * Follows the element out of flow if a ta has moved or resized it: once
+ * detached it's the .free-wrap around it that holds its place in the document
+ * (see detachFromFlow()), so hiding the element alone would leave that wrap
+ * behind as an empty gap the exact size of whatever just left. The class comes
+ * off both either way before anything is added back, so the pair can't end up
+ * half-hidden when a detach happens between two of these passes.
+ * @param el the element carrying the state marker
+ * @param cls the state's own "off" class (see STATE_VIEW_OFF_CLASSES)
+ * @param off true to take it out of the document, false to put it back
+ */
+function setStateViewOff(el, cls, off) {
+  var parent = el.parentNode;
+  var wrap = parent && parent.classList && parent.classList.contains("free-wrap") ? parent : null;
+  el.classList.remove(cls);
+  if (wrap) wrap.classList.remove(cls);
+  if (off) (wrap || el).classList.add(cls);
+}
+
+/* every class that takes one state's markup right out of the document while
+   its counterpart is on show: the landing page's two navbars, and the student
+   dashboard's gate/app pair (see applyDashView()) */
+var STATE_VIEW_OFF_CLASSES = ["nav-state-off", "dash-view-off"];
+
+/* true only while withStateViewsLaidOut() has both sides of a two-state page
+   in the document at once, and true again once an anchor pass has been asked
+   for during that window - see applyElementAnchors() for what the pair is for */
+var STATE_VIEWS_LAID_OUT = false;
+var ANCHOR_PASS_PENDING = false;
+
+/**
+ * Runs fn with BOTH sides of every two-state page in the document, then puts
+ * the inactive ones back. The whole override pipeline measures elements as it
+ * applies saved geometry (detachFromFlow() sizes an element's wrap from its
+ * live rect), and an element inside a display:none navbar - or inside the
+ * dashboard half that isn't on show - measures zero, so a size or position a
  * ta saved in one state would come back as a 0x0 box on any load that starts
  * in the other one. Laying both out for the duration is the fix, and it costs
  * nothing visually: this is one synchronous block, so the browser never paints
- * the two-navbar intermediate state.
+ * the intermediate both-at-once state.
+ *
+ * What it does cost is that the extra half is REAL flow while it's in there,
+ * pushing everything below it down - by a navbar's height on the landing page,
+ * by most of a screen on the dashboard, whose locked-out page is a full card.
+ * Every measurement the pipeline takes is a width or a height, which that
+ * shift doesn't touch; the one pass that reads document COORDINATES is
+ * applyElementAnchors(), so it sits out this window and runs once at the end
+ * instead, against the layout a visitor actually gets.
  * @param fn the work to run
  */
-function withNavbarsLaidOut(fn) {
-  var off = Array.prototype.slice.call(document.querySelectorAll(".nav-state-off"));
-  off.forEach(function (el) { el.classList.remove("nav-state-off"); });
-  try { fn(); } finally { off.forEach(function (el) { el.classList.add("nav-state-off"); }); }
+function withStateViewsLaidOut(fn) {
+  var off = [];
+  STATE_VIEW_OFF_CLASSES.forEach(function (cls) {
+    document.querySelectorAll("." + cls).forEach(function (el) {
+      off.push({ el: el, cls: cls });
+      el.classList.remove(cls);
+    });
+  });
+  STATE_VIEWS_LAID_OUT = true;
+  try {
+    fn();
+  } finally {
+    STATE_VIEWS_LAID_OUT = false;
+    off.forEach(function (o) { o.el.classList.add(o.cls); });
+    if (ANCHOR_PASS_PENDING) {
+      ANCHOR_PASS_PENDING = false;
+      applyElementAnchors();
+    }
+  }
 }
 
 /**
@@ -14043,6 +14190,97 @@ function applyNavSessionState() {
   });
 }
 
+/* ---------------------------------------------------------------------------
+   THE STUDENT DASHBOARD'S TWO PAGES
+
+   templates/dashboard.html carries two pages, exactly one of which is ever in
+   the document: the dashboard itself (#dashApp) and the locked-out page a
+   visitor with no session gets (#dashGate, "You need to log in"). On a real
+   visit js/dashboard.js's gateCheck() picks; in the visual editor the ta
+   always has a session, so the gate could never be looked at, let alone
+   styled - same dead end the landing page's signed-in navbar used to be in,
+   and fixed the same way: a switch beside the portal's page tabs (js/ta.js's
+   syncDashViewSwitch()) says which half the editor is showing.
+
+   Both halves are ordinary tagged markup, so the gate's badge, heading, blurb
+   and button are click-to-edit and resizable like anything else. Placed
+   elements are split too, by the half that was on show when they were placed
+   (see buildCustomElement()/addCustomElement()) - they have to be, since the
+   dashboard's own progress bar and two tile areas ARE placed elements and
+   would otherwise float over the locked-out page.
+   --------------------------------------------------------------------------- */
+
+/* which half of the dashboard is in the document flow: "app" or "gate".
+   Decided by the session on a real visit (gateCheck()), and by hand in the
+   visual editor. Editor-only view state, never saved: what a real student
+   sees is decided by whether they're actually logged in. */
+var DASH_VIEW = "app";
+
+/**
+ * Shows one half of the dashboard page and takes the other out of the
+ * document. Toggles a class rather than writing an inline display for the
+ * same reason applyNavState() does: it can't then fight - or be silently
+ * undone by - the inline display a deleted element already carries (see
+ * setHiddenVisual()).
+ *
+ * Also called from the portal across the iframe boundary on every editor
+ * frame load, to put back the view its switch was left on (js/ta.js's
+ * pushDashViewToFrame()) - a reload here always starts on the dashboard.
+ * @param view "app" or "gate"
+ */
+function applyDashView(view) {
+  DASH_VIEW = view === "gate" ? "gate" : "app";
+  document.querySelectorAll("[data-dash-view]").forEach(function (el) {
+    setStateViewOff(el, "dash-view-off", el.getAttribute("data-dash-view") !== DASH_VIEW);
+  });
+}
+
+/** @return the dashboard half the page is currently showing, "app" or "gate" */
+function dashView() { return DASH_VIEW; }
+
+/**
+ * Picks the half of the dashboard this visit should see - the session's job
+ * on a real visit, the editor's switch in the portal - exactly as
+ * applyNavSessionState() picks the navbar, and called from the same two
+ * places for the same reasons: once from js/dashboard.js's gateCheck() on
+ * DOMContentLoaded, so the right half is up before the content fetch
+ * resolves, and again after every override pass, since a placed element only
+ * carries its data-dash-view marker once renderCustomElements() has rebuilt
+ * it. A no-op on every page that isn't the dashboard.
+ */
+function applyDashSessionState() {
+  if (!document.querySelector("[data-dash-view]")) return;
+  if (isPreviewMode()) {
+    /* previewing isn't a real visit, and a ta is signed in on every one of
+       them - leaving the session to decide here would make the locked-out
+       page unreachable in the editor. What's on show stays whatever the
+       portal's own Page switch last chose (js/ta.js's toggleEditorDashView()),
+       same as the navbar switch one function up. */
+    applyDashView(DASH_VIEW);
+    return;
+  }
+  applyDashView(localStorage.getItem("session") ? "app" : "gate");
+}
+
+/**
+ * Flips which half of the dashboard the visual editor is showing (and
+ * therefore editing), driven from the Page switch beside the portal's page
+ * tabs (js/ta.js's toggleEditorDashView()). The dashboard tab's exact
+ * counterpart to toggleNavState(), down to the selection and re-anchor
+ * handling - the two halves are wildly different heights, so anything pinned
+ * to an in-flow spacer has to re-pin here or it lands on top of the gate.
+ */
+function toggleDashView() {
+  applyDashView(DASH_VIEW === "gate" ? "app" : "gate");
+  /* the selection can't stay parked on something that just left the page */
+  if (RING_EL && RING_EL.closest && RING_EL.closest(".dash-view-off")) {
+    RING_EL = null;
+    RING.style.display = "none";
+  }
+  positionRing();
+  applyElementAnchors();
+}
+
 /**
  * Wires the three nav buttons' actual behaviour. Delegated off document and
  * keyed on data-nav-el rather than on an id or an href, so a button a ta
@@ -14089,12 +14327,13 @@ wireNavButtons();
  */
 function applySharedEditorOverrides(data, textMap) {
   /* every pass below that applies saved geometry measures the element it's
-     applying to, and the landing page keeps one of its two navbars out of the
-     document - so the whole pipeline runs with both of them laid out and the
-     inactive one is put back at the end, see withNavbarsLaidOut(). A no-op on
-     every other page. */
-  withNavbarsLaidOut(function () { applySharedOverridePasses(data, textMap); });
+     applying to, and a two-state page keeps one of its two states out of the
+     document (the landing page's spare navbar, the dashboard's spare half) -
+     so the whole pipeline runs with both laid out and the inactive one is put
+     back at the end, see withStateViewsLaidOut(). A no-op on the other pages. */
+  withStateViewsLaidOut(function () { applySharedOverridePasses(data, textMap); });
   applyNavSessionState();
+  applyDashSessionState();
   if (isPreviewMode() && isEditMode()) {
     wireResizable();
     wireClickToEdit();
@@ -14108,7 +14347,7 @@ function applySharedEditorOverrides(data, textMap) {
 /**
  * Every apply*Overrides() pass, in the order they have to run in. Split out of
  * applySharedEditorOverrides() only so the whole run can be wrapped, see
- * withNavbarsLaidOut(); nothing else should call this directly.
+ * withStateViewsLaidOut(); nothing else should call this directly.
  * @param data see applySharedEditorOverrides()
  * @param textMap see applySharedEditorOverrides()
  */
@@ -14191,15 +14430,16 @@ function applySharedOverridePasses(data, textMap) {
  * rendered result.
  */
 function initDashboardPage() {
-  /* dashboard.js's own DOMContentLoaded handler is the one that normally
-     flips #dashApp from its default display:none to block (gateCheck()),
-     but it isn't guaranteed to run before this function's fetchContent()
-     resolves - reveal the app here too so applySharedEditorOverrides()'s
-     applyElementAnchors() call below never measures the anchor spacers
-     while an ancestor is still display:none (every rect comes back all-
-     zero in that case, permanently pinning the progress/extras/days areas
-     to 0,0 since nothing re-runs the anchor pass afterward). Safe to call
-     twice - gateCheck() is idempotent. */
+  /* the page ships with BOTH of its halves out of the document (see
+     applyDashView()) and dashboard.js's own DOMContentLoaded handler is what
+     normally puts one back (gateCheck()), but it isn't guaranteed to run
+     before this function's fetchContent() resolves - so pick a half here too,
+     or applySharedEditorOverrides()'s applyElementAnchors() call below
+     measures the anchor spacers with nothing laid out at all (every rect comes
+     back zero, pinning the progress/extras/days areas to 0,0 with nothing to
+     re-run the pass afterward). Safe to call twice - gateCheck() is
+     idempotent, and applySharedEditorOverrides() ends up calling the same
+     decision again itself. */
   if (window.gateCheck) window.gateCheck();
   fetchContent()
     .then(function (data) {

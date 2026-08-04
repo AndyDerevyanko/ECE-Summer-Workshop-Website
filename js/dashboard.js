@@ -187,21 +187,18 @@ function fmtDate(dateStr) {
 }
 
 /**
- * Shows the dashboard if logged in, otherwise the gate.
+ * Shows the dashboard if logged in, otherwise the locked-out page. Both are
+ * real, editable pages in the same file and only one is ever in the document;
+ * which one is entirely js/main.js's applyDashSessionState() to decide - the
+ * same call the override pipeline makes after every re-render, so the two
+ * can't drift - and this is now only here for its return value and its name.
+ * Idempotent, and called more than once per load (js/main.js's
+ * initDashboardPage() runs it too, see its doc comment).
  * @return the logged-in username, or null if there's no session
  */
 function gateCheck() {
-  var session = localStorage.getItem("session");
-  var app = document.getElementById("dashApp");
-  var gate = document.getElementById("dashGate");
-  if (!session) {
-    if (app) app.style.display = "none";
-    if (gate) gate.style.display = "block";
-    return null;
-  }
-  if (gate) gate.style.display = "none";
-  if (app) app.style.display = "block";
-  return session;
+  applyDashSessionState();
+  return localStorage.getItem("session") || null;
 }
 
 /**
@@ -677,6 +674,10 @@ document.addEventListener("DOMContentLoaded", function () {
        colours there, not a half-faded "disabled" navbar. */
     neuterLink(document.querySelector(".brand"), false);
     neuterLink(logoutBtn, false);
+    /* same for the locked-out page's "Go to login" button, which is editable
+       from the editor's Page switch now (see gateCheck()) - clicking it to
+       select it shouldn't sail the whole editor frame off to login.html */
+    neuterLink(document.querySelector('[data-edit-id="dash.gate.action"]'), false);
   } else if (logoutBtn) {
     logoutBtn.addEventListener("click", logout);
   }
@@ -690,7 +691,18 @@ document.addEventListener("DOMContentLoaded", function () {
       DAYS_CONTENT = data;
       var totalDaysVar = (data.variables || []).filter(function (v) { return v.key === "total_days"; })[0];
       TOTAL_DAYS = (totalDaysVar && +totalDaysVar.value) || TOTAL_DAYS;
-      renderDays();
-      renderExtras();
+      /* both renders measure as they go - the tiles they paint, the containers
+         those lay out in, the in-flow spacers they grow to match - and a ta
+         sitting on the locked-out page has #dashApp, and therefore everything
+         being measured, out of the document (see applyDashView()). Every
+         measurement would come back zero and get saved as the real answer.
+         The override pipeline in js/main.js already wraps its own copy of
+         these calls for the same reason, see withStateViewsLaidOut(); this is
+         the racing second copy (see its comment there), which needs it just
+         as much. A no-op when neither half is hidden. */
+      withStateViewsLaidOut(function () {
+        renderDays();
+        renderExtras();
+      });
     });
 });

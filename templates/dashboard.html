@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/style.css?v=15" />
+  <link rel="stylesheet" href="css/style.css?v=16" />
 </head>
 <body class="mono">
 
@@ -49,16 +49,28 @@
     </div>
   </nav>
 
-  <!-- shown if you're not "logged in" -->
-  <div class="gate" id="dashGate" style="display:none">
-    <div class="big-emoji" style="font-size:1.5rem;font-family:var(--font-mono)">[ locked ]</div>
-    <h2>You need to log in</h2>
-    <p class="muted">This page is only for approved workshop students.</p>
-    <a class="btn btn-primary" href="login.html">Go to login</a>
+  <!-- shown if you're not "logged in".
+
+       This page is two pages in one file, exactly the way the landing page is
+       two navbars in one file: only one of the pair below is in the document
+       at a time, and which one is decided by whether the visitor has a session
+       (js/dashboard.js's gateCheck()). Both start out of it, so a student
+       whose js never runs sees neither rather than both - the same fail-safe
+       the old inline display:none pair gave.
+
+       Everything in here is tagged for the visual editor, so the locked-out
+       page is editable like any other: a ta flips the Page switch beside the
+       portal's editor tabs to "Locked out" (js/ta.js's syncDashViewSwitch(),
+       js/main.js's applyDashView()) and edits the text/box in place. -->
+  <div class="gate dash-view-off" id="dashGate" data-dash-view="gate" data-resize-id="box.dash.gate">
+    <div class="big-emoji" style="font-size:1.5rem;font-family:var(--font-mono)" data-edit-id="dash.gate.badge">[ locked ]</div>
+    <h2 data-edit-id="dash.gate.title">You need to log in</h2>
+    <p class="muted" data-edit-id="dash.gate.subtext">This page is only for approved workshop students.</p>
+    <a class="btn btn-primary" href="login.html" data-edit-id="dash.gate.action">Go to login</a>
   </div>
 
   <!-- the actual dashboard -->
-  <main id="dashApp" style="display:none">
+  <main id="dashApp" class="dash-view-off" data-dash-view="app">
     <section class="dash-head">
       <div class="wrap">
         <p class="eyebrow" data-edit-id="dash.hero.eyebrow">Your dashboard</p>
@@ -125,7 +137,7 @@
 
   <script src="js/theme.js?v=3"></script>
   <script src="js/idle.js?v=3"></script>
-  <script src="js/main.js?v=15"></script>
-  <script src="js/dashboard.js?v=7"></script>
+  <script src="js/main.js?v=16"></script>
+  <script src="js/dashboard.js?v=8"></script>
 </body>
 </html>

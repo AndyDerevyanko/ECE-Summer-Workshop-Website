@@ -8475,17 +8475,6 @@ function renderCtxMenuRoot() {
        renderCtxMenuLinkList() for why the whole link inventory belongs in
        the editor at all */
     '<div class="ctx-title">This page</div>' +
-    /* the navbar-state switch. Page-scoped rather than element-scoped on
-       purpose: it has to be reachable from anywhere on the page, or a ta who
-       flipped to the signed-in navbar and then right-clicked somewhere in the
-       page body would have no way back. Landing page only - it's the only page
-       whose nav has two states. */
-    (currentPageKey() === "index"
-      ? '<button type="button" data-nav-state-toggle="1">Navbar: editing the ' +
-        (navStateIsIn() ? "signed-in state &rarr; show signed out"
-                        : "signed-out state &rarr; show signed in") +
-        '</button>'
-      : "") +
     '<button type="button" data-link-list="1">Links on this page</button>';
   CTX_MENU.querySelectorAll("button[data-add]").forEach(function (btn) {
     btn.addEventListener("click", function () { handleCtxAdd(btn.getAttribute("data-add")); });
@@ -8501,17 +8490,6 @@ function renderCtxMenuRoot() {
   if (deleteBtn) {
     deleteBtn.addEventListener("click", function () {
       if (CTX_TARGET_EL) deleteElement(CTX_TARGET_EL);
-      hideCtxMenu();
-    });
-  }
-  var navStateBtn = CTX_MENU.querySelector("[data-nav-state-toggle]");
-  if (navStateBtn) {
-    navStateBtn.addEventListener("click", function () {
-      /* like the failure line's message swap on the login page, this is a pure
-         view toggle - which of the two navbars a ta is currently looking at.
-         Never saved: which one a real visitor gets is decided by whether
-         they're signed in, see applyNavSessionState() */
-      toggleNavState();
       hideCtxMenu();
     });
   }
@@ -11966,8 +11944,9 @@ function saveEditedRotate(id, deg) {
    applied while the page was in the other.
 
    Two real navbars with no shared ids fixes both: each state is an ordinary
-   page a ta edits with the ordinary tools, and the editor's Navbar toggle (see
-   renderCtxMenuRoot()) is the only new concept. The cost, deliberately
+   page a ta edits with the ordinary tools, and the Navbar switch in the
+   portal's editor chrome (js/ta.js's syncNavStateSwitch()) is the only new
+   concept. The cost, deliberately
    accepted, is that they are genuinely separate - a wording or colour change
    made to one navbar is a change to that state alone and has to be made in the
    other state too.
@@ -11994,6 +11973,10 @@ function navStateIsIn() { return NAV_STATE === "in"; }
  * or be silently undone by - the inline display a deleted element already
  * carries (see setHiddenVisual()): an element that's both deleted and in the
  * inactive state stays deleted when the state comes back.
+ *
+ * Also called from the portal across the iframe boundary, on every editor frame
+ * load, to put back the navbar its switch was left on (js/ta.js's
+ * pushNavStateToFrame()) - a reload here always starts signed out.
  * @param state "out" or "in"
  */
 function applyNavState(state) {
@@ -12022,7 +12005,9 @@ function withNavbarsLaidOut(fn) {
 
 /**
  * Flips which navbar the visual editor is showing (and therefore editing).
- * Driven from the right-click menu's Navbar row, landing page only.
+ * Driven from the Navbar switch beside the portal's page tabs, which reaches in
+ * here across the iframe boundary (js/ta.js's toggleEditorNavState()) the same
+ * way its Undo/Redo buttons reach in for ClickEditHistory. Landing page only.
  */
 function toggleNavState() {
   applyNavState(navStateIsIn() ? "out" : "in");

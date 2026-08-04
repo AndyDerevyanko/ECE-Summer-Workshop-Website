@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/style.css?v=10" />
+  <link rel="stylesheet" href="css/style.css?v=11" />
 </head>
 <body class="mono">
 
@@ -312,11 +312,23 @@
       <section class="section-sm" id="edSection">
         <div class="wrap">
           <div class="pv-head">
-            <div class="pv-tabs" role="tablist" id="edSubTabs">
-              <button class="pv-tab" data-tab="landing" type="button" role="tab">Landing page</button>
-              <button class="pv-tab" data-tab="dashboard" type="button" role="tab">Student dashboard</button>
-              <button class="pv-tab" data-tab="login" type="button" role="tab">Login page</button>
-              <button class="pv-tab" data-tab="gallery" type="button" role="tab">Gallery</button>
+            <div class="pv-tabs-row">
+              <div class="pv-tabs" role="tablist" id="edSubTabs">
+                <button class="pv-tab" data-tab="landing" type="button" role="tab">Landing page</button>
+                <button class="pv-tab" data-tab="dashboard" type="button" role="tab">Student dashboard</button>
+                <button class="pv-tab" data-tab="login" type="button" role="tab">Login page</button>
+                <button class="pv-tab" data-tab="gallery" type="button" role="tab">Gallery</button>
+              </div>
+              <!-- which of the landing page's two navbars the editor is showing.
+                   Landing tab only: it's the only page whose nav has two states,
+                   so ta.js hides this row on the other three. -->
+              <div class="ed-switch-row" id="edNavStateRow" hidden>
+                <span class="ed-switch-cap">Navbar</span>
+                <button class="ed-switch" id="edNavState" type="button" role="switch" aria-checked="false">
+                  <span class="ed-switch-track"><span class="ed-switch-knob"></span></span>
+                  <span class="ed-switch-text" id="edNavStateText">Signed out</span>
+                </button>
+              </div>
             </div>
             <div class="ed-undo-row">
               <button class="btn btn-ghost" id="edUndo" type="button" disabled>Undo</button>
@@ -340,6 +352,6 @@
 
   <script src="js/theme.js?v=3"></script>
   <script src="js/idle.js?v=3"></script>
-  <script src="js/ta.js?v=5"></script>
+  <script src="js/ta.js?v=6"></script>
 </body>
 </html>

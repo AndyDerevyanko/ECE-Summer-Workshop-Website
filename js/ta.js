@@ -1493,6 +1493,73 @@ function showEditorSubTab(name) {
   document.querySelectorAll("#edSubTabs .pv-tab").forEach(function (btn) {
     btn.classList.toggle("active", btn.getAttribute("data-tab") === name);
   });
+  syncNavStateSwitch();
+}
+
+/* ---------------------------------------------------------------------------
+   THE LANDING PAGE'S NAVBAR SWITCH
+
+   The landing page ships two navbars - one for a signed-out visitor (Access
+   portal) and one for a signed-in one (Dashboard, Log out) - and only one is in
+   the document at a time (js/main.js's applyNavState()). A ta editing the page
+   needs to be able to look at either, so this switch, next to the page tabs,
+   picks which. It's view state, not a setting: what a real visitor gets is
+   decided by whether they're actually signed in, and nothing here is saved.
+
+   It lives in the portal chrome rather than inside the iframe because it's the
+   sort of thing you flip repeatedly while working - buried in the editor's
+   right-click menu it was two clicks and a guess away every time. The state is
+   held here, in the parent, so it survives the iframe reloads that Apply/Save
+   and a profile switch trigger; the iframe would otherwise come back
+   signed-out under a switch still reading "Signed in".
+   --------------------------------------------------------------------------- */
+
+/* which navbar the editor is showing, "out" (signed out) or "in" */
+var editorNavState = "out";
+
+/** @return the Visual editor iframe's window, or null if it isn't reachable yet */
+function editorFrameWindow() {
+  var frame = document.getElementById("edFrame");
+  try { return frame && frame.contentWindow ? frame.contentWindow : null; } catch (e) { return null; }
+}
+
+/**
+ * Redraws the switch from editorNavState, and shows it only on the landing
+ * tab - it's the only page with two navbars.
+ */
+function syncNavStateSwitch() {
+  var row = document.getElementById("edNavStateRow");
+  var sw = document.getElementById("edNavState");
+  if (!row || !sw) return;
+  row.hidden = editorSubTab !== "landing";
+  var on = editorNavState === "in";
+  sw.setAttribute("aria-checked", on ? "true" : "false");
+  document.getElementById("edNavStateText").textContent = on ? "Signed in" : "Signed out";
+  sw.title = on
+    ? "Editing the signed-in navbar (Dashboard, Log out). Switch off to edit the signed-out one."
+    : "Editing the signed-out navbar (Access portal). Switch on to edit the signed-in one.";
+}
+
+/** Flips which navbar the editor's iframe is showing (the switch next to the page tabs). */
+function toggleEditorNavState() {
+  var win = editorFrameWindow();
+  /* let the iframe do the flipping - it also has to move the selection ring off
+     whatever just left the page and re-pin anchored elements */
+  try { if (win && win.toggleNavState) win.toggleNavState(); } catch (e) {}
+  editorNavState = editorNavState === "in" ? "out" : "in";
+  syncNavStateSwitch();
+}
+
+/**
+ * Re-asserts the switch onto a freshly (re)loaded editor iframe, which always
+ * starts on the signed-out navbar. Runs on the frame's load event, before the
+ * content fetch inside it resolves, so the override pipeline in there applies
+ * saved geometry with the state already correct.
+ */
+function pushNavStateToFrame() {
+  if (editorNavState !== "in") return;
+  var win = editorFrameWindow();
+  try { if (win && win.applyNavState) win.applyNavState("in"); } catch (e) {}
 }
 
 /**
@@ -2233,6 +2300,11 @@ document.addEventListener("DOMContentLoaded", function () {
   document.getElementById("edUndo").addEventListener("click", clickEditUndo);
   document.getElementById("edRedo").addEventListener("click", clickEditRedo);
   setInterval(syncUndoButtons, 400);
+
+  /* the landing page's signed-out/signed-in navbar switch */
+  document.getElementById("edNavState").addEventListener("click", toggleEditorNavState);
+  document.getElementById("edFrame").addEventListener("load", pushNavStateToFrame);
+  syncNavStateSwitch();
 
   document.getElementById("edFullscreen").addEventListener("click", toggleEditorFullscreen);
   document.addEventListener("keydown", function (e) {

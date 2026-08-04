@@ -101,23 +101,56 @@ var IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "avif", "ti
 var DOC_EXTS = ["pdf", "doc", "docx", "txt", "rtf", "odt", "pages"];
 var SLIDES_EXTS = ["ppt", "pptx", "key", "odp"];
 
+/* every attachment-type glyph keyed by the short name a tile carries in its
+   own data-extras-kind attribute (see buildExtrasTileHtml()), so the icon a
+   tile should show can be re-derived from the DOM alone - that's what lets
+   js/main.js paint an "attachment icon" element (its tile-exclusive
+   "extrasIcon" element kind) per tile without knowing anything about
+   attachments itself, see attachmentIconSvgFor() below. */
+var ATTACH_ICONS = { link: LINK_SVG, image: IMAGE_SVG, doc: DOC_SVG, slides: SLIDES_SVG, file: FILE_SVG };
+
 /**
- * Picks an icon off the file extension in the attachment's name (or the
- * filename itself, for the legacy plain-string shape). Falls back to a
+ * Picks the icon KIND off the file extension in the attachment's name (or
+ * the filename itself, for the legacy plain-string shape). Falls back to a
  * generic file glyph for anything not recognized (zip, mp3, xlsx, etc).
+ * @param item an attachment (string or {type, ...} object)
+ * @return one of ATTACH_ICONS's keys
+ */
+function itemIconKey(item) {
+  if (isLink(item)) return "link";
+  var name = itemLabel(item) || "";
+  var m = /\.([a-z0-9]+)$/i.exec(name);
+  var ext = m ? m[1].toLowerCase() : "";
+  if (IMAGE_EXTS.indexOf(ext) !== -1) return "image";
+  if (DOC_EXTS.indexOf(ext) !== -1) return "doc";
+  if (SLIDES_EXTS.indexOf(ext) !== -1) return "slides";
+  return "file";
+}
+
+/**
+ * The inline svg for an attachment's type icon.
  * @param item an attachment (string or {type, ...} object)
  * @return an inline svg icon string
  */
 function itemIcon(item) {
-  if (isLink(item)) return LINK_SVG;
-  var name = itemLabel(item) || "";
-  var m = /\.([a-z0-9]+)$/i.exec(name);
-  var ext = m ? m[1].toLowerCase() : "";
-  if (IMAGE_EXTS.indexOf(ext) !== -1) return IMAGE_SVG;
-  if (DOC_EXTS.indexOf(ext) !== -1) return DOC_SVG;
-  if (SLIDES_EXTS.indexOf(ext) !== -1) return SLIDES_SVG;
-  return FILE_SVG;
+  return ATTACH_ICONS[itemIconKey(item)];
 }
+
+/**
+ * The type icon a given rendered attachment tile should show, resolved off
+ * the tile's own data-extras-kind rather than the attachment object - the
+ * DOM-only lookup js/main.js's repaintExtrasTypeIcons() needs, since a ta
+ * can place an "attachment icon" element onto one tile and have every
+ * sibling tile paint ITS OWN correct glyph into the same shared-template
+ * element (a .pdf tile shows the document glyph, a link tile the chain).
+ * @param tileEl a [data-extras-tile] element
+ * @return an inline svg icon string (the generic file glyph if unknown)
+ */
+function attachmentIconSvgFor(tileEl) {
+  var key = tileEl && tileEl.getAttribute ? tileEl.getAttribute("data-extras-kind") : "";
+  return ATTACH_ICONS[key] || FILE_SVG;
+}
+window.attachmentIconSvgFor = attachmentIconSvgFor;
 
 var LOCK_SVG =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
@@ -271,15 +304,20 @@ function gateCheck() {
  * (see its doc comment - a day's attachment tiles and the main section's
  * are meant to restyle together, not independently). Factored out once
  * rather than duplicated so there's exactly one place reading these keys.
+ * The Download and Open buttons deliberately keep their own separate sizes
+ * (see buildExtrasTileHtml()'s doc comment on the two button ids), so both
+ * are read here and the tile picks whichever one it is.
  * @param data a content blob (EXTRAS_CONTENT/DAYS_CONTENT)
- * @return {rectColor, rectDarkColor, rectRadius, iconSize, buttonSize}
+ * @return {rectColor, rectDarkColor, rectRadius, iconSize, buttonSize,
+ *   buttonLinkSize}
  */
 function extrasTileStyleFrom(data) {
   var colors = data.colors || {}, darkColors = data.dark_colors || {}, radius = data.radius || {}, sizes = data.sizes || {};
   return {
     rectColor: colors["extras.tile.rect"], rectDarkColor: darkColors["extras.tile.rect"],
     rectRadius: radius["extras.tile.rect"],
-    iconSize: sizes["extras.tile.icon"], buttonSize: sizes["extras.tile.button"]
+    iconSize: sizes["extras.tile.icon"],
+    buttonSize: sizes["extras.tile.button"], buttonLinkSize: sizes["extras.tile.button.link"]
   };
 }
 
@@ -290,6 +328,14 @@ function extrasTileStyleFrom(data) {
 var DEFAULT_DAYS_LOCKED_TITLE_HTML = buildDaysChipHtml("day-number", "Day #");
 var DEFAULT_DAYS_OPEN_DAYTAG_HTML =
   buildDaysChipHtml("day-number", "Day #") + ' &middot; ' + buildDaysChipHtml("day-date", "date");
+/* the open tile's headline/blurb are chips too now: the words themselves are
+   still per-day content typed in the content manager (STATE.days[i].title/
+   blurb), but in the visual editor they're reached as a VARIABLE inside an
+   ordinary, restyleable text field - so a ta can move/resize/recolour the
+   field, or type extra words around the chip, without ever being able to
+   overwrite one day's actual title from here. See buildDayOpenTileHtml(). */
+var DEFAULT_DAYS_OPEN_TITLE_HTML = buildDaysChipHtml("day-title", "Title");
+var DEFAULT_DAYS_OPEN_BLURB_HTML = buildDaysChipHtml("day-blurb", "Description");
 
 /**
  * Builds one LOCKED day tile's markup: a shared template rendered once per
@@ -321,7 +367,8 @@ function buildDayLockedTileHtml(dayId, dayNum, style, titleHtml, badgeHtml) {
   var iconStyle = style.iconSize ? ("width:" + style.iconSize.w + "px;height:" + style.iconSize.h + "px;") : "";
   return (
     '<div class="day-card soon" data-days-tile="1" data-days-id="' + escapeHtml(dayId) +
-      '" data-days-locked="1" data-days-number="' + dayNum + '">' +
+      '" data-days-locked="1" data-days-number="' + dayNum +
+      '" data-days-var="Day' + dayNum + '">' +
       '<div class="day-tile-rect" data-resize-id="days.locked.rect" data-days-role="locked.rect" aria-hidden="true"' +
         (rectStyle ? ' style="' + rectStyle + '"' : "") + '></div>' +
       '<span class="soon-lock" data-resize-id="days.locked.icon" data-days-role="locked.icon" data-days-fixed="1"' +
@@ -340,37 +387,44 @@ function buildDayLockedTileHtml(dayId, dayNum, style, titleHtml, badgeHtml) {
 
 /**
  * Builds one OPEN day tile's markup: same shared-template idea as
- * buildDayLockedTileHtml(), its own independent "days.open.*" ids. Title/
- * blurb are NOT part of the shared template - they're real, per-day content
- * a ta types in the content manager's day panel (STATE.days[i].title/blurb),
- * so they're inserted as plain escaped text here, same as they always have
- * been, with no chip/mirroring involved. The attachment list reuses
- * buildExtrasTileHtml() verbatim (js/main.js's findBoundTileOwner() already
- * knows to look inside a day's own files[] too), so a day's attachments and
- * the main Extra attachments section's tiles restyle together as one shared
- * template everywhere they appear.
+ * buildDayLockedTileHtml(), its own independent "days.open.*" ids. Title and
+ * blurb are still real per-day content a ta types in the content manager's
+ * day panel (STATE.days[i].title/blurb) - but they're rendered through a
+ * shared, restyleable text field carrying a local chip that resolves to THIS
+ * tile's own value (data-days-title/data-days-blurb below, painted by
+ * js/main.js's repaintDaysChips()), the same treatment the day number/date
+ * already get. The attachment list reuses buildExtrasTileHtml() verbatim
+ * (js/main.js's findBoundTileOwner() already knows to look inside a day's own
+ * files[] too), so a day's attachments and the main Extra attachments
+ * section's tiles restyle together as one shared template everywhere they
+ * appear.
  * @param day one DAYS entry (id, day, date, title, blurb, files, children)
  * @param style {rectColor, rectDarkColor, rectRadius} (reads "days.open.*" keys)
- * @param daytagHtml content.text["days.open.daytag"], or undefined for the
- *   shared default (day-number chip &middot; day-date chip)
- * @param badgeHtml content.text["days.open.badge"], or undefined for "Open"
+ * @param text the content.text map (read for every "days.open.*" id plus the
+ *   shared "extras.tile.*" ones the attachment tiles below need)
  * @param extrasStyle see extrasTileStyleFrom() - shared with renderExtras()
- * @param extrasTextHtml content.text["extras.tile.text"], or undefined
- * @param extrasButtonHtml content.text["extras.tile.button"], or undefined
  * @return an HTML string for one open tile
  */
-function buildDayOpenTileHtml(day, style, daytagHtml, badgeHtml, extrasStyle, extrasTextHtml, extrasButtonHtml) {
+function buildDayOpenTileHtml(day, style, text, extrasStyle) {
+  var daytagHtml = text["days.open.daytag"];
+  var badgeHtml = text["days.open.badge"];
+  var titleHtml = text["days.open.title"];
+  var blurbHtml = text["days.open.blurb"];
+  var varBase = "Day" + day.day;
   var rectStyle = "";
   if (style.rectColor || style.rectDarkColor) {
     rectStyle += "background-color:" + resolveThemedColor(style.rectColor, style.rectDarkColor) + ";";
   }
   if (style.rectRadius) rectStyle += "border-radius:" + style.rectRadius + "px;";
-  var chips = (day.files || []).map(function (f) {
-    return buildExtrasTileHtml(f, extrasStyle, extrasTextHtml, extrasButtonHtml);
+  var chips = (day.files || []).map(function (f, j) {
+    return buildExtrasTileHtml(f, extrasStyle, text, varBase + "Attachment" + (j + 1));
   }).join("");
   return (
     '<div class="day-card" data-days-tile="1" data-days-id="' + escapeHtml(day.id || "") +
       '" data-days-locked="0" data-days-number="' + day.day +
+      '" data-days-var="' + escapeHtml(varBase) +
+      '" data-days-title="' + escapeHtml(day.title || "") +
+      '" data-days-blurb="' + escapeHtml(day.blurb || "") +
       '" data-days-date="' + escapeHtml(day.date ? fmtDate(day.date) : "") + '">' +
       '<div class="day-tile-rect" data-resize-id="days.open.rect" data-days-role="open.rect" aria-hidden="true"' +
         (rectStyle ? ' style="' + rectStyle + '"' : "") + '></div>' +
@@ -383,8 +437,14 @@ function buildDayOpenTileHtml(day, style, daytagHtml, badgeHtml, extrasStyle, ex
           'data-default-html="Open">' + UNLOCK_SVG + (badgeHtml !== undefined ? badgeHtml : "Open") +
         '</span>' +
       '</div>' +
-      '<h3>' + escapeHtml(day.title || "") + '</h3>' +
-      '<p class="muted">' + escapeHtml(day.blurb || "") + '</p>' +
+      '<h3 data-edit-id="days.open.title" data-days-role="open.title" ' +
+        'data-default-html="' + escapeHtml(DEFAULT_DAYS_OPEN_TITLE_HTML) + '">' +
+        (titleHtml !== undefined ? titleHtml : DEFAULT_DAYS_OPEN_TITLE_HTML) +
+      '</h3>' +
+      '<p class="muted" data-edit-id="days.open.blurb" data-days-role="open.blurb" ' +
+        'data-default-html="' + escapeHtml(DEFAULT_DAYS_OPEN_BLURB_HTML) + '">' +
+        (blurbHtml !== undefined ? blurbHtml : DEFAULT_DAYS_OPEN_BLURB_HTML) +
+      '</p>' +
       (chips ? '<div class="res-list extras-tile-list" style="margin-top:14px">' + chips + '</div>' : "") +
     '</div>'
   );
@@ -419,8 +479,6 @@ function renderDays() {
   };
   var text = data.text || {};
   var extrasStyle = extrasTileStyleFrom(data);
-  var extrasTextHtml = text["extras.tile.text"];
-  var extrasButtonHtml = text["extras.tile.button"];
 
   var html = "";
   var unlockedCount = 0;
@@ -433,7 +491,7 @@ function renderDays() {
       return;
     }
     unlockedCount++;
-    html += buildDayOpenTileHtml(day, openStyle, text["days.open.daytag"], text["days.open.badge"], extrasStyle, extrasTextHtml, extrasButtonHtml);
+    html += buildDayOpenTileHtml(day, openStyle, text, extrasStyle);
   });
 
   /* once every panel is open, one locked card trails for the next day - no
@@ -444,8 +502,12 @@ function renderDays() {
 
   host.innerHTML = html;
 
+  /* every deletable role in either template (the fixed icon/badge roles are
+     never in content.hidden, see js/main.js's deleteElement()) - a plain
+     prefix test rather than a list of ids, so a role added to either
+     template later doesn't silently stop honouring a ta's delete */
   (data.hidden || []).forEach(function (id) {
-    if (!/^(days\.(locked|open)\.rect|days\.(locked|open)\.title|days\.open\.daytag|extras\.tile\.(rect|text))$/.test(id)) return;
+    if (!/^(days\.|extras\.tile\.)/.test(id)) return;
     host.querySelectorAll('[data-resize-id="' + id + '"], [data-edit-id="' + id + '"]').forEach(function (el) {
       setHiddenVisual(el, true);
     });
@@ -457,13 +519,14 @@ function renderDays() {
   var wireText = isPreviewMode() && isEditMode();
   host.querySelectorAll('[data-days-tile]').forEach(function (tileEl) {
     var day = DAYS.filter(function (d) { return d.id && d.id === tileEl.getAttribute("data-days-id"); })[0];
-    if (window.renderTileChildren) window.renderTileChildren(tileEl, day && day.children, data);
-    if (wireText) {
-      tileEl.querySelectorAll('[data-edit-id="days.locked.title"], [data-edit-id="days.locked.badge"], ' +
-        '[data-edit-id="days.open.daytag"], [data-edit-id="days.open.badge"], [data-edit-id="extras.tile.text"], [data-edit-id="extras.tile.button"]')
-        .forEach(wireTextField);
-    }
+    if (window.renderTileChildren) window.renderTileChildren(tileEl, day && day.children);
+    if (wireText) tileEl.querySelectorAll("[data-days-role], [data-extras-role]").forEach(wireEditableRole);
   });
+  /* every tile in this area is brand new markup, so every saved move/resize/
+     colour keyed to a tile role or a bound child has to be painted onto it
+     now - the sweeps that normally do that already ran, before any of this
+     existed. See applyLiveAreaOverrides() in js/main.js. */
+  if (window.applyLiveAreaOverrides) window.applyLiveAreaOverrides(data);
 
   /* host is the always-100%-wide, auto-height grid div itself (see
      js/main.js's buildCustomElement()'s isAutoHeightArea branch) - it just
@@ -505,36 +568,52 @@ window.renderDays = renderDays;
  * the very same saved maps read below - this function just has to paint
  * that same look itself once, up front, since those sweeps already ran
  * (against a DOM that didn't have these tiles yet) by the time this runs.
- * Icon and button are data-extras-fixed (stylable/resizable, never
+ * Icon and button are data-extras-fixed (stylable/resizable/movable, never
  * deletable, per the spec); rect and the filename text are ordinary
- * deletable elements. Icon/button/rect never move independently and rect/
- * text never resize independently (js/main.js's startMoveDrag()/
- * startResizeDrag() guards) - the whole tile is laid out by this shared
- * template's own css, not per-instance dragging.
+ * deletable elements. Every role IS individually movable and resizable now,
+ * clamped to the tile's own box and mirrored onto every sibling tile (see
+ * js/main.js's clampOwnPos()/mirrorTiledRoleGeometry()).
+ *
+ * The Download/Open button is the one role split across TWO ids
+ * ("extras.tile.button" for a file, "extras.tile.button.link" for a link):
+ * per the spec its look (colour, rounding, shadow, border) still mirrors
+ * across both variants - they share one data-extras-role, which is what
+ * mirrorTiledRoleStyle() keys off - while its text, size and position
+ * deliberately do NOT, since "Download" and "Open" are different labels that
+ * want their own box. Everything else is one id across every tile.
  * @param f one EXTRAS entry (legacy filename string, {type:"link", value},
  *   or {type:"file", name, url, id, children})
- * @param style {rectColor, rectDarkColor, rectRadius, iconSize, buttonSize}
- * @param textHtml content.text["extras.tile.text"], or undefined for the
- *   shared default (just the filename chip)
- * @param buttonHtml content.text["extras.tile.button"], or undefined for
- *   the per-attachment default ("Open"/"Download" - see isLink()), so an
- *   untouched template still shows the same live label live students
- *   already see today
+ * @param style see extrasTileStyleFrom()
+ * @param text the content.text map (read for "extras.tile.text" and
+ *   whichever of the two button ids this tile uses; a missing entry means
+ *   the shared default - the filename chip, and the per-attachment
+ *   "Open"/"Download" label live students already see today)
+ * @param varBase this tile's own variable-name scope, eg "Attachment1" or
+ *   "Day3Attachment2" - the filename chip renders as ${varBase + "Name"}
+ *   while a ta is editing the field (see js/main.js's localChipVarToken()).
+ *   These names are deliberately per-tile and never enter content.variables.
  * @return an HTML string for one tile
  */
-function buildExtrasTileHtml(f, style, textHtml, buttonHtml) {
+function buildExtrasTileHtml(f, style, text, varBase) {
   var filename = itemLabel(f) || "";
-  var defaultButtonText = isLink(f) ? "Open" : "Download";
+  var link = isLink(f);
+  var defaultButtonText = link ? "Open" : "Download";
+  var buttonId = link ? "extras.tile.button.link" : "extras.tile.button";
+  var textHtml = text["extras.tile.text"];
+  var buttonHtml = text[buttonId];
   var rectStyle = "";
   if (style.rectColor || style.rectDarkColor) {
     rectStyle += "background-color:" + resolveThemedColor(style.rectColor, style.rectDarkColor) + ";";
   }
   if (style.rectRadius) rectStyle += "border-radius:" + style.rectRadius + "px;";
   var iconStyle = style.iconSize ? ("width:" + style.iconSize.w + "px;height:" + style.iconSize.h + "px;") : "";
-  var btnStyle = style.buttonSize ? ("width:" + style.buttonSize.w + "px;height:" + style.buttonSize.h + "px;") : "";
+  var btnSize = link ? style.buttonLinkSize : style.buttonSize;
+  var btnStyle = btnSize ? ("width:" + btnSize.w + "px;height:" + btnSize.h + "px;") : "";
   return (
     '<div class="res-row extras-tile" data-extras-tile="1" data-extras-id="' + escapeHtml((f && f.id) || "") +
-      '" data-extras-filename="' + escapeHtml(filename) + '">' +
+      '" data-extras-filename="' + escapeHtml(filename) +
+      '" data-extras-kind="' + itemIconKey(f) +
+      '" data-extras-var="' + escapeHtml(varBase || "") + '">' +
       '<div class="extras-tile-rect" data-resize-id="extras.tile.rect" data-extras-role="rect"' +
         (rectStyle ? ' style="' + rectStyle + '"' : "") + ' aria-hidden="true"></div>' +
       '<div class="extras-tile-icon" data-resize-id="extras.tile.icon" data-extras-role="icon" data-extras-fixed="1"' +
@@ -543,13 +622,28 @@ function buildExtrasTileHtml(f, style, textHtml, buttonHtml) {
         'data-default-html="' + escapeHtml(DEFAULT_EXTRAS_TEXT_HTML) + '">' +
         (textHtml !== undefined ? textHtml : DEFAULT_EXTRAS_TEXT_HTML) +
       '</span>' +
-      '<a class="btn btn-ghost extras-tile-btn" data-edit-id="extras.tile.button" data-extras-role="button" data-extras-fixed="1" ' +
+      '<a class="btn btn-ghost extras-tile-btn" data-edit-id="' + buttonId + '" data-extras-role="button" data-extras-fixed="1" ' +
         'data-default-html="' + escapeHtml(defaultButtonText) + '"' + (btnStyle ? ' style="' + btnStyle + '"' : "") + ' ' +
         'href="' + escapeHtml(itemHref(f)) + '" target="_blank" rel="noopener">' +
         (buttonHtml !== undefined ? buttonHtml : escapeHtml(defaultButtonText)) +
       '</a>' +
     '</div>'
   );
+}
+
+/**
+ * Gives one just-rendered tile role click-to-edit text wiring, if it's a
+ * text role at all. Both render functions sweep every [data-days-role]/
+ * [data-extras-role] through here rather than listing the text ids by hand:
+ * a role added to either shared template later then picks up its own
+ * wiring automatically instead of silently rendering as dead text, which is
+ * exactly what happened to the day title/blurb fields when they became
+ * editable (see buildDayOpenTileHtml()). The rect/icon roles carry only a
+ * data-resize-id, so they fall straight through.
+ * @param el a role element (or null, ignored)
+ */
+function wireEditableRole(el) {
+  if (el && el.hasAttribute("data-edit-id")) wireTextField(el);
 }
 
 /**
@@ -576,8 +670,6 @@ function renderExtras() {
   var data = EXTRAS_CONTENT;
   var text = data.text || {};
   var style = extrasTileStyleFrom(data);
-  var textHtml = text["extras.tile.text"];
-  var buttonHtml = text["extras.tile.button"];
   var emptyHtml = text["dash.extras.empty"] !== undefined ? text["dash.extras.empty"] : DEFAULT_EXTRAS_EMPTY_HTML;
 
   var html =
@@ -585,13 +677,15 @@ function renderExtras() {
       'data-default-html="' + escapeHtml(DEFAULT_EXTRAS_EMPTY_HTML) + '">' + emptyHtml + '</p>';
   if (EXTRAS.length) {
     html += '<div class="res-list extras-tile-list">' +
-      EXTRAS.map(function (f) { return buildExtrasTileHtml(f, style, textHtml, buttonHtml); }).join("") +
+      EXTRAS.map(function (f, i) {
+        return buildExtrasTileHtml(f, style, text, "Attachment" + (i + 1));
+      }).join("") +
       '</div>';
   }
   host.innerHTML = html;
 
   (data.hidden || []).forEach(function (id) {
-    if (id !== "extras.tile.rect" && id !== "extras.tile.text") return;
+    if (!/^extras\.tile\./.test(id)) return;
     host.querySelectorAll('[data-resize-id="' + id + '"], [data-edit-id="' + id + '"]').forEach(function (el) {
       setHiddenVisual(el, true);
     });
@@ -604,16 +698,19 @@ function renderExtras() {
      fetch gets here) - these tiles/empty-state text are built after that
      pass, so each needs wiring by hand, same gating as everywhere else. */
   if (isPreviewMode() && isEditMode()) {
-    host.querySelectorAll('[data-edit-id="dash.extras.empty"], [data-edit-id="extras.tile.text"], [data-edit-id="extras.tile.button"]')
-      .forEach(wireTextField);
+    wireEditableRole(host.querySelector('[data-edit-id="dash.extras.empty"]'));
+    host.querySelectorAll("[data-extras-role]").forEach(wireEditableRole);
   }
 
   if (window.renderTileChildren) {
     host.querySelectorAll('[data-extras-tile]').forEach(function (tileEl) {
       var f = EXTRAS.filter(function (item) { return item && item.id === tileEl.getAttribute("data-extras-id"); })[0];
-      window.renderTileChildren(tileEl, f && f.children, data);
+      window.renderTileChildren(tileEl, f && f.children);
     });
   }
+  /* same "these tiles didn't exist when the sweeps ran" repaint renderDays()
+     needs, see applyLiveAreaOverrides() in js/main.js */
+  if (window.applyLiveAreaOverrides) window.applyLiveAreaOverrides(data);
 
   /* same "grow the in-flow anchor spacer to match, then re-anchor
      everything" reasoning as renderDays() - see its matching comment. */
@@ -639,6 +736,10 @@ function logout() {
  */
 function neuterLink(el) {
   if (!el) return;
+  /* keep the real target readable inside the editor - see stashBuiltinHref()
+     in js/main.js (loaded before this file on every page that uses it) and
+     the right-click "Links on this page" view it feeds */
+  if (window.stashBuiltinHref) window.stashBuiltinHref(el);
   el.removeAttribute("href");
   el.style.opacity = ".5";
   el.style.cursor = "default";

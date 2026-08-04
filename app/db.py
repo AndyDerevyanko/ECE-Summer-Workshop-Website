@@ -160,9 +160,11 @@ DEFAULT_CONTENT = {
         {"day": 2, "date": "", "opens_at": "", "unlocked": False, "title": "", "blurb": "", "files": []},
     ],
     "extras": [],
-    # named, typed values a ta can bind editor elements to (right now just
-    # the progress bar's Current/Total selects, see the "progress" custom-
-    # element kind in js/main.js) and, later, reference from formula text.
+    # named, typed values a ta can bind editor elements to (right now just a
+    # progress bar's Current/Total selects, on its right-click menu - see
+    # renderCtxMenuProgressVars() in js/main.js) and reference from formula
+    # text. Global to the whole site: every bar on every page, and on the
+    # reusable-object canvas, picks from this one list.
     # type is one of "string"/"number"/"boolean"/"datetime". "builtin" ones
     # can be renamed but never removed or retyped (js/ta.js enforces this in
     # the Variables section UI); "computed" ones have no ta-editable value at
@@ -406,7 +408,11 @@ DEFAULT_CONTENT["colors"].update(_LEARN_REEL_COLORS)
 # re-pins it to the reserved-space spacer left in dash-head's own flow
 # (#dashProgressAnchor in templates/dashboard.html) on every load/resize,
 # same mechanism/reasoning as _LEARN_REEL_ENTRY's anchor - see
-# applyElementAnchors() in js/main.js. No bundled label text: "text is
+# applyElementAnchors() in js/main.js - which drives its WIDTH off that same
+# spacer too, so the "w" below is only a pre-layout fallback: the hand-
+# measured 1160 is wider than the page column actually resolves to (1076 at a
+# 1440px viewport), and pinning the bar to it hung its right edge well past
+# every other element on the page. No bundled label text: "text is
 # separate from the bar" per the feature spec, a ta can place their own
 # caption next to it (the live "X of Y" number as text is a later formula-
 # text feature, not this one).

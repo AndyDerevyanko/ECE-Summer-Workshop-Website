@@ -898,46 +898,31 @@ function renderVariables() {
   });
 }
 
+/* NOTE: links used to be listed and edited here too (a "Links" section under
+   Day panels). They aren't anymore: a link only means anything next to the
+   element it's on, so the whole inventory lives in the Visual editor's own
+   right-click menu instead ("This page > Links on this page", see
+   renderCtxMenuLinkList() in js/main.js) - which can also show the links
+   this page never knew about, the ones baked into the templates (the nav's
+   own scroll links, the brand, "Log out"), not just the ones a ta added.
+   STATE.links is still the same content.links map, just edited from there. */
+
 /**
- * Renders every element's right-click "Add link"/"Edit link" url (see
- * LINKS/applyOneLink() in js/main.js) into #linksList, so a ta can see
- * what's linked to what without hunting through the Visual editor element
- * by element. Ids are whatever data-edit-id/data-resize-id/custom-element
- * id the Visual editor's right-click menu attached the link to - not
- * hand-typed here, just displayed and editable, same "the input already
- * IS the state" pattern as everything else on this page. Future work (eg
- * auto-linking a newly added back/forward button) will populate STATE.links
- * from elsewhere and this list will simply reflect it.
+ * Builds the little "variable · string" tag shown next to a day panel field
+ * whose value isn't just text on a card anymore: on the student dashboard
+ * that field renders through a per-tile variable inside an ordinary,
+ * restyleable text box (see buildDayOpenTileHtml() in js/dashboard.js), and
+ * THIS field is the only place its value can be changed - a ta editing the
+ * dashboard in the visual editor sees ${Day3Header} inline and can move,
+ * resize and restyle the box around it, but never overwrite the words. The
+ * tag says which name that is, so the two views are obviously the same thing.
+ * @param name the variable's name, without the ${} wrapper
+ * @return an HTML string for one tag
  */
-function renderLinks() {
-  var list = document.getElementById("linksList");
-  if (!list) return;
-  var ids = Object.keys(STATE.links).sort();
-  if (!ids.length) {
-    list.innerHTML = '<p class="muted"><strong>No links set yet.</strong> Right-click any element in the Visual editor and choose "Add link".</p>';
-    return;
-  }
-
-  list.innerHTML = ids.map(function (id) {
-    return '<div class="res-row" data-id="' + id + '">' +
-      '<span class="rname">' + id + '</span>' +
-      '<input type="url" class="lk-url pw-edit-input" value="' + STATE.links[id] + '" aria-label="Link URL for ' + id + '">' +
-      '<span class="racts"><button class="btn btn-ghost lk-del" type="button">Remove</button></span>' +
-      '</div>';
-  }).join("");
-
-  list.querySelectorAll(".res-row").forEach(function (row) {
-    var id = row.getAttribute("data-id");
-    row.querySelector(".lk-url").addEventListener("change", function () {
-      var v = this.value.trim();
-      if (v) STATE.links[id] = v;
-      else { delete STATE.links[id]; renderLinks(); }
-    });
-    row.querySelector(".lk-del").addEventListener("click", function () {
-      delete STATE.links[id];
-      renderLinks();
-    });
-  });
+function varFlag(name) {
+  return '<span class="ta-varflag" title="Shown on the student dashboard as the ' +
+    '${' + name + '} variable. Edit its value here; its box is styled in the visual editor.">' +
+    'variable &middot; string <code>${' + name + '}</code></span>';
 }
 
 /** Renders every day panel editor into #panelList and wires up its controls. */
@@ -973,9 +958,9 @@ function renderPanels() {
             '<button class="btn btn-primary p-now" type="button">' +
               (d.unlocked ? 'Close right now' : 'Open right now') + '</button></div>' +
         '</div>' +
-        '<div class="field"><label>Title</label>' +
+        '<div class="field"><label>Title' + varFlag("Day" + d.day + "Header") + '</label>' +
           '<input type="text" class="p-title" value="' + d.title + '"></div>' +
-        '<div class="field"><label>Description</label>' +
+        '<div class="field"><label>Description' + varFlag("Day" + d.day + "Body") + '</label>' +
           '<textarea class="p-blurb" rows="3">' + d.blurb + '</textarea></div>' +
         '<div class="field"><label>Attachments</label>' +
           '<div class="ta-files">' + chips + '</div>' +
@@ -999,7 +984,16 @@ function renderPanels() {
   panels.forEach(function (p) {
     var d = STATE.days[+p.getAttribute("data-i")];
 
-    p.querySelector(".p-day").addEventListener("input", function () { d.day = +this.value || 1; });
+    p.querySelector(".p-day").addEventListener("input", function () {
+      d.day = +this.value || 1;
+      /* the two variable names are built off the day number (see varFlag()),
+         so retype the day and the tags have to follow immediately - a full
+         renderPanels() here would steal focus out of the field mid-typing */
+      var names = ["Day" + d.day + "Header", "Day" + d.day + "Body"];
+      p.querySelectorAll(".ta-varflag code").forEach(function (code, i) {
+        code.textContent = "${" + names[i] + "}";
+      });
+    });
     p.querySelector(".p-date").addEventListener("input", function () { d.date = this.value; });
     p.querySelector(".p-open").addEventListener("input", function () { d.opens_at = this.value; });
     p.querySelector(".p-title").addEventListener("input", function () { d.title = this.value; });
@@ -1439,7 +1433,6 @@ function syncLanding() {
 /** Re-renders every editor section from STATE. */
 function renderAll() {
   renderVariables();
-  renderLinks();
   renderPanels();
   renderExtras();
   renderLogistics();

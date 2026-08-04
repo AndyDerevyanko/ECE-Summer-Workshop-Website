@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/style.css?v=5" />
+  <link rel="stylesheet" href="css/style.css?v=7" />
 </head>
 <body class="mono">
 
@@ -115,9 +115,10 @@
 
           <h3 style="font-size:1.1rem;margin:18px 0 6px">Variables</h3>
           <p class="muted" style="margin-top:0;margin-bottom:14px">
-            Named values other elements (like the student dashboard's progress bar, from the Visual editor's
-            right-click "Add element" menu) can bind to. "Total days" and "Days progressed" always exist and
-            can't be removed - rename them however reads best, or add your own below.
+            Named values other elements can bind to. Every number below can be picked as a progress bar's
+            Current or Total from the Visual editor (right-click the bar &rsaquo; "Bind variables"), on any page.
+            "Total days" and "Days progressed" always exist and can't be removed - rename them however reads
+            best, or add your own below.
           </p>
           <div id="variablesList" style="margin-bottom:18px">
             <!-- filled in by ta.js -->
@@ -127,16 +128,6 @@
               stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
             New variable
           </button>
-
-          <h3 style="font-size:1.1rem;margin:18px 0 6px">Links</h3>
-          <p class="muted" style="margin-top:0;margin-bottom:14px">
-            Every element currently linked somewhere (right-click an element in the Visual editor
-            and choose "Add link"). Edit or remove a link here, or click through to the element
-            itself in the Visual editor to change it there.
-          </p>
-          <div id="linksList" class="res-list" style="margin-bottom:28px">
-            <!-- filled in by ta.js -->
-          </div>
 
           <div id="panelList">
             <!-- filled in by ta.js -->
@@ -348,6 +339,6 @@
 
   <script src="js/theme.js?v=3"></script>
   <script src="js/idle.js?v=3"></script>
-  <script src="js/ta.js?v=3"></script>
+  <script src="js/ta.js?v=5"></script>
 </body>
 </html>

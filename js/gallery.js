@@ -55,6 +55,12 @@ function fetchContent() {
  */
 function neuterLink(el) {
   if (!el) return;
+  /* keep the real target readable for the editor's right-click "Links on
+     this page" view - same stash js/main.js's own neuterLink() writes (see
+     stashBuiltinHref() there); inlined rather than called, since this page
+     doesn't load js/main.js at all yet */
+  var href = el.getAttribute("href");
+  if (href && !el.hasAttribute("data-builtin-href")) el.setAttribute("data-builtin-href", href);
   el.removeAttribute("href");
   el.style.opacity = ".5";
   el.style.cursor = "default";

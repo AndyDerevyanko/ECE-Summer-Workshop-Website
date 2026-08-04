@@ -478,6 +478,25 @@ function renderDatetimeContent(el, d) {
 }
 
 /**
+ * Remembers a template link's real href on the element itself before
+ * anything strips it off (right now only neuterLink(), which every preview/
+ * editor load runs over the nav's own links so a ta can't navigate the
+ * iframe away). Without this the target is simply gone inside the editor,
+ * which is exactly where the right-click "Links on this page" view (see
+ * pageLinkInventory()) has to be able to READ it - a ta asking "where does
+ * the brand logo go?" would otherwise see a blank next to every neutered
+ * link. Never overwrites an existing stash, so a second neuterLink() pass
+ * (js/dashboard.js and js/gallery.js keep their own copies of it, and both
+ * pages also load this file) can't record the already-stripped "" over the
+ * real value.
+ * @param el the link about to lose its href
+ */
+function stashBuiltinHref(el) {
+  var href = el.getAttribute && el.getAttribute("href");
+  if (href && !el.hasAttribute("data-builtin-href")) el.setAttribute("data-builtin-href", href);
+}
+
+/**
  * Strips a link's href and swallows its clicks, so it can't navigate the
  * preview iframe away to a page a real visitor there shouldn't reach.
  * @param el the link to neuter
@@ -488,6 +507,7 @@ function renderDatetimeContent(el, d) {
  */
 function neuterLink(el, dim) {
   if (!el) return;
+  stashBuiltinHref(el);
   el.removeAttribute("href");
   if (dim !== false) {
     el.style.opacity = ".5";
@@ -573,26 +593,32 @@ var RESIZABLE_SEL = "[data-edit-id], [data-resize-id]";
 
 /**
  * True for any element whose position is dictated entirely by shared
- * template CSS/markup, never individually placed: a reel tile (breaks its
- * flex track, see buildReelElement()), or ANY attachments/day tile role
- * (rect/icon/text/badge/button - same data-resize-id/data-edit-id string
- * repeats on every rendered tile, see buildExtrasTileHtml()/renderDays()
- * in js/dashboard.js). Used both to gate a move drag from starting (see
- * startMoveDrag(), the drag-anywhere handler in wireResizable()) AND to
- * filter a stored position override before it's ever painted (see
- * applyPositionOverrides()): since these ids aren't unique to one
- * instance, a saved {tx,ty} for one would silently drag EVERY tile
- * sharing that role sideways the moment the page loads, not just the one
- * a ta thought they'd moved - the same "shared template" problem the
- * paint-time filter has to defend against even after the drag-time gate
- * closes it off going forward, since a stale override saved before that
- * gate existed (or restored from an old undo/profile snapshot) would
- * otherwise still be blindly reapplied forever.
+ * template CSS/markup, never individually placed: a reel tile, which breaks
+ * its flex track if detached (see buildReelElement()).
+ *
+ * An attachments/day tile ROLE (rect/icon/text/badge/button) used to be in
+ * here too, back when nothing inside a tile could move at all. It isn't
+ * anymore: per the spec everything inside a tile - text, icons, rectangles,
+ * buttons - moves freely, just clamped to its own tile's box (see
+ * clampOwnPos()). What made that safe is that a role's saved {tx,ty} is
+ * keyed by an id every sibling tile SHARES, so applying it to all of them on
+ * load is now the intended behavior, not the bug it once was: one drag moves
+ * that piece on every tile at once, which is exactly the "any edits we make
+ * to one tile should be duplicated across the rest" rule (mirrored live by
+ * mirrorTiledRoleGeometry(), and on reload by applyPositionOverrides()
+ * matching every element carrying the id).
+ *
+ * The tiles THEMSELVES still never move - not because of this check, but
+ * because a tile ([data-extras-tile]/[data-days-tile]) carries no
+ * data-edit-id/data-resize-id at all, so it's not a tracked element and
+ * never gets a ring, handles or a drag in the first place. Only the
+ * transparent live-area container around them is movable, and everything
+ * inside rides along with it (see ancestorPos()).
  * @param el the element
  * @return true if el must never carry a position override
  */
 function isMoveLockedTileRole(el) {
-  return el.hasAttribute("data-reel-tile") || el.hasAttribute("data-extras-role") || el.hasAttribute("data-days-role");
+  return el.hasAttribute("data-reel-tile");
 }
 
 /**
@@ -613,26 +639,89 @@ function isLiveAreaEl(el) {
 }
 
 /**
- * True for the narrower subset of isMoveLockedTileRole() that also can't
- * be individually RESIZED: a reel tile (same flex-track reasoning), an
- * attachments tile's rect (fills the tile via inset:0, a fixed size makes
- * no sense) or text (sized by its own content), or a day tile's rect/
- * title/daytag (same two reasons respectively). The icon/badge/button
- * roles are deliberately NOT included - those stay individually resizable,
- * see buildExtrasTileHtml()/renderDays() in js/dashboard.js. Used both to
- * gate a resize drag from starting (see startResizeDrag()) and to filter
- * a stored size override before it's painted (see applySizeOverrides()),
- * same "close the gate AND filter stale data already past it" reasoning
- * as isMoveLockedTileRole().
+ * True for an element that can't be individually RESIZED: a reel tile, same
+ * flex-track reasoning as isMoveLockedTileRole(). Attachments/day tile roles
+ * used to be listed here as well (the rect fills its tile via inset:0, the
+ * text sizes itself from its content) but the spec is explicit that a ta can
+ * resize the rectangle around a tile, its text and its button, so they're
+ * all freely resizable now - a size saved under a shared role id resizes
+ * that piece on every sibling tile at once, the same shared-template
+ * mirroring a move gets (see mirrorTiledRoleGeometry()).
  * @param el the element
  * @return true if el must never carry a size override
  */
 function isResizeLockedTileRole(el) {
-  if (el.hasAttribute("data-reel-tile")) return true;
-  var xRole = el.getAttribute("data-extras-role");
-  if (xRole === "rect" || xRole === "text") return true;
-  var dRole = el.getAttribute("data-days-role");
-  return !!(dRole && /(^|\.)(rect|title|daytag)$/.test(dRole));
+  return el.hasAttribute("data-reel-tile");
+}
+
+/**
+ * True for one piece of an attachments/day tile's shared template - the
+ * rect/icon/text/badge/button roles js/dashboard.js's buildExtrasTileHtml()/
+ * buildDayOpenTileHtml()/buildDayLockedTileHtml() stamp onto every rendered
+ * tile with the same id. Every geometry/style edit to one of these is meant
+ * to apply to all of them at once, see mirrorTiledRoleGeometry()/
+ * mirrorTiledRoleStyle().
+ * @param el the element
+ * @return true if el is a tiled role element
+ */
+function isTiledRoleEl(el) {
+  return !!(el && el.hasAttribute &&
+    (el.hasAttribute("data-extras-role") || el.hasAttribute("data-days-role")));
+}
+
+/**
+ * The box an element is not allowed to be dragged out of: its own tile if
+ * it's inside one (a tile role, or anything a ta has bound onto that tile),
+ * otherwise the live-area container if it's inside one (the "nothing here
+ * yet" placeholder, or an element dropped onto the area's empty space).
+ * Everything else on the page is unconstrained, exactly as before - only
+ * these live sections have the "stops at the edge and grinds against it"
+ * rule, per the spec.
+ *
+ * A tile wins over the area because tiles nest: a day's attachment tile sits
+ * inside the day tile, which sits inside the days area, and an element on an
+ * attachment tile belongs to the attachment tile alone. closest() naturally
+ * gives the innermost of the three.
+ * @param el the element about to move
+ * @return the bounding element, or null if el isn't inside one
+ */
+function moveBoundsContainer(el) {
+  if (!el || !el.closest) return null;
+  var tile = el.closest("[data-extras-tile], [data-days-tile]");
+  if (tile) return tile;
+  var area = el.parentElement && el.parentElement.closest("[data-extras-area], [data-days-area]");
+  return area || null;
+}
+
+/**
+ * Clamps a proposed move offset so el's own box stays inside whichever
+ * container bounds it (see moveBoundsContainer()). Returns the offset
+ * unchanged for everything not inside one.
+ *
+ * Works in deltas against el's CURRENT rendered rect rather than absolute
+ * coordinates, so it needs to know nothing about how that rect was arrived
+ * at (flow position, an ancestor's transform, a stylesheet transform of its
+ * own, whatever) - the same reason paintPos() composes rather than replaces.
+ * An element bigger than its container on an axis pins to the container's
+ * top/left edge on that axis instead of jittering between two impossible
+ * constraints.
+ * @param el the element being moved
+ * @param tx proposed own x offset
+ * @param ty proposed own y offset
+ * @return {tx, ty}, clamped
+ */
+function clampOwnPos(el, tx, ty) {
+  var box = moveBoundsContainer(el);
+  if (!box) return { tx: tx, ty: ty };
+  var cur = getPos(el);
+  var r = el.getBoundingClientRect();
+  var cr = box.getBoundingClientRect();
+  var dx = tx - cur.tx, dy = ty - cur.ty;
+  if (r.left + dx < cr.left) dx = cr.left - r.left;
+  else if (r.right + dx > cr.right) dx = Math.max(cr.left - r.left, cr.right - r.right);
+  if (r.top + dy < cr.top) dy = cr.top - r.top;
+  else if (r.bottom + dy > cr.bottom) dy = Math.max(cr.top - r.top, cr.bottom - r.bottom);
+  return { tx: cur.tx + dx, ty: cur.ty + dy };
 }
 
 /**
@@ -966,6 +1055,7 @@ function commitPosition(el) {
   var p = getPos(el);
   if (p.tx || p.ty) saveEditedPosition(elId(el), Math.round(p.tx), Math.round(p.ty));
   else saveEditedPosition(elId(el), null, null);
+  mirrorTiledRoleGeometry(el);
 }
 
 /**
@@ -977,23 +1067,46 @@ function commitSize(el) {
   var s = getSize(el);
   saveEditedSize(elId(el), { w: Math.round(s.w), h: Math.round(s.h) });
   mirrorTiledRoleStyle(el);
+  mirrorTiledRoleGeometry(el);
 }
+
+/* the inline style properties mirrorTiledRoleStyle() copies from one tile
+   role onto its siblings: purely how the piece LOOKS. Deliberately not
+   width/height/transform/position/top/left (geometry, mirrored separately by
+   mirrorTiledRoleGeometry(), which keys off the id rather than the role) and
+   not the font/text properties either. That split is what makes the spec's
+   one explicit exception work: an attachments tile's Download button and a
+   link tile's Open button share one data-extras-role but carry two different
+   ids (see buildExtrasTileHtml() in js/dashboard.js), so restyling either
+   one recolours/rounds/shadows/borders both, while their text, size and
+   position stay independent - "the duplication logic DOES affect it, but NOT
+   TEXTWISE, SIZEWIZE, or MOVEWIZE". */
+var TILE_STYLE_MIRROR_PROPS = [
+  "background", "background-color", "background-image", "color",
+  "border", "border-width", "border-style", "border-color", "border-radius",
+  "box-shadow", "opacity", "fill", "stroke", "filter", "mix-blend-mode"
+];
 
 /**
  * Mirrors an attachments/day tile's rect/icon/text/button role element's
- * live inline style onto every other tile's same-role element (every
- * rendered tile shares one data-resize-id/data-edit-id per role, so a style
- * edit to any single tile is meant to apply to the shared template - see
+ * live inline LOOK onto every other tile's same-role element (every rendered
+ * tile shares one data-extras-role/data-days-role per piece, so a style edit
+ * to any single tile is meant to apply to the shared template - see
  * js/dashboard.js's buildExtrasTileHtml()/renderDays()). Checks both
  * data-extras-role (attachments tiles) and data-days-role (day tiles, two
- * independent templates - locked and open never mirror into each other
- * since they carry different role values). applyColorOverrides()/
- * applySizeOverrides()/etc. already repaint every matching id from the saved
- * maps on the NEXT load; this only covers the live, same-session gap, since
- * those inputs otherwise only ever touch styleMenuEl()'s single match (see
- * buildStyleMenu()'s colorInput/radiusInput/etc. handlers) and a resize drag
- * only ever touches the one dragged element. A no-op for every element
- * outside a tiled area.
+ * independent templates - locked and open never mirror into each other since
+ * they carry different role values). applyColorOverrides()/
+ * applyRadiusOverrides()/etc. already repaint every matching id from the
+ * saved maps on the NEXT load; this only covers the live, same-session gap,
+ * since those inputs otherwise only ever touch styleMenuEl()'s single match
+ * (see buildStyleMenu()'s colorInput/radiusInput/etc. handlers). A no-op for
+ * every element outside a tiled area.
+ *
+ * Copies one property at a time (see TILE_STYLE_MIRROR_PROPS) rather than
+ * assigning style.cssText wholesale as it used to: cssText carries the
+ * dragged element's width/height/transform too, which would drag every
+ * sibling's geometry along with a pure colour change and, worse, leak one
+ * button variant's size onto the other.
  * @param el a just-edited element, any kind
  */
 function mirrorTiledRoleStyle(el) {
@@ -1001,14 +1114,55 @@ function mirrorTiledRoleStyle(el) {
     : el.hasAttribute("data-days-role") ? "data-days-role" : null;
   if (!attr) return;
   var role = el.getAttribute(attr);
-  var cssText = el.style.cssText;
   var opColor = el.dataset.opColor, opAlpha = el.dataset.opAlpha, baseColor = el.dataset.baseColor;
   document.querySelectorAll('[' + attr + '="' + role + '"]').forEach(function (other) {
     if (other === el) return;
-    other.style.cssText = cssText;
+    TILE_STYLE_MIRROR_PROPS.forEach(function (prop) {
+      var v = el.style.getPropertyValue(prop);
+      if (v) other.style.setProperty(prop, v, el.style.getPropertyPriority(prop));
+      else other.style.removeProperty(prop);
+    });
     if (opColor === undefined) delete other.dataset.opColor; else other.dataset.opColor = opColor;
     if (opAlpha !== undefined) other.dataset.opAlpha = opAlpha;
     if (baseColor !== undefined) other.dataset.baseColor = baseColor;
+  });
+}
+
+/**
+ * Mirrors a just-moved/just-resized tile role's geometry onto every OTHER
+ * element sharing its id, so nudging the icon on one attachment tile nudges
+ * it on all of them the instant it happens - "any edits we make to one tile
+ * in this section should be duplicated across the rest in real time".
+ *
+ * Keyed by id rather than by role (unlike mirrorTiledRoleStyle()) because
+ * geometry is exactly what the two Download/Open button variants are meant
+ * NOT to share, and they differ by id while sharing a role. This is only the
+ * live half: the saved override is already stored under that same shared id,
+ * so applyPositionOverrides()/applySizeOverrides() reproduce the identical
+ * result for free on the next load by matching every element carrying it.
+ *
+ * Each mirror target re-clamps against ITS OWN tile rather than copying the
+ * offset blindly: the same role renders in tiles of very different widths (a
+ * day card's attachment row is a third the width of the main Extra
+ * attachments column), so an offset that's comfortably inside the tile being
+ * dragged can be well past the edge of a narrower sibling. Clamping per tile
+ * keeps every copy inside its own box, which is the rule the drag itself
+ * follows - see clampOwnPos().
+ * @param el a just-moved/resized element, any kind
+ */
+function mirrorTiledRoleGeometry(el) {
+  if (!isTiledRoleEl(el)) return;
+  var id = elId(el);
+  if (!id) return;
+  var w = el.dataset.ovW, h = el.dataset.ovH;
+  var tx = parseFloat(el.dataset.ovTx) || 0, ty = parseFloat(el.dataset.ovTy) || 0;
+  document.querySelectorAll('[data-edit-id="' + id + '"], [data-resize-id="' + id + '"]').forEach(function (other) {
+    if (other === el) return;
+    if (w !== undefined || tx || ty) detachFromFlow(other);
+    if (w !== undefined) setBox(other, parseFloat(w), parseFloat(h));
+    setOwnPos(other, tx, ty);
+    var c = clampOwnPos(other, tx, ty);
+    if (c.tx !== tx || c.ty !== ty) setOwnPos(other, c.tx, c.ty);
   });
 }
 
@@ -1079,14 +1233,11 @@ function pushResizeUndo(id, before, after) {
  * outside the ta portal's editor, otherwise a visitor's page would reflow
  * around the resized element. Elements with no saved size are left
  * completely untouched, in flow, exactly as the template renders them.
- * startResizeDrag() already refuses to CREATE a size override for an
- * isResizeLockedTileRole() element, but that alone doesn't protect
- * against one that's already sitting in a saved profile/draft from
- * before that guard existed (or restored via undo) - since these ids
- * repeat identically across every rendered tile, blindly reapplying a
- * stale one here would inflate every tile sharing that role on load, not
- * just the one a ta once (accidentally) resized. Filtered here too so
- * this self-heals regardless of what's actually stored.
+ * A tile role's id repeats identically across every rendered tile, so a size
+ * stored under one applies to all of them here - that IS the shared-template
+ * mirroring the spec asks for (mirrorTiledRoleGeometry() does the same thing
+ * live, mid-session), not a bug to filter out. Only an isResizeLockedTileRole()
+ * element (a reel tile, which would break its flex track) is skipped.
  * @param sizes content.sizes, {id: {w, h}}
  */
 function applySizeOverrides(sizes) {
@@ -1170,8 +1321,17 @@ function applyTextStyleOverrides(styles) {
  * first; a size override already forced that in applySizeOverrides()
  * (called before this), so this is a no-op for those. Two passes so every
  * element's cancel-out of its ancestors' offsets (see ancestorPos()) sees
- * those offsets already in place. Same "filter here too, not just at
- * drag-start" reasoning as applySizeOverrides() - see isMoveLockedTileRole().
+ * those offsets already in place. Same "one id, every element carrying it"
+ * shared-template rule as applySizeOverrides(), so a tile role's saved offset
+ * lands on every tile at once; only isMoveLockedTileRole() (a reel tile) is
+ * skipped.
+ *
+ * A third pass re-clamps every tile role afterward, for the same reason
+ * mirrorTiledRoleGeometry() does live: one saved offset is painted into tiles
+ * of different widths, so it can be inside the tile a ta dragged in and past
+ * the edge of a narrower one. Real visitors get this too, not just the
+ * editor - it's what stops a mirrored icon from being half-clipped by a day
+ * card's overflow on a student's screen.
  * @param positions content.positions, {id: {tx, ty}}
  */
 function applyPositionOverrides(positions) {
@@ -1186,6 +1346,12 @@ function applyPositionOverrides(positions) {
     }
   });
   els.forEach(paintPos);
+  els.forEach(function (el) {
+    if (!isTiledRoleEl(el) || !positions[elId(el)]) return;
+    var own = getPos(el);
+    var c = clampOwnPos(el, own.tx, own.ty);
+    if (c.tx !== own.tx || c.ty !== own.ty) setOwnPos(el, c.tx, c.ty);
+  });
 }
 
 /* every id currently deleted (data-edit-id/data-resize-id), kept in sync by
@@ -2791,9 +2957,6 @@ var STYLE_PROGRESSFILL_BEFORE = "";
 var STYLE_DARKPROGRESSFILL_BEFORE = "";
 var STYLE_PROGRESSTRACK_BEFORE = "";
 var STYLE_DARKPROGRESSTRACK_BEFORE = "";
-/* a progress element's {varCurrent, varTotal} right before the current
-   popover-session edit, same idea as STYLE_DT_BEFORE for datetime */
-var STYLE_PROGRESSVAR_BEFORE = null;
 /* a datetime element's {target, format, strftime} right before the current
    popover-session edit, so format/pattern/target changes push one undo
    step each against the value they started from (see buildStyleMenu()) */
@@ -2878,14 +3041,10 @@ function buildStyleMenu() {
       '<input type="color" class="sm-fill-dark">' +
       '<button type="button" class="sm-fill-dark-reset" title="Reset to auto">×</button>' +
     '</div>' +
-    '<div class="sm-row sm-progress-row sm-progress-current-row">' +
-      '<label>Current</label>' +
-      '<select class="sm-progress-current"></select>' +
-    '</div>' +
-    '<div class="sm-row sm-progress-row sm-progress-total-row">' +
-      '<label>Total</label>' +
-      '<select class="sm-progress-total"></select>' +
-    '</div>' +
+    /* a progress bar's two COLORS live here; its two variable bindings don't
+       (they're on the right-click menu, see renderCtxMenuProgressVars()) -
+       what a bar measures isn't a paint decision, and burying it here made
+       the one structural choice about a bar the hardest to find */
     '<div class="sm-row sm-progress-row sm-progress-fill-row">' +
       '<label>Progress color</label>' +
       '<input type="color" class="sm-progress-fill">' +
@@ -3034,8 +3193,6 @@ function buildStyleMenu() {
   var fillDarkToggle = STYLE_MENU.querySelector(".sm-fill-dark-toggle");
   var fillDarkInput = STYLE_MENU.querySelector(".sm-fill-dark");
   var fillDarkReset = STYLE_MENU.querySelector(".sm-fill-dark-reset");
-  var progressCurrent = STYLE_MENU.querySelector(".sm-progress-current");
-  var progressTotal = STYLE_MENU.querySelector(".sm-progress-total");
   var progressFillInput = STYLE_MENU.querySelector(".sm-progress-fill");
   var progressFillReset = STYLE_MENU.querySelector(".sm-progress-fill-reset");
   var progressFillDarkToggle = STYLE_MENU.querySelector(".sm-progress-fill-dark-toggle");
@@ -3077,7 +3234,6 @@ function buildStyleMenu() {
    hoverColorInput, hoverColorReset, hoverColorDarkToggle, hoverColorDarkInput, hoverColorDarkReset,
    activeColorInput, activeColorReset, activeColorDarkToggle, activeColorDarkInput, activeColorDarkReset,
    fillInput, fillReset, fillDarkToggle, fillDarkInput, fillDarkReset,
-   progressCurrent, progressTotal,
    progressFillInput, progressFillReset, progressFillDarkToggle, progressFillDarkInput, progressFillDarkReset,
    progressTrackInput, progressTrackReset, progressTrackDarkToggle, progressTrackDarkInput, progressTrackDarkReset,
    tintInput, tintReset, shadeInput, radiusInput, borderW, borderColor,
@@ -3472,35 +3628,6 @@ function buildStyleMenu() {
     }
     STYLE_DARKFILL_BEFORE = "";
   });
-
-  /**
-   * Commits a Current/Total variable-select change: updates the element's
-   * own descriptor (varCurrent/varTotal live on it directly, like a
-   * datetime element's target/format - see addCustomElement()), repersists
-   * CUSTOM_ELEMENTS, and repaints just this element's fill ratio.
-   * @param selectEl the "sm-progress-current"/"sm-progress-total" <select>
-   * @param field "varCurrent" or "varTotal"
-   */
-  function wireProgressVarSelect(selectEl, field) {
-    selectEl.addEventListener("change", function () {
-      if (!STYLE_MENU_ID) return;
-      var d = customElementById(STYLE_MENU_ID);
-      var el = styleMenuEl();
-      if (!d || !el) return;
-      var before = { varCurrent: d.varCurrent, varTotal: d.varTotal };
-      d[field] = selectEl.value;
-      saveCustomElements(CUSTOM_ELEMENTS);
-      paintProgressElement(el, d);
-      var after = { varCurrent: d.varCurrent, varTotal: d.varTotal };
-      if (before[field] !== after[field]) {
-        EDIT_UNDO.push({ type: "progressvar", id: STYLE_MENU_ID, before: before, after: after });
-        EDIT_REDO.length = 0;
-      }
-      STYLE_PROGRESSVAR_BEFORE = after;
-    });
-  }
-  wireProgressVarSelect(progressCurrent, "varCurrent");
-  wireProgressVarSelect(progressTotal, "varTotal");
 
   /**
    * Wires one "progress" themed color row's input/change/reset for both its
@@ -4319,11 +4446,6 @@ function primeStyleMenuThemedRows(el) {
   }
 
   if (isProgress) {
-    var d = customElementById(STYLE_MENU_ID) || {};
-    populateProgressVarSelect(STYLE_MENU.querySelector(".sm-progress-current"), d.varCurrent || "");
-    populateProgressVarSelect(STYLE_MENU.querySelector(".sm-progress-total"), d.varTotal || "");
-    STYLE_PROGRESSVAR_BEFORE = { varCurrent: d.varCurrent, varTotal: d.varTotal };
-
     var pFillBefore = primeThemedColorRow(currentProgressFillValue(el),
       STYLE_MENU.querySelector(".sm-progress-fill"), STYLE_MENU.querySelector(".sm-progress-fill-dark"),
       STYLE_MENU.querySelector(".sm-progress-fill-row"), STYLE_MENU.querySelector(".sm-progress-fill-dark-row"),
@@ -4604,6 +4726,12 @@ function positionRing() {
   RING.style.height = r.height + "px";
   RING.classList.toggle("locked", isLocked(elId(RING_EL)));
   RING.classList.toggle("reel-tile", RING_EL.hasAttribute("data-reel-tile"));
+  /* the download/open button and the attachment/day icons stay forever (see
+     deleteElement()'s data-extras-fixed/data-days-fixed guard), so the trash
+     handle is hidden on them rather than left as a button that silently does
+     nothing - everything else about them is still fully editable */
+  RING.classList.toggle("undeletable",
+    RING_EL.hasAttribute("data-extras-fixed") || RING_EL.hasAttribute("data-days-fixed"));
 }
 
 /**
@@ -4765,8 +4893,14 @@ function startMoveDrag(e) {
 
   function onMove(ev) {
     var dx = ev.clientX - startX, dy = ev.clientY - startY;
-    setOwnPos(el, base.tx + dx, base.ty + dy);
-    groupMembers.forEach(function (m) { setOwnPos(m.el, m.base.tx + dx, m.base.ty + dy); });
+    /* inside a tile/live area the drag stops dead at the container's edge
+       and grinds along it rather than escaping, see clampOwnPos() */
+    var c = clampOwnPos(el, base.tx + dx, base.ty + dy);
+    setOwnPos(el, c.tx, c.ty);
+    groupMembers.forEach(function (m) {
+      var mc = clampOwnPos(m.el, m.base.tx + dx, m.base.ty + dy);
+      setOwnPos(m.el, mc.tx, mc.ty);
+    });
     positionRing();
   }
   function onUp() {
@@ -5085,7 +5219,7 @@ function variableNumericValue(key) {
  * Fills a <select> with every variable matching predicate, built with real
  * DOM nodes rather than an innerHTML string since a variable's ta-typed
  * "name" isn't escaped anywhere else in this file. Shared by the "progress"
- * element's style-popover Current/Total selects (see
+ * element's right-click Current/Total selects (see
  * populateProgressVarSelect()) and the text toolbar's formula menu (see
  * openFormulaMenu()).
  * @param selectEl the <select> to fill
@@ -5104,11 +5238,13 @@ function populateVariableSelect(selectEl, predicate, selectedKey) {
 }
 
 /**
- * Fills a "progress" element's style-popover Current/Total <select> with
- * every number-typed variable (a progress bar's fill ratio is only ever
- * meaningful between two numbers - string/boolean/datetime variables just
- * don't show up as options here). See populateVariableSelect().
- * @param selectEl the "sm-progress-current"/"sm-progress-total" <select>
+ * Fills a "progress" element's Current/Total <select> (the right-click
+ * menu's Variables sub-view, see renderCtxMenuProgressVars()) with every
+ * number-typed variable in the content manager's Variables list - a progress
+ * bar's fill ratio is only ever meaningful between two numbers, so string/
+ * boolean/datetime variables just don't show up as options here. See
+ * populateVariableSelect().
+ * @param selectEl the ".ctx-var-current"/".ctx-var-total" <select>
  * @param selectedKey the element's current d.varCurrent/d.varTotal
  */
 function populateProgressVarSelect(selectEl, selectedKey) {
@@ -5260,7 +5396,83 @@ function buildExtrasFilenameChipHtml() {
 function repaintExtrasFilenameChips() {
   document.querySelectorAll('.fx-chip[data-fx-local="filename"]').forEach(function (chip) {
     var tile = chip.closest("[data-extras-tile]");
-    chip.textContent = (tile && tile.dataset.extrasFilename) || "";
+    chip.textContent = localChipVarToken(chip) || ((tile && tile.dataset.extrasFilename) || "");
+  });
+}
+
+/* the variable-name suffix each day-tile local chip stands for, appended to
+   the tile's own data-days-var scope ("Day3") to spell the whole name a ta
+   sees while editing the field: ${Day3Header}, ${Day3OpensAt}, and so on.
+   The filename chip's own scope lives on the attachment tile instead
+   (data-extras-var, eg "Day3Attachment2" -> ${Day3Attachment2Name}), since
+   an attachment tile is the thing that repeats there. */
+var DAYS_CHIP_VAR_SUFFIX = {
+  "day-number": "Number",
+  "day-date": "OpensAt",
+  "day-locked": "Locked",
+  "day-title": "Header",
+  "day-blurb": "Body"
+};
+
+/**
+ * The `${...}` variable name a local chip stands for, but ONLY while the
+ * field it sits in is actually being edited (wireTextField() stamps
+ * ".editing" for exactly that window). The rest of the time every chip shows
+ * its resolved value, so the editor keeps looking like the real page.
+ *
+ * That's the spec's "upon editing them, users will just see the variable
+ * inline": these names are per-tile and deliberately exist nowhere else -
+ * they're not in content.variables, so they never appear in the content
+ * manager's variables list nor in the formula menu's variable picker, and
+ * the only way to change what one RESOLVES to is the content manager's own
+ * day panel (see js/ta.js's renderPanels()).
+ * @param chip a .fx-chip element carrying data-fx-local
+ * @return the "${Name}" token, or "" when the chip isn't mid-edit (or its
+ *   tile carries no variable scope, eg the trailing synthetic locked card)
+ */
+function localChipVarToken(chip) {
+  if (!chip.closest(".editing")) return "";
+  var local = chip.dataset.fxLocal;
+  if (local === "filename") {
+    var xTile = chip.closest("[data-extras-tile]");
+    var xBase = xTile && xTile.dataset.extrasVar;
+    return xBase ? "${" + xBase + "Name}" : "";
+  }
+  var suffix = DAYS_CHIP_VAR_SUFFIX[local];
+  var dTile = chip.closest("[data-days-tile]");
+  var dBase = dTile && dTile.dataset.daysVar;
+  return (suffix && dBase) ? "${" + dBase + suffix + "}" : "";
+}
+
+/**
+ * Repaints every local chip and every per-tile attachment icon at once - the
+ * whole "this piece of the shared template resolves differently on each
+ * tile" set. Called whenever a text field enters or leaves edit mode (chips
+ * swap between their resolved value and their ${variable} name, see
+ * localChipVarToken()) and after any render/mirror that could have copied
+ * one tile's resolved text onto another's.
+ */
+function repaintLocalTileContent() {
+  repaintExtrasFilenameChips();
+  repaintDaysChips();
+  repaintExtrasTypeIcons();
+}
+
+/**
+ * Paints each placed "attachment icon" element (see buildCustomElementNode()'s
+ * "extrasIcon" kind) with the glyph for the attachment tile it's actually
+ * sitting on. This is the tile-exclusive element the right-click menu only
+ * offers inside an attachments tile: one element, but a .pdf tile draws the
+ * document glyph and a link tile the chain, because the icon is a property
+ * of the attachment, not of the element a ta placed. Resolved through
+ * js/dashboard.js's attachmentIconSvgFor() so the glyph set lives in exactly
+ * one place; a no-op on every page that doesn't load that file (nothing
+ * there can match the selector anyway).
+ */
+function repaintExtrasTypeIcons() {
+  if (!window.attachmentIconSvgFor) return;
+  document.querySelectorAll("[data-extras-typeicon]").forEach(function (el) {
+    el.innerHTML = window.attachmentIconSvgFor(el.closest("[data-extras-tile]"));
   });
 }
 
@@ -5310,35 +5522,59 @@ function buildDaysChipHtml(local, label) {
  * raw ISO string, so no date formatting is duplicated here.
  */
 function repaintDaysChips() {
-  document.querySelectorAll('.fx-chip[data-fx-local="day-number"]').forEach(function (chip) {
-    var tile = chip.closest("[data-days-tile]");
-    chip.textContent = (tile && tile.dataset.daysNumber) ? ("Day " + tile.dataset.daysNumber) : "";
-  });
-  document.querySelectorAll('.fx-chip[data-fx-local="day-date"]').forEach(function (chip) {
-    var tile = chip.closest("[data-days-tile]");
-    chip.textContent = (tile && tile.dataset.daysDate) || "";
-  });
-  document.querySelectorAll('.fx-chip[data-fx-local="day-locked"]').forEach(function (chip) {
-    var tile = chip.closest("[data-days-tile]");
-    chip.textContent = tile && tile.dataset.daysLocked === "1" ? "Yes" : "No";
+  /* what each local resolves to off its own tile's dataset, in one table so
+     adding a sixth local is one line rather than a fourth near-identical
+     query loop. day-title/day-blurb are the day's real content-manager
+     title/description (see buildDayOpenTileHtml() in js/dashboard.js). */
+  var resolvers = {
+    "day-number": function (t) { return t.dataset.daysNumber ? "Day " + t.dataset.daysNumber : ""; },
+    "day-date": function (t) { return t.dataset.daysDate || ""; },
+    "day-locked": function (t) { return t.dataset.daysLocked === "1" ? "Yes" : "No"; },
+    "day-title": function (t) { return t.dataset.daysTitle || ""; },
+    "day-blurb": function (t) { return t.dataset.daysBlurb || ""; }
+  };
+  Object.keys(resolvers).forEach(function (local) {
+    document.querySelectorAll('.fx-chip[data-fx-local="' + local + '"]').forEach(function (chip) {
+      var tile = chip.closest("[data-days-tile]");
+      chip.textContent = localChipVarToken(chip) || (tile ? resolvers[local](tile) : "");
+    });
   });
 }
 
 /**
- * Handles the day tile area's right-click "Insert day number"/"Insert
- * unlock date"/"Insert locked-state text" actions (see renderCtxMenuRoot()'s
- * data-days-add-* buttons): restores the given local chip into whichever
- * chip-eligible text field (the locked template's title, or the open
- * template's daytag) exists on the tile the context menu was opened on -
- * same commitTextFieldChange()/mirrorEditedField() path a normal typed edit
- * takes, so undo and cross-tile mirroring both work identically.
+ * Which field on a day tile each local chip is restored INTO by
+ * insertDaysChip(). The day/date/locked chips go to whichever generic
+ * "day tag" field the tile's template has (the locked template's title, the
+ * open template's daytag); the title/description chips belong to their own
+ * dedicated fields, so a ta who deleted the title variable gets it back in
+ * the title field rather than glued onto the day tag.
+ */
+var DAYS_CHIP_FIELD = {
+  "day-title": '[data-days-role="open.title"]',
+  "day-blurb": '[data-days-role="open.blurb"]'
+};
+var DAYS_CHIP_DEFAULT_FIELD = '[data-days-role="locked.title"], [data-days-role="open.daytag"]';
+
+/**
+ * Handles the day tile area's right-click "Insert day number"/"Insert unlock
+ * date"/"Insert locked-state text"/"Insert title variable"/"Insert
+ * description variable" actions (see renderCtxMenuRoot()'s data-days-add-*
+ * buttons): restores the given local chip into the tile's matching text
+ * field (see DAYS_CHIP_FIELD) - same commitTextFieldChange()/
+ * mirrorEditedField() path a normal typed edit takes, so undo and cross-tile
+ * mirroring both work identically. This is the whole recovery route for a
+ * variable a ta deleted: they can freely retype around it, or delete it
+ * outright, and still get it back without hand-writing any markup.
  * @param tile the [data-days-tile] the context menu was opened on
- * @param local "day-number", "day-date", or "day-locked"
+ * @param local a DAYS_CHIP_VAR_SUFFIX key
  */
 function insertDaysChip(tile, local) {
-  var field = tile.querySelector('[data-days-role="locked.title"], [data-days-role="open.daytag"]');
+  var field = tile.querySelector(DAYS_CHIP_FIELD[local] || DAYS_CHIP_DEFAULT_FIELD);
   if (!field) return;
-  var labels = { "day-number": "Day #", "day-date": "date", "day-locked": "locked" };
+  var labels = {
+    "day-number": "Day #", "day-date": "date", "day-locked": "locked",
+    "day-title": "Title", "day-blurb": "Description"
+  };
   var before = field.innerHTML;
   field.innerHTML = before + (before ? " " : "") + buildDaysChipHtml(local, labels[local] || local);
   commitTextFieldChange(field, before, field.innerHTML);
@@ -5677,6 +5913,19 @@ function buildCustomElementNode(d) {
     el.style.background = "var(--surface-2)";
     el.style.width = "160px";
     el.style.height = "100px";
+  } else if (d.kind === "extrasIcon") {
+    /* the attachments-tile-exclusive "Attachment icon" element (offered by
+       renderCtxMenuRoot() only while the right-click landed on an attachment
+       tile). Its glyph isn't baked in: repaintExtrasTypeIcons() fills it from
+       whichever tile it ends up sitting on, so the same placed element draws
+       a document, a photo, a slide deck or a chain link depending on what
+       that tile's attachment actually is. Reuses .extras-tile-icon so it
+       sizes and colours exactly like the built-in icon role beside it. */
+    el = document.createElement("span");
+    el.className = "extras-tile-icon";
+    el.setAttribute("data-resize-id", d.id);
+    el.setAttribute("data-extras-typeicon", "1");
+    el.innerHTML = window.attachmentIconSvgFor ? window.attachmentIconSvgFor(null) : "";
   } else if (d.kind === "extrasArea") {
     /* transparent layout container for the student dashboard's "Extra
        attachments" tile list (see app/db.py's _DASH_EXTRAS_AREA_ENTRY) -
@@ -6000,8 +6249,16 @@ function applyElementAnchors() {
        grid ~84px past the column its own heading lines up with, so the last
        day tile overflowed the section. Only when a ta hasn't dragged a width
        of their own - applySizeOverrides() records that as ovW, and an
-       explicit choice always wins over the column default. */
-    if (isLiveAreaEl(el) && el.dataset.ovW === undefined) {
+       explicit choice always wins over the column default.
+
+       The dashboard's progress bar is anchored the same way and was seeded
+       with the same stale 1160 (_DASH_PROGRESS_ENTRY), so it overhung the
+       column by the same ~84px - its right edge visibly past every heading
+       and tile on the page, and past the window entirely on a narrower one.
+       Same fix, for the same reason: a bar pinned to a full-width in-flow
+       spacer is meant to span that column, whatever the column measures
+       today, and a ta dragging their own width still wins. */
+    if ((isLiveAreaEl(el) || el.hasAttribute("data-progress")) && el.dataset.ovW === undefined) {
       el.style.width = anchor.getBoundingClientRect().width + "px";
     }
   });
@@ -6448,6 +6705,9 @@ function findBoundTileHit(x, y, kind) {
  */
 function finishAddedElement(el, d, kind, extra) {
   if (kind === "text" || kind === "button") wireTextField(el);
+  /* an attachment icon only knows which glyph to draw once it's actually
+     placed inside a tile, see repaintExtrasTypeIcons() */
+  if (kind === "extrasIcon") repaintExtrasTypeIcons();
   if (kind === "reel" && window.initReel) {
     /* every other kind is fully live the instant it's built, but a reel's
        drift/hover/loop only starts once js/learn-reel.js clones and wires
@@ -6515,7 +6775,12 @@ function finishAddedElement(el, d, kind, extra) {
 function addCustomElement(kind, x, y, extra) {
   extra = extra || {};
   var uid = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  var d = { id: (kind === "icon" ? "icon.custom." : "custom." + kind + ".") + uid, kind: kind, page: currentPageKey(), left: Math.round(x), top: Math.round(y) };
+  /* "icon."-prefixed ids are what elKind() reads to treat an element as an
+     icon (aspect ratio locked on resize, icon-shaped style popover), so the
+     attachment type icon takes that prefix too - it IS an icon, just one
+     whose glyph is resolved per tile, see buildCustomElementNode() */
+  var prefix = kind === "icon" ? "icon.custom." : kind === "extrasIcon" ? "icon.extras." : "custom." + kind + ".";
+  var d = { id: prefix + uid, kind: kind, page: currentPageKey(), left: Math.round(x), top: Math.round(y) };
   if (kind === "icon") { d.icon = extra.icon; d.url = extra.url; }
   if (kind === "image" || kind === "video") d.url = extra.url;
   if (kind === "datetime") {
@@ -6526,8 +6791,9 @@ function addCustomElement(kind, x, y, extra) {
   if (kind === "progress") {
     /* binds to the two builtin variables by default (see
        DEFAULT_CONTENT["variables"] in app/db.py); re-bindable afterward from
-       the style popover's Current/Total selects, same "sensible defaults,
-       configure from the popover after" pattern as datetime just above. */
+       the right-click menu's "Bind variables..." sub-view (see
+       renderCtxMenuProgressVars()), same "sensible defaults, configure after"
+       pattern as datetime just above. */
     d.varCurrent = extra.varCurrent || "days_progressed";
     d.varTotal = extra.varTotal || "total_days";
   }
@@ -6541,7 +6807,10 @@ function addCustomElement(kind, x, y, extra) {
     }
   }
 
-  var tileHit = kind === "reel" ? null : findBoundTileHit(x, y, kind);
+  /* extra.tile is an explicit "bind to this tile, wherever the cursor is"
+     (see handleCtxAdd()'s extrasIcon branch); everything else resolves its
+     owner from the drop point/hitbox, see findBoundTileHit() */
+  var tileHit = kind === "reel" ? null : (extra.tile || findBoundTileHit(x, y, kind));
   if (tileHit) return addBoundElement(tileHit, kind, d, extra);
 
   var el = buildCustomElement(d);
@@ -6655,9 +6924,16 @@ function addBoundElement(tileEl, kind, d, extra) {
     return fallbackEl;
   }
 
+  /* tile-relative, and never outside the tile: the drop point can genuinely
+     sit outside it (an element bound by its HITBOX rather than the cursor,
+     see findBoundTileHit(), or a tile-scoped kind bound explicitly, see
+     handleCtxAdd()), and a bound child is supposed to live within its
+     tile's bounds from the moment it's placed - the same rule clampOwnPos()
+     enforces for every move afterward. */
   var tileRect = tileEl.getBoundingClientRect();
-  d.left = Math.round(d.left - (tileRect.left + window.scrollX));
-  d.top = Math.round(d.top - (tileRect.top + window.scrollY));
+  var edge = 8;
+  d.left = Math.round(Math.max(0, Math.min(d.left - (tileRect.left + window.scrollX), Math.max(0, tileRect.width - edge))));
+  d.top = Math.round(Math.max(0, Math.min(d.top - (tileRect.top + window.scrollY), Math.max(0, tileRect.height - edge))));
 
   var childEl = buildCustomElementNode(d);
   placeInTile(tileEl, childEl, d.left, d.top);
@@ -6681,20 +6957,13 @@ function addBoundElement(tileEl, kind, d, extra) {
  * after a tile's own shared-template pieces (rect/icon/text/button, or the
  * locked/open template) are built, since those functions fully rebuild the
  * tile's innerHTML from scratch on every call - any previously-rendered
- * bound children need rebuilding right along with it. Re-runs the same
- * generic override sweeps (color/size/radius/text/position/hidden) a second
- * time afterward: extras/days tiles render AFTER applySharedEditorOverrides()'s
- * own sweep pass already ran once (see its window.renderExtras hook), so a
- * bound child's own saved style overrides would otherwise never get
- * repainted - those sweeps are plain document-wide queries, safe and cheap
- * to re-run, exactly the same "sweep instead of single match" reasoning
- * mirrorTiledRoleStyle() already relies on for the tile roles themselves.
+ * bound children need rebuilding right along with it. Repainting their saved
+ * overrides is the caller's job, once for the whole area, see
+ * applyLiveAreaOverrides().
  * @param tileEl a tile matching one of BOUND_TILE_SELECTORS
  * @param children the tile's own saved children array (may be empty/undefined)
- * @param data the full content blob (for the override maps), or omitted to
- *   skip the repaint pass (eg when children is known to be empty)
  */
-function renderTileChildren(tileEl, children, data) {
+function renderTileChildren(tileEl, children) {
   tileEl.querySelectorAll(":scope > .free-wrap").forEach(function (w) { w.remove(); });
   (children || []).forEach(function (d) {
     var el = buildCustomElementNode(d);
@@ -6705,7 +6974,27 @@ function renderTileChildren(tileEl, children, data) {
     if (d.kind === "progress") paintProgressElement(el, d);
     if (d.kind === "button" && d.id && LINKS[d.id]) applyOneLink(el, LINKS[d.id]);
   });
-  if (!children || !children.length || !data) return;
+}
+window.renderTileChildren = renderTileChildren;
+
+/**
+ * Re-runs the generic override sweeps (text/size/font/position/color/radius/
+ * hidden) over a live area that has just rebuilt its tiles, then repaints
+ * every per-tile local chip and attachment icon.
+ *
+ * Needed because an extras/days area renders AFTER applySharedEditorOverrides()'s
+ * own sweep pass already ran once (see its window.renderExtras hook), against
+ * a DOM that had none of these tiles in it yet. Every tile role and every
+ * bound child would otherwise come out at its raw template geometry, silently
+ * dropping every move/resize a ta has saved. The sweeps are plain
+ * document-wide queries keyed by id, so re-running them is both safe and
+ * exactly what makes the shared template mirror: one saved {tx,ty} or {w,h}
+ * for "extras.tile.icon" lands on every rendered tile's icon at once, the
+ * reload-time counterpart of mirrorTiledRoleGeometry().
+ * @param data the full content blob (for the override maps)
+ */
+function applyLiveAreaOverrides(data) {
+  if (!data) return;
   applyTextOverrides(data.text || {});
   applySizeOverrides(data.sizes);
   applyFontSizeOverrides(data.font_sizes);
@@ -6714,8 +7003,9 @@ function renderTileChildren(tileEl, children, data) {
   applyColorOverrides(data.colors, data.dark_colors);
   applyRadiusOverrides(data.radius);
   applyHiddenOverrides(data.hidden);
+  repaintLocalTileContent();
 }
-window.renderTileChildren = renderTileChildren;
+window.applyLiveAreaOverrides = applyLiveAreaOverrides;
 
 /**
  * Drops a saved object (see the right-click "Add element" > "Object"
@@ -6889,6 +7179,49 @@ var CTX_TARGET_EL = null;
    toggle a ta styled. */
 var ICON_REPLACE_TARGET = null;
 
+/* the attachments/day tile a ta most recently clicked into, so a right-click
+   on the AREA around the tiles (rather than precisely on one) still knows
+   which tile its "insert variable" actions should act on - the spec's "they
+   have to right click the area ... and it will automatically be treated as
+   part of the tile the user has selected, or had selected last". Session
+   state only, never persisted, and re-validated on use since either tile can
+   be thrown away by the next renderExtras()/renderDays(). */
+var LAST_TILE = { extras: null, days: null };
+
+/**
+ * Records whichever tiles el sits inside as the current ones, for the
+ * "or had selected last" fallback above. Called from the editor's own
+ * selection mousedown and from every right-click, so simply clicking a tile
+ * is enough - a ta never has to know the fallback exists.
+ * @param el the just-selected/right-clicked element (null is ignored)
+ */
+function noteTileSelection(el) {
+  if (!el || !el.closest) return;
+  var x = el.closest("[data-extras-tile]");
+  if (x) LAST_TILE.extras = x;
+  var d = el.closest("[data-days-tile]");
+  if (d) LAST_TILE.days = d;
+}
+
+/**
+ * The tile the context menu's tile-scoped actions should act on: the one the
+ * right-click actually landed inside, else the last one selected - but only
+ * when the right-click landed somewhere inside the live area that owns these
+ * tiles at all. That last condition is what keeps these per-tile variables
+ * invisible "outside the tile", per the spec: right-clicking anywhere else
+ * on the page offers nothing about them.
+ * @param kind "extras" or "days"
+ * @return the tile element, or null
+ */
+function ctxTileFor(kind) {
+  if (!CTX_TARGET_EL || !CTX_TARGET_EL.closest) return null;
+  var direct = CTX_TARGET_EL.closest(kind === "extras" ? "[data-extras-tile]" : "[data-days-tile]");
+  if (direct) return direct;
+  if (!CTX_TARGET_EL.closest("[data-extras-area], [data-days-area]")) return null;
+  var last = LAST_TILE[kind];
+  return last && last.isConnected ? last : null;
+}
+
 /** Builds the context menu once, lazily. */
 function buildCtxMenu() {
   CTX_MENU = document.createElement("div");
@@ -6934,12 +7267,18 @@ function renderCtxMenuRoot() {
        buildExtrasTileHtml() in js/dashboard.js */
     var isExtrasFixed = CTX_TARGET_EL && CTX_TARGET_EL.hasAttribute("data-extras-fixed");
     var isExtrasRole = CTX_TARGET_EL && CTX_TARGET_EL.hasAttribute("data-extras-role");
-    var extrasTile = CTX_TARGET_EL && CTX_TARGET_EL.closest && CTX_TARGET_EL.closest("[data-extras-tile]");
+    var extrasTile = ctxTileFor("extras");
     var isDaysFixed = CTX_TARGET_EL && CTX_TARGET_EL.hasAttribute("data-days-fixed");
     var isDaysRole = CTX_TARGET_EL && CTX_TARGET_EL.hasAttribute("data-days-role");
-    var daysTile = CTX_TARGET_EL && CTX_TARGET_EL.closest && CTX_TARGET_EL.closest("[data-days-tile]");
+    var daysTile = ctxTileFor("days");
     var isSpecial = isDatetime || isTile || isExtrasFixed || isDaysFixed || CTX_TARGET_ID.indexOf("logistics.") === 0 || CTX_TARGET_ID.indexOf("countdown.") === 0 ||
       (CTX_TARGET_EL && CTX_TARGET_EL.querySelector && CTX_TARGET_EL.querySelector("#heroCountdown, #logisticsGrid"));
+    /* a progress bar is a readout, not a control: it displays two variables
+       (see renderCtxMenuProgressVars(), offered in its place below) and has
+       no click behavior of its own, so offering to make one navigate
+       somewhere was just a wrong affordance - the caption text next to a bar
+       is where a link belongs if one is wanted at all */
+    var isProgress = CTX_TARGET_EL && CTX_TARGET_EL.hasAttribute("data-progress");
     toggleHtml =
       '<div class="ctx-title">This element</div>' +
       ((isSpecial || isExtrasRole || isDaysRole) ? "" : '<button type="button" data-dup="1">Duplicate</button>') +
@@ -6947,10 +7286,13 @@ function renderCtxMenuRoot() {
       (extrasTile ? '<button type="button" data-extras-add-filename="1">Create textbox with filename variable</button>' : "") +
       (daysTile ? '<button type="button" data-days-add-number="1">Insert day number</button>' +
         '<button type="button" data-days-add-date="1">Insert unlock date</button>' +
-        '<button type="button" data-days-add-locked="1">Insert locked-state text</button>' : "") +
-      '<button type="button" data-link-edit="1">' +
-      (LINKS[CTX_TARGET_ID] ? "Edit link" : "Add link") +
-      '</button>' +
+        '<button type="button" data-days-add-locked="1">Insert locked-state text</button>' +
+        '<button type="button" data-days-add-title="1">Insert title variable</button>' +
+        '<button type="button" data-days-add-blurb="1">Insert description variable</button>' : "") +
+      (isProgress ? '<button type="button" data-progress-vars="1">Bind variables...</button>' :
+        '<button type="button" data-link-edit="1">' +
+        (LINKS[CTX_TARGET_ID] ? "Edit link" : "Add link") +
+        '</button>') +
       '<button type="button" data-lock-toggle="1">' +
       (isLocked(CTX_TARGET_ID) ? "Unlock element" : "Lock element") +
       '</button>' +
@@ -6963,9 +7305,17 @@ function renderCtxMenuRoot() {
     toggleHtml += '<div class="ctx-title">Selection</div>' +
       '<button type="button" data-group="1">Group ' + SELECTED_IDS.length + ' elements</button>';
   }
+  /* the one element kind that only exists inside an attachments tile: it
+     draws whatever icon THAT tile's attachment type calls for (see
+     buildCustomElementNode()'s "extrasIcon" kind), so offering it anywhere
+     else would place something with nothing to resolve against. Labelled as
+     tile-only right in the button, since it behaves unlike every other entry
+     in this list. */
+  var extrasIconTile = ctxTileFor("extras");
   CTX_MENU.innerHTML =
     toggleHtml +
     '<div class="ctx-title">Add element</div>' +
+    (extrasIconTile ? '<button type="button" data-add="extrasIcon">Attachment icon (this tile only)</button>' : "") +
     '<button type="button" data-add="text">Textbox</button>' +
     '<button type="button" data-add="box">Box</button>' +
     '<button type="button" data-add="image">Image</button>' +
@@ -6974,7 +7324,13 @@ function renderCtxMenuRoot() {
     '<button type="button" data-add="button">Button</button>' +
     '<button type="button" data-add="datetime">Date/time</button>' +
     '<button type="button" data-add="progress">Progress bar</button>' +
-    '<button type="button" data-add="object">Object...</button>';
+    '<button type="button" data-add="object">Object...</button>' +
+    /* page-scoped rather than element-scoped, so it sits in its own section
+       below "Add element" instead of under "This element" - see
+       renderCtxMenuLinkList() for why the whole link inventory belongs in
+       the editor at all */
+    '<div class="ctx-title">This page</div>' +
+    '<button type="button" data-link-list="1">Links on this page</button>';
   CTX_MENU.querySelectorAll("button[data-add]").forEach(function (btn) {
     btn.addEventListener("click", function () { handleCtxAdd(btn.getAttribute("data-add")); });
   });
@@ -6995,16 +7351,18 @@ function renderCtxMenuRoot() {
   var extrasFilenameBtn = CTX_MENU.querySelector("[data-extras-add-filename]");
   if (extrasFilenameBtn) {
     extrasFilenameBtn.addEventListener("click", function () {
-      var tile = CTX_TARGET_EL && CTX_TARGET_EL.closest && CTX_TARGET_EL.closest("[data-extras-tile]");
+      var tile = ctxTileFor("extras");
       if (tile) insertExtrasFilenameChip(tile);
       hideCtxMenu();
     });
   }
-  [["data-days-add-number", "day-number"], ["data-days-add-date", "day-date"], ["data-days-add-locked", "day-locked"]].forEach(function (pair) {
+  [["data-days-add-number", "day-number"], ["data-days-add-date", "day-date"],
+   ["data-days-add-locked", "day-locked"], ["data-days-add-title", "day-title"],
+   ["data-days-add-blurb", "day-blurb"]].forEach(function (pair) {
     var btn = CTX_MENU.querySelector("[" + pair[0] + "]");
     if (!btn) return;
     btn.addEventListener("click", function () {
-      var tile = CTX_TARGET_EL && CTX_TARGET_EL.closest && CTX_TARGET_EL.closest("[data-days-tile]");
+      var tile = ctxTileFor("days");
       if (tile) insertDaysChip(tile, pair[1]);
       hideCtxMenu();
     });
@@ -7012,6 +7370,14 @@ function renderCtxMenuRoot() {
   var linkEditBtn = CTX_MENU.querySelector("[data-link-edit]");
   if (linkEditBtn) {
     linkEditBtn.addEventListener("click", function () { renderCtxMenuLinkEditor(); });
+  }
+  var progressVarsBtn = CTX_MENU.querySelector("[data-progress-vars]");
+  if (progressVarsBtn) {
+    progressVarsBtn.addEventListener("click", function () { renderCtxMenuProgressVars(); });
+  }
+  var linkListBtn = CTX_MENU.querySelector("[data-link-list]");
+  if (linkListBtn) {
+    linkListBtn.addEventListener("click", function () { renderCtxMenuLinkList(); });
   }
   var lockBtn = CTX_MENU.querySelector("[data-lock-toggle]");
   if (lockBtn) {
@@ -7084,6 +7450,311 @@ function renderCtxMenuLinkEditor() {
   });
   var rm = CTX_MENU.querySelector(".ctx-link-remove");
   if (rm) rm.addEventListener("click", function () { setElementLink(id, ""); hideCtxMenu(); });
+}
+
+/* tagged elements that navigate (or un-navigate) on their own with no
+   content.links entry behind them at all, because a real click handler
+   elsewhere in this codebase does the work: js/dashboard.js's logout() on the
+   student dashboard, updatePortalLink()'s own sign-out wiring on the landing
+   page. The links view below LISTS these - "what does Log out actually do?"
+   is exactly the question it exists to answer - but never lets one be edited:
+   a content.links url layered on top would just fight the handler that's
+   already wired to it. Keyed by data-edit-id/data-resize-id. */
+var BUILTIN_LINK_ACTIONS = {
+  "dash.nav.logout": "Logs out, back to login.html",
+  "box.logoutBtn": "Logs out, stays on this page"
+};
+
+/**
+ * Collects every link that exists on this page right now, split into the
+ * three groups the links view renders as its own sections.
+ *
+ * Why the built-in group matters: this inventory used to live in the content
+ * manager (a "Links" list under Day panels, see the note in js/ta.js), which
+ * could only ever know about content.links - so a ta looking up where the
+ * nav's "Extra attachments" link scrolls to, or what the brand logo points
+ * at, or what "Log out" does, found an empty list, because nobody had "added"
+ * those links, the templates ship with them. Reading them straight off the
+ * live DOM in the editor is the only place all of them are actually visible
+ * at once, next to the elements they belong to.
+ *
+ * One row per id even where the same id is rendered more than once (the brand
+ * text sits in both the nav and the footer), pointing at the first instance -
+ * the same "an id is the unit, not a node" rule LINKS/applyOneLink() already
+ * follow.
+ * @return {set, builtin, elsewhere}, each an array of
+ *   {id, el, url, editable, removable, note}
+ */
+function pageLinkInventory() {
+  var seen = {};
+  var set = [];
+  var builtin = [];
+  document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
+    var id = elId(el);
+    if (!id || seen[id]) return;
+    seen[id] = true;
+    if (LINKS[id]) {
+      set.push({ id: id, el: el, url: LINKS[id], editable: true, removable: true, note: "" });
+      return;
+    }
+    if (BUILTIN_LINK_ACTIONS[id]) {
+      builtin.push({ id: id, el: el, url: "", editable: false, removable: false, note: BUILTIN_LINK_ACTIONS[id] });
+      return;
+    }
+    /* data-builtin-href is where a template link's real target survives the
+       editor, since every preview/editor load strips the live href off the
+       nav's own links so a ta can't navigate the iframe away - see
+       stashBuiltinHref()/neuterLink() */
+    var href = el.getAttribute("href") || el.getAttribute("data-builtin-href") || "";
+    if (!href) return;
+    if (el.classList.contains("join-link")) {
+      /* every "Apply Now" shares one href, set from content.join_url on load
+         (see setJoinUrl()), so the content manager's own field is the place
+         to change it - overriding a single one here would silently drift the
+         set apart on the next load */
+      builtin.push({ id: id, el: el, url: href, editable: false, removable: false,
+        note: 'Content manager › "Apply Now" button link' });
+      return;
+    }
+    builtin.push({ id: id, el: el, url: href, editable: true, removable: false, note: "" });
+  });
+
+  /* content.links is one flat, site-wide map (no page scoping), so a link set
+     on the dashboard is still in LINKS while the landing page is open. Listed
+     last, unreachable by "show me" but still editable/removable, so an entry
+     left behind on a since-deleted element can't become invisible junk that
+     only the other page can clear. */
+  var elsewhere = Object.keys(LINKS).filter(function (id) { return !seen[id]; }).map(function (id) {
+    return { id: id, el: null, url: LINKS[id], editable: true, removable: true, note: "" };
+  });
+
+  function byId(a, b) { return a.id < b.id ? -1 : (a.id > b.id ? 1 : 0); }
+  return { set: set.sort(byId), builtin: builtin.sort(byId), elsewhere: elsewhere.sort(byId) };
+}
+
+/**
+ * A short, recognizable name for one links-view row: whatever text the
+ * element actually shows ("Extra attachments", "Log out", "Access portal"),
+ * which is how a ta thinks of it, falling back to the raw id for anything
+ * with no text of its own (the brand logo's wrapper, a linked image or box).
+ * @param el the element, or null for an entry with none on this page
+ * @param id its data-edit-id/data-resize-id
+ * @return the label text
+ */
+function linkRowLabel(el, id) {
+  var text = el ? (el.textContent || "").replace(/\s+/g, " ").trim() : "";
+  if (!text) return id;
+  return text.length > 34 ? text.slice(0, 33) + "…" : text;
+}
+
+/**
+ * Scrolls one element into view and selects it (the ring follows the smooth
+ * scroll on its own, see the scroll listener next to positionRing()). The
+ * "click through to the element itself" half of the links view: a row can
+ * name something a ta has no way to spot by eye - a link on a small icon
+ * inside a tile, an element sitting far off screen - so the list has to be
+ * able to put the selection straight onto it.
+ * @param el the element to reveal
+ */
+function revealElement(el) {
+  if (!el) return;
+  hideCtxMenu();
+  el.scrollIntoView({ block: "center", behavior: "smooth" });
+  RING_EL = el;
+  positionRing();
+}
+
+/**
+ * Builds one links-view row: the element's name/id on the left (click to
+ * select it in the editor), and on the right either an editable url + remove
+ * button, or a plain read-only note for anything this view deliberately
+ * doesn't own (see BUILTIN_LINK_ACTIONS and the join-link branch in
+ * pageLinkInventory()). Built as real DOM nodes rather than an innerHTML
+ * string, since a row's label is a ta's own typed element text and nothing
+ * else in this file escapes that - same reasoning as populateVariableSelect().
+ * @param entry one pageLinkInventory() entry
+ * @return the row element
+ */
+function buildLinkListRow(entry) {
+  var row = document.createElement("div");
+  row.className = "ctx-lnk-row";
+
+  var go = document.createElement("button");
+  go.type = "button";
+  go.className = "ctx-lnk-go";
+  go.disabled = !entry.el;
+  go.title = entry.el ? "Show me this element" : "Set on another page";
+  var name = document.createElement("span");
+  name.className = "ctx-lnk-name";
+  name.textContent = linkRowLabel(entry.el, entry.id);
+  var idLine = document.createElement("span");
+  idLine.className = "ctx-lnk-id";
+  idLine.textContent = entry.id;
+  go.appendChild(name);
+  go.appendChild(idLine);
+  go.addEventListener("click", function () { revealElement(entry.el); });
+  row.appendChild(go);
+
+  if (!entry.editable) {
+    var note = document.createElement("div");
+    note.className = "ctx-lnk-note";
+    note.textContent = entry.note + (entry.url ? " — " + entry.url : "");
+    row.appendChild(note);
+    return row;
+  }
+
+  var edit = document.createElement("div");
+  edit.className = "ctx-lnk-edit";
+  var input = document.createElement("input");
+  input.type = "url";
+  input.className = "ctx-lnk-url";
+  input.value = entry.url;
+  input.placeholder = "https://...";
+  input.setAttribute("aria-label", "Link target for " + entry.id);
+  /* change (not input) so a half-typed url is never committed as an undo
+     step, same as the style popover's own text fields */
+  input.addEventListener("change", function () {
+    var next = input.value.trim();
+    /* re-render only when this row is about to change SECTION - a template
+       link picking up a ta's own url for the first time moves into "Set
+       here" and gains a remove button, and clearing one moves back out.
+       Editing an already-set url in place doesn't, and rebuilding the list
+       under the ta's cursor there would just eat the next click (change
+       fires on blur, before it lands). */
+    var regroups = !entry.removable || !next;
+    setElementLink(entry.id, next);
+    if (regroups) renderCtxMenuLinkList();
+    else entry.url = next;
+  });
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); input.blur(); }
+  });
+  edit.appendChild(input);
+  if (entry.removable) {
+    var del = document.createElement("button");
+    del.type = "button";
+    del.className = "ctx-lnk-del";
+    del.title = "Remove this link";
+    del.textContent = "×";
+    del.addEventListener("click", function () {
+      setElementLink(entry.id, "");
+      renderCtxMenuLinkList();
+    });
+    edit.appendChild(del);
+  }
+  row.appendChild(edit);
+  return row;
+}
+
+/**
+ * Swaps the menu into its links sub-view (the root menu's "This page > Links
+ * on this page"): everything on the page that navigates, in one list, each
+ * row clickable through to the element itself. Re-renders itself in place
+ * after every edit so a built-in template link that just got a ta's own url
+ * moves up into "Set here" (and gets its remove button) immediately, rather
+ * than only on the next open.
+ *
+ * Clearing a ta-set url off a template link (the nav's own scroll links, the
+ * brand) drops the override, not the template's href: the element loses its
+ * live target for the rest of this editor session and gets its own back on
+ * the next load, since the href is markup, not content this editor stores.
+ */
+function renderCtxMenuLinkList() {
+  var inv = pageLinkInventory();
+  CTX_MENU.innerHTML =
+    '<div class="ctx-title">Links on this page</div>' +
+    '<div class="ctx-lnk-list"></div>' +
+    '<button type="button" class="ctx-lnk-back">Back</button>';
+  var list = CTX_MENU.querySelector(".ctx-lnk-list");
+  CTX_MENU.querySelector(".ctx-lnk-back").addEventListener("click", renderCtxMenuRoot);
+
+  function addSection(title, rows) {
+    if (!rows.length) return;
+    var head = document.createElement("div");
+    head.className = "ctx-title ctx-lnk-head";
+    head.textContent = title;
+    list.appendChild(head);
+    rows.forEach(function (entry) { list.appendChild(buildLinkListRow(entry)); });
+  }
+  addSection("Set here", inv.set);
+  addSection("Built in", inv.builtin);
+  addSection("Set on another page", inv.elsewhere);
+
+  if (!inv.set.length && !inv.builtin.length && !inv.elsewhere.length) {
+    var msg = document.createElement("div");
+    msg.className = "ctx-file-msg";
+    msg.textContent = 'Nothing on this page links anywhere yet. Right-click an element and choose "Add link".';
+    list.appendChild(msg);
+  }
+  clampCtxMenu();
+}
+
+/**
+ * Commits one "progress" element's Current/Total variable binding: updates
+ * the descriptor (varCurrent/varTotal live right on it, like a datetime
+ * element's own target/format - see addCustomElement()), repersists
+ * CUSTOM_ELEMENTS, repaints just this element's fill ratio, and pushes one
+ * undo step. Called from the right-click menu's Variables sub-view (see
+ * renderCtxMenuProgressVars()), which is the only place a bar's bindings are
+ * chosen - the style popover owns its two COLORS and nothing else, since what
+ * a bar is measuring isn't a paint decision.
+ * @param id the element's data-resize-id
+ * @param field "varCurrent" or "varTotal"
+ * @param key the variable key to bind to
+ */
+function setProgressVar(id, field, key) {
+  var d = customElementById(id);
+  var el = elByAnyId(id);
+  if (!d || !el) return;
+  var before = { varCurrent: d.varCurrent, varTotal: d.varTotal };
+  if (before[field] === key) return;
+  d[field] = key;
+  saveCustomElements(CUSTOM_ELEMENTS);
+  paintProgressElement(el, d);
+  EDIT_UNDO.push({
+    type: "progressvar", id: id, before: before,
+    after: { varCurrent: d.varCurrent, varTotal: d.varTotal }
+  });
+  EDIT_REDO.length = 0;
+}
+
+/**
+ * Swaps the menu into its progress-bar Variables sub-view (the root menu's
+ * "Bind variables..."), for whichever bar CTX_TARGET_ID points at: the two
+ * number variables its fill ratio is "Current of Total" between.
+ *
+ * Lives on the right-click menu rather than the style popover (where it used
+ * to) because a binding isn't styling - the popover is where a bar's progress
+ * color, bar color, radius, and border are chosen, and burying "what is this
+ * bar even measuring" among the paint controls made the one structural choice
+ * the hardest one to find.
+ *
+ * Both selects list EVERY number-typed variable in the content manager's
+ * Variables section (see populateProgressVarSelect()/VARIABLES): those are
+ * global to the whole site, so every bar on every page - and on an object
+ * canvas, see initObjectCanvas() - can bind to any of them.
+ */
+function renderCtxMenuProgressVars() {
+  var id = CTX_TARGET_ID;
+  var d = customElementById(id) || {};
+  var numbers = VARIABLES.filter(function (v) { return v.type === "number"; });
+  CTX_MENU.innerHTML =
+    '<div class="ctx-title">Progress bar variables</div>' +
+    (numbers.length ?
+      '<div class="ctx-var-row"><label>Current</label><select class="ctx-var-current"></select></div>' +
+      '<div class="ctx-var-row"><label>Total</label><select class="ctx-var-total"></select></div>' +
+      '<div class="ctx-file-msg">Every number variable from the content manager’s Variables list.</div>' :
+      '<div class="ctx-file-msg">No number variables yet. Add one in the content manager’s Variables section.</div>') +
+    '<button type="button" class="ctx-lnk-back">Back</button>';
+  CTX_MENU.querySelector(".ctx-lnk-back").addEventListener("click", renderCtxMenuRoot);
+  if (!numbers.length) return;
+
+  var current = CTX_MENU.querySelector(".ctx-var-current");
+  var total = CTX_MENU.querySelector(".ctx-var-total");
+  populateProgressVarSelect(current, d.varCurrent || "");
+  populateProgressVarSelect(total, d.varTotal || "");
+  current.addEventListener("change", function () { setProgressVar(id, "varCurrent", current.value); });
+  total.addEventListener("change", function () { setProgressVar(id, "varTotal", total.value); });
 }
 
 /**
@@ -7503,6 +8174,14 @@ function renderCtxMenuObjectPicker() {
  */
 function handleCtxAdd(kind) {
   if (kind === "icon") { renderCtxMenuIconPicker(); return; }
+  if (kind === "extrasIcon") {
+    /* tile-scoped by definition, so it binds to the tile the menu was opened
+       for rather than to whatever the cursor happens to be over - the menu
+       only offers it when there IS such a tile, see renderCtxMenuRoot() */
+    addCustomElement(kind, CTX_POS.x, CTX_POS.y, { tile: ctxTileFor("extras") });
+    hideCtxMenu();
+    return;
+  }
   if (kind === "button") { renderCtxMenuButtonLink(); return; }
   if (kind === "image") { renderCtxMenuImagePicker(); return; }
   if (kind === "video") { renderCtxMenuVideoPicker(); return; }
@@ -7534,11 +8213,23 @@ function showCtxMenu(x, y, targetId, targetEl) {
   ICON_REPLACE_TARGET = null;
   renderCtxMenuRoot();
   CTX_MENU.classList.add("show");
+  clampCtxMenu();
+}
+
+/**
+ * Keeps the menu fully on screen at CTX_POS, its own size measured as it
+ * currently stands. Called on every open, and again by any sub-view whose
+ * content is a different SIZE than the root list it replaced - the links view
+ * (renderCtxMenuLinkList()) is much wider, so a right-click near the right
+ * edge would otherwise leave half of it past the window with no way to reach
+ * the url fields.
+ */
+function clampCtxMenu() {
   var w = CTX_MENU.offsetWidth, h = CTX_MENU.offsetHeight;
   var maxX = window.scrollX + document.documentElement.clientWidth - w - 6;
   var maxY = window.scrollY + document.documentElement.clientHeight - h - 6;
-  CTX_MENU.style.left = Math.max(0, Math.min(x, maxX)) + "px";
-  CTX_MENU.style.top = Math.max(0, Math.min(y, maxY)) + "px";
+  CTX_MENU.style.left = Math.max(0, Math.min(CTX_POS.x, maxX)) + "px";
+  CTX_MENU.style.top = Math.max(0, Math.min(CTX_POS.y, maxY)) + "px";
 }
 
 /** Hides the "Add element" menu. */
@@ -7563,6 +8254,9 @@ function wireAddElementMenu() {
        same menu's "Insert ..." buttons */
     e.preventDefault();
     var t = resolveSelectableTarget(e.target);
+    /* a right-click counts as "selecting" a tile too, so the tile-scoped
+       actions work on first try without a separate left-click first */
+    noteTileSelection(t);
     showCtxMenu(e.pageX, e.pageY, t ? elId(t) : null, t);
   });
   /* mousedown (not click) so this runs and reads e.target BEFORE a menu
@@ -7664,6 +8358,10 @@ function wireResizable() {
       }
       return;
     }
+    /* remember which tile this click was inside, so a later right-click on
+       the area around the tiles still knows which one to act on, see
+       ctxTileFor() */
+    noteTileSelection(el);
     /* mid-edit: leave the mouse to text selection/caret placement */
     if (el.isContentEditable) return;
     /* a reel tile is selectable (so its style popover is reachable) but
@@ -7672,21 +8370,6 @@ function wireResizable() {
        lives in (see buildReelElement()) - so it's selected and left at
        that, skipping the shift-click/drag-start logic below entirely */
     if (el.hasAttribute("data-reel-tile")) {
-      RING_EL = el;
-      positionRing();
-      return;
-    }
-    /* see isMoveLockedTileRole() - the ring's own dedicated move handle
-       (startMoveDrag()) already guards against this, but that's not the
-       only way to start a move: a plain click-drag anywhere on the
-       element itself normally moves it too (see this function's own doc
-       comment), so without this same guard here, a tiny accidental drag
-       while just trying to click-select a rect/icon/badge still detached
-       and corrupted it. Selected and left at that, same as a reel tile
-       just above (already covered by isMoveLockedTileRole() too, but kept
-       as its own branch above since a reel tile additionally skips the
-       shift-click/drag-start logic for a different reason). */
-    if (isMoveLockedTileRole(el)) {
       RING_EL = el;
       positionRing();
       return;
@@ -7736,8 +8419,13 @@ function wireResizable() {
       }
       ev.preventDefault();
       var dx = ev.clientX - startX, dy = ev.clientY - startY;
-      setOwnPos(el, base.tx + dx, base.ty + dy);
-      groupMembers.forEach(function (m) { setOwnPos(m.el, m.base.tx + dx, m.base.ty + dy); });
+      /* same edge-clamp a handle drag gets, see clampOwnPos() */
+      var c = clampOwnPos(el, base.tx + dx, base.ty + dy);
+      setOwnPos(el, c.tx, c.ty);
+      groupMembers.forEach(function (m) {
+        var mc = clampOwnPos(m.el, m.base.tx + dx, m.base.ty + dy);
+        setOwnPos(m.el, mc.tx, mc.ty);
+      });
       positionRing();
     }
     function onUp() {
@@ -7800,7 +8488,7 @@ function wireResizable() {
   document.addEventListener("keydown", function (e) {
     var d = ARROW_DELTAS[e.key];
     if (!d) return;
-    if (!RING_EL || isLocked(elId(RING_EL)) || RING_EL.hasAttribute("data-reel-tile") || RING_EL.hasAttribute("data-extras-role") || RING_EL.hasAttribute("data-days-role")) return;
+    if (!RING_EL || isLocked(elId(RING_EL)) || isMoveLockedTileRole(RING_EL)) return;
     var active = document.activeElement;
     if (active && (active.isContentEditable || active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT")) return;
     e.preventDefault();
@@ -7814,14 +8502,16 @@ function wireResizable() {
     members.forEach(function (m) { m.preRect = m.el.getBoundingClientRect(); });
     detachFromFlow(el, elRect);
     var before = getPos(el);
-    var after = { tx: before.tx + d[0] * step, ty: before.ty + d[1] * step };
+    /* a nudge honours the container edge exactly like a drag does, so
+       holding an arrow key can't walk a tile's icon out of its tile */
+    var after = clampOwnPos(el, before.tx + d[0] * step, before.ty + d[1] * step);
     setOwnPos(el, after.tx, after.ty);
     positionRing();
     commitPosition(el);
     var moves = [{ id: elId(el), before: before, after: after }];
     members.forEach(function (m) {
       detachFromFlow(m.el, m.preRect);
-      var mAfter = { tx: m.base.tx + d[0] * step, ty: m.base.ty + d[1] * step };
+      var mAfter = clampOwnPos(m.el, m.base.tx + d[0] * step, m.base.ty + d[1] * step);
       setOwnPos(m.el, mAfter.tx, mAfter.ty);
       commitPosition(m.el);
       moves.push({ id: m.id, before: m.base, after: mAfter });
@@ -8693,6 +9383,11 @@ function wireTextField(el) {
     beforeEdit = el.innerHTML;
     el.contentEditable = "true";
     el.classList.add("editing");
+    /* a local chip shows its ${variable} name for as long as the field is
+       being edited, its resolved value the rest of the time - see
+       localChipVarToken(). Runs after ".editing" lands, and its mirror image
+       runs on blur below, once the class is off again. */
+    repaintLocalTileContent();
     showTextToolbar(el);
     el.focus();
     var range = document.createRange();
@@ -8797,8 +9492,7 @@ function mirrorEditedField(id, html, editedEl) {
   document.querySelectorAll('[data-edit-id="' + id + '"]').forEach(function (el) {
     if (el !== editedEl) el.innerHTML = html;
   });
-  repaintExtrasFilenameChips();
-  repaintDaysChips();
+  repaintLocalTileContent();
 }
 
 /** Reverts the most recent click-to-edit commit, moving it onto the redo stack. */
@@ -9031,11 +9725,10 @@ function applyHistoryAction(action, side) {
     var pvEl = elByAnyId(action.id);
     if (pvEl) paintProgressElement(pvEl, pvD);
     saveCustomElements(CUSTOM_ELEMENTS);
-    if (STYLE_MENU_ID === action.id && STYLE_MENU && STYLE_MENU.classList.contains("show")) {
-      STYLE_MENU.querySelector(".sm-progress-current").value = pvD.varCurrent;
-      STYLE_MENU.querySelector(".sm-progress-total").value = pvD.varTotal;
-      STYLE_PROGRESSVAR_BEFORE = { varCurrent: pvD.varCurrent, varTotal: pvD.varTotal };
-    }
+    /* no open control to sync back, unlike every color/size action around
+       this one: the Current/Total selects live in the right-click menu (see
+       renderCtxMenuProgressVars()), which is already closed by the time an
+       undo can be triggered - it's rebuilt from the descriptor on every open */
     return;
   }
   if (action.type === "progressfill" || action.type === "progresstrack") {
@@ -10009,7 +10702,17 @@ function initDashboardPage() {
  * "look-only" mode for it the way a page preview has.
  */
 function initObjectCanvas() {
-  fetchObjectContent().then(function (data) {
+  /* the canvas scene and the site's own variables come from two different
+     places (localStorage vs /api/content, see fetchObjectContent() and the
+     VARIABLES note below), so both are awaited together before anything is
+     painted - applyProgressBindings() below reads VARIABLES for every bar's
+     fill ratio, and a second later-resolving fetch would leave them all at 0 */
+  Promise.all([
+    fetchObjectContent(),
+    fetchContent().then(function (site) { return site.variables || []; }, function () { return []; })
+  ]).then(function (loaded) {
+    var data = loaded[0];
+    var siteVars = loaded[1];
     renderCustomElements(data.custom_elements);
     renderDuplicates(data.duplicates);
     applyTextOverrides(data.text || {});
@@ -10028,7 +10731,14 @@ function initObjectCanvas() {
     applyShadeOverrides(data.shade);
     applyRadiusOverrides(data.radius);
     applyBorderOverrides(data.border, data.dark_border);
-    VARIABLES = data.variables || [];
+    /* the one thing an object canvas does NOT read out of its own scene:
+       variables are global site content (the content manager's Variables
+       section), not something an object carries around with it, and the
+       "object_content" scene has no variables key at all - so a progress bar
+       placed on a canvas used to find an empty VARIABLES and offer nothing to
+       bind to at all. Pulled from the real content blob instead, so every bar
+       on every editor surface picks from the same list. */
+    VARIABLES = siteVars;
     applyProgressBindings(data.progress_fill, data.dark_progress_fill, data.progress_track, data.dark_progress_track);
     repaintFormulaChips();
     applyShadowOverrides(data.shadow);

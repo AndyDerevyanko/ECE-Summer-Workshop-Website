@@ -303,6 +303,22 @@ function normalizeState() {
   if (!Array.isArray(STATE.custom_elements)) STATE.custom_elements = [];
   if (!Array.isArray(STATE.layers)) STATE.layers = [];
   if (!Array.isArray(STATE.fixed_elements)) STATE.fixed_elements = NAV_FIXED_IDS.slice();
+  /* the same one-time top-up _migrate_landing_nav_states() does server side,
+     for a draft that never went through it: an unsaved snapshot left in
+     localStorage from before the landing page's signed-in navbar existed has a
+     fixed_elements list, so the fallback above doesn't fire, and its navbar
+     would come up missing the red "fixed" hitboxes the signed-out one has.
+     Marker-gated exactly like the server's meta flag, so a ta who deliberately
+     un-promotes one of these ids doesn't get it forced back on the next load. */
+  if (!STATE.migrations || typeof STATE.migrations !== "object") STATE.migrations = {};
+  if (!STATE.migrations.landing_nav_states) {
+    STATE.migrations.landing_nav_states = true;
+    NAV_FIXED_IDS.forEach(function (id) {
+      if (id.indexOf("navin.") === 0 && STATE.fixed_elements.indexOf(id) === -1) {
+        STATE.fixed_elements.push(id);
+      }
+    });
+  }
   if (!STATE.colors || typeof STATE.colors !== "object") STATE.colors = {};
   if (!STATE.opacity || typeof STATE.opacity !== "object") STATE.opacity = {};
   if (!Array.isArray(STATE.locked)) STATE.locked = [];

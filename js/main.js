@@ -1025,12 +1025,75 @@ function setAreaFlowProp(id, key, value) {
 }
 
 /**
+ * Every rendered copy of one flow container. Usually one, but a container
+ * embedded in a tile template exists once per tile and shares its id with all
+ * the others (see applyTileFlow()).
+ * @param id the container's data-resize-id
+ * @return an array of elements, possibly empty
+ */
+function flowAreasWithId(id) {
+  return [].slice.call(document.querySelectorAll("[data-flow-area]"))
+    .filter(function (a) { return elId(a) === id; });
+}
+
+/**
+ * Records the height a flow container is painting at right now as its saved
+ * height, the moment a ta locks that axis - exactly as if they had dragged it
+ * to there - and forgets it again when they unlock.
+ *
+ * Without this, a y lock would be a promise the container doesn't keep. A
+ * y-locked container with no saved height is re-measured against its own
+ * content by applyTileFlow() (the path that makes every day card's attachment
+ * sub-area match the tallest of the group), so the first stacking change after
+ * the lock would grow the very box the ta asked to hold still: a column of
+ * tiles is several times taller than a grid of the same tiles, and the
+ * container would follow it down the page instead of scrolling inside itself.
+ *
+ * The x axis needs no equivalent - nothing ever re-measures a container's
+ * width, so locking it simply puts back the width it was last given (its
+ * saved resize, or the column it's anchored to) and unlocking hands the axis
+ * to `width: max-content`. Nor is a container that's y-locked purely by
+ * AREA_FLOW_DEFAULTS pinned: never having been clicked, it still auto-mirrors
+ * to the tallest of its group, which is what that default is for.
+ * @param id the container's data-resize-id
+ * @param lock true if the y axis is being locked, false if it's being unlocked
+ */
+function pinFlowAreaHeight(id, lock) {
+  var areas = flowAreasWithId(id);
+  if (!areas.length) return;
+  var saved = EDIT_SIZES[id] || {};
+  var h = 0;
+  areas.forEach(function (a) { h = Math.max(h, Math.round(a.getBoundingClientRect().height)); });
+  /* a width is stored alongside it either way: a size record with no width is
+     ignored wholesale on the next load (see applySizeOverrides()), which would
+     throw the locked height out with it. The container's current width is
+     already what it would have been given anyway. */
+  var box = {
+    w: saved.w === undefined ? Math.round(areas[0].getBoundingClientRect().width) : saved.w,
+    h: lock ? h : undefined
+  };
+  EDIT_SIZES[id] = box;
+  areas.forEach(function (a) {
+    detachFromFlow(a);
+    a.dataset.ovW = box.w;
+    a.style.width = box.w + "px";
+    if (box.h === undefined) delete a.dataset.ovH;
+    else a.dataset.ovH = box.h;
+  });
+  saveEditedSize(id, box);
+}
+
+/**
  * Flips one axis of one flow container between locked and expanding.
  * @param id the container's data-resize-id
  * @param axis "x" or "y"
  */
 function toggleAreaFlowAxis(id, axis) {
-  setAreaFlowProp(id, axis, areaFlowFor(id)[axis] === "lock" ? "expand" : "lock");
+  var lock = areaFlowFor(id)[axis] !== "lock";
+  /* measured BEFORE the switch, so locking the height means "stay exactly as
+     tall as you are now" rather than "take whatever the new mode works out to" */
+  if (axis === "y") pinFlowAreaHeight(id, lock);
+  setAreaFlowProp(id, axis, lock ? "lock" : "expand");
 }
 
 /**
@@ -6738,6 +6801,19 @@ function buildCustomElementNode(d) {
     el.style.background = "var(--surface-2)";
     el.style.width = "160px";
     el.style.height = "100px";
+  } else if (d.kind === "clip") {
+    /* an element pasted from another page (see pasteClipAsElement()). The only
+       kind built from stored markup rather than from a recipe: there's no way
+       to describe "whatever this was on the page it came from" as a recipe, and
+       the markup already has its final ids, so parsing it back is both the
+       whole build step and what makes the paste survive a reload. */
+    var clipHolder = document.createElement("div");
+    clipHolder.innerHTML = d.html || "";
+    el = clipHolder.firstElementChild;
+    if (!el) {
+      el = document.createElement("div");
+      el.setAttribute("data-resize-id", d.id);
+    }
   } else if (d.kind === "extrasIcon") {
     /* the attachments-tile-exclusive "Attachment icon" element (offered by
        renderCtxMenuRoot() only while the right-click landed on an attachment
@@ -7397,20 +7473,35 @@ function buildDuplicateClone(sourceEl, suffix) {
   if (clone.querySelectorAll) {
     clone.querySelectorAll("[id]").forEach(function (e) { e.removeAttribute("id"); });
   }
-  var tracked = [];
-  if (clone.matches && clone.matches(RESIZABLE_SEL)) tracked.push(clone);
-  clone.querySelectorAll(RESIZABLE_SEL).forEach(function (e) { tracked.push(e); });
-  var pairs = [];
+  var pairs = remapTrackedIds(clone, suffix);
   var rootEl = null;
+  pairs.forEach(function (p) { if (p.old === sourceId && !rootEl) rootEl = p.el; });
+  return { clone: clone, wrap: wrap, pairs: pairs, rootEl: rootEl };
+}
+
+/**
+ * Renames root and every tracked element inside it (data-edit-id/
+ * data-resize-id) by appending one shared suffix, the id-remap half of
+ * buildDuplicateClone() - split out because the editor clipboard has to do the
+ * same remap to a subtree it parsed out of stored markup rather than cloned
+ * off a live node (see pasteClipAsElement()). Mutates root in place.
+ * @param root the subtree's root node (itself remapped if it's tracked)
+ * @param suffix see uniqueDupSuffix()
+ * @return every {old, new, el} remap made, in document order
+ */
+function remapTrackedIds(root, suffix) {
+  var tracked = [];
+  if (root.matches && root.matches(RESIZABLE_SEL)) tracked.push(root);
+  root.querySelectorAll(RESIZABLE_SEL).forEach(function (e) { tracked.push(e); });
+  var pairs = [];
   tracked.forEach(function (el) {
     var oldId = elId(el);
     var newId = oldId + suffix;
     if (el.hasAttribute("data-edit-id")) el.setAttribute("data-edit-id", newId);
     if (el.hasAttribute("data-resize-id")) el.setAttribute("data-resize-id", newId);
     pairs.push({ old: oldId, new: newId, el: el });
-    if (oldId === sourceId && !rootEl) rootEl = el;
   });
-  return { clone: clone, wrap: wrap, pairs: pairs, rootEl: rootEl };
+  return pairs;
 }
 
 /**
@@ -7453,16 +7544,22 @@ function insertDuplicateClone(sourceEl, built) {
  * in place, sharing it would leak a later font/align change on either
  * copy onto the other.
  * @param pairs the {old, new} id pairs from buildDuplicateClone()
+ * @param skipMaps optional list of map names NOT to carry over - the clipboard
+ *   paste passes ["positions"], since a translate offset that meant something
+ *   relative to the source's own place in its page would only drag the pasted
+ *   copy away from where it was actually dropped (see pasteClipAsElement())
  */
-function copyDuplicateOverrides(pairs) {
+function copyDuplicateOverrides(pairs, skipMaps) {
   var raw;
   try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
   var snap;
   try { snap = raw ? JSON.parse(raw) : {}; } catch (e) { snap = {}; }
+  var skip = skipMaps || [];
   var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "shade", "radius", "border", "links", "text_color", "theme_icons", "dark_colors", "dark_text_color", "dark_fill", "dark_border", "progress_fill", "dark_progress_fill", "progress_track", "dark_progress_track", "rotate", "hover_color", "dark_hover_color", "active_color", "dark_active_color"];
   var flatLists = ["shadow", "flip_h", "flip_v"];
   pairs.forEach(function (p) {
     plainMaps.forEach(function (m) {
+      if (skip.indexOf(m) !== -1) return;
       if (snap[m] && snap[m][p.old] !== undefined) {
         snap[m] = snap[m] || {};
         snap[m][p.new] = snap[m][p.old];
@@ -7555,6 +7652,177 @@ function duplicateElement(sourceEl) {
   EDIT_UNDO.push({ type: "add", id: rootNewId });
   EDIT_REDO.length = 0;
   return built.rootEl;
+}
+
+/* ---------------------------------------------------------------------------
+   THE EDITOR CLIPBOARD
+
+   Ctrl+C used to hold the copied element in a plain variable, which meant the
+   copy died the moment the editor's iframe navigated to another page - so
+   "copy this from the landing page onto the dashboard", the one thing a
+   clipboard is actually for, was the one thing it couldn't do.
+
+   It's a localStorage entry now, so it outlives the page it was taken from.
+   Not the real system clipboard: that needs a permission prompt for reads, and
+   would also mean anything else the ta copied while working (a url, some text)
+   would silently overwrite their element. This is the editor's own clipboard,
+   holding exactly one element, only ever written by Ctrl+C in here.
+
+   What's stored is the element's markup, not a reference to it. Pasting on the
+   page it came from still goes through duplicateElement() (a live clone slots
+   into the source's own flow layout, which is what you want for a second card
+   in a row of cards); pasting anywhere else rebuilds the stored markup as a
+   free-placed custom element, since the page being pasted into has no source
+   element to clone or sit next to. That's also what makes it survive a reload:
+   a duplicate is re-cloned from its source id on every load and would have
+   nothing to clone on a page the source doesn't exist on, whereas a custom
+   element carries everything it needs to rebuild itself.
+   --------------------------------------------------------------------------- */
+
+/* one element, shared by every page of the editor. Deliberately its own key
+   rather than a field inside the content snapshot: a copied element isn't
+   content until it's actually pasted, and it must never ride along into an
+   Apply, a saved profile, or a preview. */
+var EDITOR_CLIP_KEY = "editor_clipboard";
+
+/**
+ * Strips the bits of a copied subtree that only meant something where it came
+ * from, so the markup can be dropped onto any page:
+ * - dom id="..." (a singleton role like #portalLink the copy doesn't inherit),
+ *   same reason buildDuplicateClone() strips them
+ * - the editor-only outline classes, which are recomputed per page anyway
+ * - contenteditable, in case the source was mid-edit when it was copied
+ * - data-nav-state, which marks an element as belonging to one of the landing
+ *   page's two navbars (see applyNavState()) - on any other page nothing ever
+ *   flips that state back on, so a copy carrying it in could arrive hidden
+ * - the ROOT's own data-ov-tx/ovTy (its record of having been dragged): the
+ *   paste is placed wherever it's dropped, not wherever the source was pushed
+ *   to. Kept on everything below the root, where an offset is a real part of
+ *   how the thing is arranged internally.
+ * @param root the cloned subtree to clean, mutated in place
+ */
+function stripClipAttrs(root) {
+  var all = [root].concat(Array.prototype.slice.call(root.querySelectorAll("*")));
+  all.forEach(function (el) {
+    if (!el.removeAttribute) return;
+    el.removeAttribute("id");
+    el.removeAttribute("contenteditable");
+    el.removeAttribute("data-nav-state");
+    el.classList.remove("edit-fixed", "edit-link", "edit-locked", "nav-state-off");
+  });
+  delete root.dataset.ovTx;
+  delete root.dataset.ovTy;
+}
+
+/**
+ * Ctrl+C: puts one element on the editor's clipboard. Stores its markup frozen
+ * at the size it's currently rendered at, so a paste looks like what was
+ * copied even when the source was an in-flow element whose width came from the
+ * column it sat in - the pasted copy is free-placed and has no such column.
+ * Measured off offsetWidth/Height where they're available, not the bounding
+ * rect, which for a rotated element reports the box its corners sweep out
+ * rather than the box itself.
+ * @param sourceEl the element to copy (RING_EL)
+ * @return true if it was stored
+ */
+function copyElementToClipboard(sourceEl) {
+  var sourceId = elId(sourceEl);
+  if (!sourceId) return false;
+  var rect = sourceEl.getBoundingClientRect();
+  var w = sourceEl.offsetWidth || rect.width;
+  var h = sourceEl.offsetHeight || rect.height;
+  var clone = sourceEl.cloneNode(true);
+  stripClipAttrs(clone);
+  clone.style.width = w + "px";
+  clone.style.height = h + "px";
+  var clip = { page: currentPageKey(), sourceId: sourceId, html: clone.outerHTML };
+  try { localStorage.setItem(EDITOR_CLIP_KEY, JSON.stringify(clip)); } catch (e) { return false; }
+  return true;
+}
+
+/** @return the element currently on the editor clipboard, or null */
+function readEditorClip() {
+  var raw;
+  try { raw = localStorage.getItem(EDITOR_CLIP_KEY); } catch (e) { raw = null; }
+  if (!raw) return null;
+  try {
+    var clip = JSON.parse(raw);
+    return clip && clip.html ? clip : null;
+  } catch (e) { return null; }
+}
+
+/**
+ * Ctrl+V: pastes whatever's on the editor clipboard. On the page it was copied
+ * from, and while that source is still there, this is exactly the old
+ * behaviour - a plain duplicateElement(), inserted into the source's own flow
+ * position. Anywhere else there's nothing to clone or sit beside, so the
+ * stored markup gets rebuilt as a free-placed element at (x, y).
+ * @param x drop point, document px
+ * @param y drop point, document px
+ * @return the pasted element, or null if the clipboard was empty
+ */
+function pasteEditorClip(x, y) {
+  var clip = readEditorClip();
+  if (!clip) return null;
+  if (clip.page === currentPageKey()) {
+    var src = clip.sourceId && elByAnyId(clip.sourceId);
+    if (src) return duplicateElement(src);
+  }
+  return pasteClipAsElement(clip, x, y);
+}
+
+/**
+ * Rebuilds a stored clipboard entry as a brand new free-placed element: parses
+ * the markup, gives it and everything tracked inside it fresh ids (so it can
+ * be styled, moved and deleted with no tie back to whatever it was copied
+ * from), carries the source's style/text overrides across onto those new ids,
+ * and registers the whole thing in content.custom_elements as a "clip" so it
+ * rebuilds itself on every future load, live site included.
+ * @param clip see readEditorClip()
+ * @param x drop point, document px
+ * @param y drop point, document px
+ * @return the pasted element, or null if the stored markup was unusable
+ */
+function pasteClipAsElement(clip, x, y) {
+  var holder = document.createElement("div");
+  holder.innerHTML = clip.html;
+  var node = holder.firstElementChild;
+  if (!node || !node.matches(RESIZABLE_SEL)) return null;
+  var suffix = uniqueDupSuffix();
+  var pairs = remapTrackedIds(node, suffix);
+  var rootId = elId(node);
+  if (!rootId) return null;
+  /* before the element is built, so the text/size/color overrides are already
+     in the snapshot when the build's own passes read them. The root's saved
+     POSITION is the one thing deliberately left behind - it's an offset from
+     wherever the source sat in its own page, and the paste has its own drop
+     point (everything below the root keeps its offsets, which are part of how
+     the copied thing is arranged inside itself) */
+  copyDuplicateOverrides([pairs[0]], ["positions"]);
+  if (pairs.length > 1) copyDuplicateOverrides(pairs.slice(1));
+  var el = addCustomElement("clip", x, y, { rootId: rootId, html: node.outerHTML });
+  if (!el) return null;
+  /* the copied markup still carries the inline transforms the source was
+     painted with, including the offsets nested elements use to cancel out a
+     move of an ancestor (see paintPos()/ancestorPos()). The paste's root
+     hasn't been moved anywhere, so there's nothing to cancel: repainting the
+     subtree recomputes every one of them from scratch. */
+  paintPos(el);
+  el.querySelectorAll(RESIZABLE_SEL).forEach(paintPos);
+  /* markup carries no js listeners, so every link inside the paste needs its
+     own click handler re-wired, exactly as duplicateElement() does for a clone */
+  pairs.forEach(function (p) {
+    var linkUrl = LINKS[p.old];
+    if (linkUrl) {
+      LINKS[p.new] = linkUrl;
+      var live = elByAnyId(p.new);
+      if (live) applyOneLink(live, linkUrl);
+    }
+  });
+  applyFixedHighlight();
+  applyLinkHighlight();
+  applyLockHighlight();
+  return el;
 }
 
 /**
@@ -7720,6 +7988,13 @@ function finishAddedElement(el, d, kind, extra) {
     wireTextField(el);
     applyNavSessionState();
   }
+  if (kind === "clip") {
+    /* a paste can be anything, including a whole subtree of text fields (a
+       card with a heading and a paragraph in it), so every tagged node in
+       there gets click-to-edit wiring, not just the root */
+    if (el.hasAttribute("data-edit-id")) wireTextField(el);
+    el.querySelectorAll("[data-edit-id]").forEach(wireTextField);
+  }
   /* an attachment icon only knows which glyph to draw once it's actually
      placed inside a tile, see repaintExtrasTypeIcons() */
   if (kind === "extrasIcon") repaintExtrasTypeIcons();
@@ -7817,6 +8092,14 @@ function addCustomElement(kind, x, y, extra) {
      autocomplete hint and the default placeholder text, so it's baked into
      the descriptor rather than resolved at render time */
   if (kind === "loginField") d.field = extra.field === "password" ? "password" : "username";
+  /* a paste keeps the id its markup was already remapped to, rather than being
+     handed a fresh "custom.clip.*" one: everything inside the stored html is
+     namespaced under that root id, and the override maps were copied across
+     under it too (see pasteClipAsElement()) */
+  if (kind === "clip") {
+    d.id = extra.rootId || d.id;
+    d.html = extra.html;
+  }
   if (kind === "datetime") {
     d.target = extra.target || new Date(Date.now() + 30 * 86400000).toISOString();
     d.format = extra.format || "countdown";
@@ -9767,12 +10050,20 @@ function wireResizable() {
      an extras/days tile role, a datetime element, and the countdown/
      logistics tiles all render from structured data a generic clone can't
      carry over, so none of those are copyable here either); Ctrl/Cmd+V
-     duplicates that copy via duplicateElement(), same as clicking
-     Duplicate on it, and selects the fresh copy so it can be dragged into
-     place right away. Both are no-ops while a text field is mid-edit or
-     focus is sitting in a real form control, so normal text copy/paste
-     inside those still works untouched. */
-  var COPIED_EL = null;
+     pastes it via pasteEditorClip(), and selects the fresh copy so it can
+     be dragged into place right away. Both are no-ops while a text field is
+     mid-edit or focus is sitting in a real form control, so normal text
+     copy/paste inside those still works untouched.
+
+     The copy goes to the editor's own localStorage clipboard rather than a
+     variable in here, so it can be pasted onto a different page of the
+     editor - see the EDITOR CLIPBOARD section. A paste that isn't going back
+     onto the page it was copied from lands wherever the pointer is, since
+     there's no original to slot in next to. */
+  var pointer = null;
+  document.addEventListener("mousemove", function (e) {
+    pointer = { x: e.pageX, y: e.pageY };
+  });
   document.addEventListener("keydown", function (e) {
     if (e.key !== "c" && e.key !== "C" && e.key !== "v" && e.key !== "V") return;
     if (!(e.ctrlKey || e.metaKey)) return;
@@ -9780,19 +10071,45 @@ function wireResizable() {
     if (active && (active.isContentEditable || active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT")) return;
     if (e.key === "c" || e.key === "C") {
       if (!RING_EL || !isDuplicatable(RING_EL)) return;
-      COPIED_EL = RING_EL;
+      if (copyElementToClipboard(RING_EL)) showEditToast("Copied — paste on any page");
       return;
     }
-    /* paste: the copied node must still be attached (it can't have been
-       deleted, or removed by an undo, since it was copied) */
-    if (!COPIED_EL || !COPIED_EL.isConnected) return;
+    if (!readEditorClip()) return;
     e.preventDefault();
-    var newEl = duplicateElement(COPIED_EL);
+    /* a paste with the pointer parked off-page (straight after a page load,
+       say) still has to land somewhere visible */
+    var at = pointer || {
+      x: window.scrollX + window.innerWidth / 2,
+      y: window.scrollY + window.innerHeight / 3
+    };
+    var newEl = pasteEditorClip(at.x, at.y);
     if (newEl) {
       RING_EL = newEl;
       positionRing();
     }
   });
+}
+
+/**
+ * Briefly flashes a one-line message at the bottom of the editor. Only used
+ * where an action has no visible result of its own to speak for it - copying
+ * an element to the clipboard being the case it was written for, since the
+ * page looks identical afterward and the whole point is that the copy is
+ * still there on the next page.
+ * @param msg the text to show
+ */
+function showEditToast(msg) {
+  var t = document.getElementById("editToast");
+  if (!t) {
+    t = document.createElement("div");
+    t.id = "editToast";
+    t.className = "edit-toast";
+    document.body.appendChild(t);
+  }
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(t._hideTimer);
+  t._hideTimer = setTimeout(function () { t.classList.remove("show"); }, 1600);
 }
 
 /**

@@ -2008,6 +2008,30 @@ body.edit-mode [data-resize-id].el-deleted {
    editor, so it still bobs normally on the real site */
 body.edit-mode .apply-bob { animation: none; }
 
+/* the editor's one transient message line (showEditToast() in js/main.js),
+   parked at the bottom of the frame and out of the way of the right-click menu
+   and the text toolbar, which both open upward from wherever the cursor is.
+   Never interactive - it says something happened and goes away, so it stays
+   out of the hit-testing the whole editor does on every mousemove. */
+.edit-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translate(-50%, 12px);
+  z-index: 100002;
+  padding: 9px 16px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 88%, transparent);
+  color: var(--bg);
+  font-family: var(--font-head);
+  font-weight: 600;
+  font-size: .88rem;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .16s ease, transform .16s ease;
+}
+.edit-toast.show { opacity: 1; transform: translate(-50%, 0); }
+
 /* the visual editor's one selection ring (wireResizable() in js/main.js):
    a floating frame that follows whatever tracked element the mouse is
    over, with 8 resize handles (corners + edges, so any direction works)

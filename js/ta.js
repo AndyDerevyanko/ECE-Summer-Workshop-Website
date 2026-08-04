@@ -1162,6 +1162,20 @@ function renderLogistics() {
  */
 function isVidUrl(u) { return /\.mov$/i.test(u); }
 
+/**
+ * Escapes a value being dropped into a double-quoted attribute in one of this
+ * file's innerHTML strings. Needed since directory names became free text (see
+ * renderGallery()): "2026" could never break out of an attribute, but a name a
+ * ta types themselves can.
+ * @param str any value, coerced to string
+ * @return str with &<>" replaced by entities
+ */
+function escapeAttr(str) {
+  return String(str).replace(/[&<>"]/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+  });
+}
+
 var PREV_SVG =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
   'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>';
@@ -1192,12 +1206,56 @@ var GY_IDX = {};
 var GY_REORDER = {};
 
 /**
- * Renders the editable per-year photo/clip lists shown on gallery.html.
- * One image at a time per year, same flip-through idea as the public
- * gallery page. A year with 2+ images gets a "Reorder" toggle that swaps
+ * Renames one gallery directory everywhere it's referenced at once: the
+ * directory list itself, its image list, and - crucially - every visual-editor
+ * thing that names it by string. An image pane a ta bound to "2026"
+ * (custom_elements[].dir) and a back/forward button pointed at that pane's
+ * action (links, "gallery:next:2026") both have to follow the rename, or a
+ * directory a ta simply retitled would silently leave a blank stage and two
+ * dead arrows behind it.
+ *
+ * Editor state is only remapped in STATE, not in the editor iframe: renaming
+ * happens in the content manager, and the iframe reloads off STATE the next
+ * time it's opened. That's the same one-way flow every other Content tab edit
+ * already has.
+ * @param from the current directory name
+ * @param to the new name
+ */
+function renameGalleryDir(from, to) {
+  var i = STATE.gallery.years.indexOf(from);
+  if (i === -1) return;
+  STATE.gallery.years[i] = to;
+  STATE.gallery.images[to] = STATE.gallery.images[from] || [];
+  delete STATE.gallery.images[from];
+  GY_IDX[to] = GY_IDX[from] || 0;
+  delete GY_IDX[from];
+  if (GY_REORDER[from]) GY_REORDER[to] = true;
+  delete GY_REORDER[from];
+
+  (STATE.custom_elements || []).forEach(function (c) {
+    if (c.kind === "galleryPane" && c.dir === from) c.dir = to;
+  });
+  Object.keys(STATE.links || {}).forEach(function (id) {
+    var v = STATE.links[id];
+    if (typeof v !== "string") return;
+    if (v === "gallery:prev:" + from) STATE.links[id] = "gallery:prev:" + to;
+    else if (v === "gallery:next:" + from) STATE.links[id] = "gallery:next:" + to;
+  });
+}
+
+/**
+ * Renders the editable per-directory photo/clip lists shown on gallery.html.
+ * One image at a time per directory, same flip-through idea as the public
+ * gallery page. A directory with 2+ images gets a "Reorder" toggle that swaps
  * the viewer for a flat list of filenames, no <img>/<video> elements, so
  * dragging things around never has to render every photo at once (some of
  * these are 8-20mb phone shots, a thumbnail grid of all of them would lag).
+ *
+ * A directory is just a NAME with images under it - "2026" and "Field trip"
+ * are equally valid - so its name is an ordinary editable input here rather
+ * than a fixed label, the same "the input already IS the state" pattern the
+ * rest of this page uses. content.gallery.years keeps its key for storage
+ * compatibility; it's a list of directory names, not of years.
  */
 function renderGallery() {
   var list = document.getElementById("galleryList");
@@ -1249,12 +1307,13 @@ function renderGallery() {
     }
 
     html +=
-      '<div class="ta-panel" data-year="' + y + '">' +
+      '<div class="ta-panel" data-year="' + escapeAttr(y) + '">' +
         '<div class="ta-panel-head">' +
-          '<span class="daytag">' + y + '</span>' +
+          '<input class="gy-name pw-edit-input" type="text" value="' + escapeAttr(y) +
+            '" aria-label="Directory name">' +
           (imgs.length > 1 ? '<button class="btn btn-ghost gy-reorder-btn" type="button">' +
             (reordering ? "Done reordering" : "Reorder") + '</button>' : "") +
-          '<button class="btn btn-ghost gy-del" type="button">Remove year</button>' +
+          '<button class="btn btn-ghost gy-del" type="button">Remove directory</button>' +
         '</div>' +
         viewer +
         '<label class="btn btn-ghost ta-upload">' +
@@ -1269,14 +1328,29 @@ function renderGallery() {
       '</div>';
   });
 
-  list.innerHTML = html || '<p class="muted">No years yet.</p>';
+  list.innerHTML = html || '<p class="muted">No directories yet.</p>';
 
   list.querySelectorAll(".ta-panel").forEach(function (p) {
     var y = p.getAttribute("data-year");
     var imgs = STATE.gallery.images[y] || [];
 
+    p.querySelector(".gy-name").addEventListener("change", function () {
+      var next = this.value.trim();
+      /* an empty or already-taken name is refused rather than applied and
+         reported: the input is the state here, so accepting it would leave
+         two directories that can't be told apart in every picker on the site */
+      if (!next || next === y) { this.value = y; return; }
+      if (STATE.gallery.years.indexOf(next) !== -1) {
+        showMsg("There's already a directory called \"" + next + "\".", false);
+        this.value = y;
+        return;
+      }
+      renameGalleryDir(y, next);
+      renderGallery();
+    });
+
     p.querySelector(".gy-del").addEventListener("click", function () {
-      if (!confirm('Remove the "' + y + '" year and all its images from the gallery?')) return;
+      if (!confirm('Remove the "' + y + '" directory and all its images from the gallery?')) return;
       STATE.gallery.years.splice(STATE.gallery.years.indexOf(y), 1);
       delete STATE.gallery.images[y];
       delete GY_IDX[y];
@@ -2226,7 +2300,7 @@ document.addEventListener("DOMContentLoaded", function () {
     var input = document.getElementById("newYearInput");
     var y = input.value.trim();
     if (!y) return;
-    if (STATE.gallery.years.indexOf(y) !== -1) { showMsg("That year already exists.", false); return; }
+    if (STATE.gallery.years.indexOf(y) !== -1) { showMsg("That directory already exists.", false); return; }
     STATE.gallery.years.unshift(y);
     STATE.gallery.images[y] = [];
     input.value = "";

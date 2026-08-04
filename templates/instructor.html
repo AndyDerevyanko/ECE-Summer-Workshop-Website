@@ -172,20 +172,23 @@
         <div class="wrap">
           <h2 style="font-size:1.4rem;margin-bottom:6px">Gallery</h2>
           <p class="muted" style="margin-top:0;margin-bottom:18px">
-            Photos and clips shown on the public gallery page, grouped by year.
+            Photos and clips shown on the public gallery page, grouped into named directories.
+            A directory doesn't have to be a year — call one whatever you like, and rename it
+            here at any time. Each one gets its own tile in the gallery page's directory rail,
+            and can be shown by its own image pane in the Visual editor.
           </p>
           <div id="galleryList">
             <!-- filled in by ta.js -->
           </div>
           <div class="ta-row" style="align-items:end">
             <div class="field">
-              <label for="newYearInput">Add a year</label>
-              <input id="newYearInput" type="text" placeholder="e.g. 2027">
+              <label for="newYearInput">Add a directory</label>
+              <input id="newYearInput" type="text" placeholder="e.g. 2027, or Field trip">
             </div>
             <button class="btn btn-ghost" id="addGalleryYear" type="button">
               <svg class="iic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                 stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-              Add year
+              Add directory
             </button>
           </div>
         </div>

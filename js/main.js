@@ -625,10 +625,11 @@ function currentPageKey() {
      be knocked out by a ta deleting an element would take the whole page's
      custom_elements filter down with it (see renderCustomElements()) */
   if (document.getElementById("loginCard")) return "login";
-  /* gallery.html's current year-picker marker; the gallery visual-editor
-     rewrite will replace this with its own anchor id - update this check
-     alongside that, see the gallery-parity plan */
-  if (document.getElementById("gvYears")) return "gallery";
+  /* the gallery's directory-rail spacer (templates/gallery.html): the same
+     kind of marker the other two use - a reserved in-flow spacer, not one of
+     the placed elements that anchor to it, so a ta deleting the rail can't
+     take the page's own identity down with it */
+  if (document.getElementById("galleryDirsAnchor")) return "gallery";
   return "index";
 }
 
@@ -755,7 +756,8 @@ function isFlowAreaEl(el) {
  */
 function isTileBoxEl(el) {
   return !!(el && el.hasAttribute &&
-    (el.hasAttribute("data-days-tile") || el.hasAttribute("data-extras-tile")));
+    (el.hasAttribute("data-days-tile") || el.hasAttribute("data-extras-tile") ||
+     el.hasAttribute("data-gallery-tile")));
 }
 
 /* how each flow container behaves on each axis when a ta hasn't said
@@ -768,7 +770,14 @@ function isTileBoxEl(el) {
 var AREA_FLOW_DEFAULTS = {
   "seed.dashboard.extras.area": { x: "lock", y: "expand" },
   "seed.dashboard.days.area": { x: "lock", y: "expand" },
-  "days.open.attachments": { x: "lock", y: "lock" }
+  "days.open.attachments": { x: "lock", y: "lock" },
+  /* the gallery's directory rail is the one container that ships STACKED
+     rather than side by side - it's a narrow column down the left of the
+     photo, which is exactly what the stacking controls express - so its
+     default names a dir the way the others name their axis locks. Everything
+     else about it works identically: a ta can flip it back to a row, reverse
+     it, or change which side it overflows to, from the same Container menu. */
+  "seed.gallery.dirs.area": { x: "lock", y: "expand", dir: "column" }
 };
 /* content.area_flow, {id: {x, y, dir, wrap}} - only what a ta has actually
    changed */
@@ -871,7 +880,8 @@ function minContentWidthOf(el) {
  */
 function flowAreaMinWidth(area) {
   var min = 0;
-  area.querySelectorAll(":scope > [data-days-tile], :scope > [data-extras-tile]").forEach(function (t) {
+  area.querySelectorAll(":scope > [data-days-tile], :scope > [data-extras-tile], " +
+    ":scope > [data-gallery-tile]").forEach(function (t) {
     min = Math.max(min, minContentWidthOf(t));
   });
   if (!min) return 40;
@@ -1160,7 +1170,8 @@ function isResizeLockedTileRole(el) {
  */
 function isTiledRoleEl(el) {
   return !!(el && el.hasAttribute &&
-    (el.hasAttribute("data-extras-role") || el.hasAttribute("data-days-role")));
+    (el.hasAttribute("data-extras-role") || el.hasAttribute("data-days-role") ||
+     el.hasAttribute("data-gallery-role")));
 }
 
 /**
@@ -1181,7 +1192,7 @@ function isTiledRoleEl(el) {
  */
 function moveBoundsContainer(el) {
   if (!el || !el.closest) return null;
-  var tile = el.closest("[data-extras-tile], [data-days-tile]");
+  var tile = el.closest("[data-extras-tile], [data-days-tile], [data-gallery-tile]");
   if (tile) return tile;
   /* a login field/button/error line is the same kind of little container: its
      label, its input rectangle and its placeholder text all move freely
@@ -1651,7 +1662,8 @@ var TILE_STYLE_MIRROR_PROPS = [
  */
 function mirrorTiledRoleStyle(el) {
   var attr = el.hasAttribute("data-extras-role") ? "data-extras-role"
-    : el.hasAttribute("data-days-role") ? "data-days-role" : null;
+    : el.hasAttribute("data-days-role") ? "data-days-role"
+    : el.hasAttribute("data-gallery-role") ? "data-gallery-role" : null;
   if (!attr) return;
   var role = el.getAttribute(attr);
   var opColor = el.dataset.opColor, opAlpha = el.dataset.opAlpha, baseColor = el.dataset.baseColor;
@@ -2240,14 +2252,28 @@ var LINKS = {};
  * @param url the link target, or "" to remove it
  */
 function applyOneLink(el, url) {
-  if (el.tagName === "A") {
+  /* a gallery page action (see galleryActionOf()) isn't somewhere to navigate
+     to, it's something to DO on this page - so it takes the click-listener
+     path even on a real <a>, and the href is stripped rather than set: an
+     href="gallery:next" would be a broken navigation for anyone who
+     ctrl-clicked it. This is what makes "any button can be the forward
+     button" true - being the forward button is a link, nothing more. */
+  var action = galleryActionOf(url);
+  if (el.tagName === "A" && !action) {
     if (url) el.href = url; else el.removeAttribute("href");
     return;
   }
+  if (el.tagName === "A") el.removeAttribute("href");
   if (!el._hrLinkWired) {
     el._hrLinkWired = true;
-    el.addEventListener("click", function () {
+    el.addEventListener("click", function (e) {
       if (isEditMode()) return;
+      var act = galleryActionOf(el._hrLinkUrl);
+      if (act) {
+        e.preventDefault();
+        if (window.stepGallery) window.stepGallery(act.dir, act.step);
+        return;
+      }
       if (el._hrLinkUrl) window.location.href = el._hrLinkUrl;
     });
   }
@@ -6316,6 +6342,18 @@ var DAYS_CHIP_VAR_SUFFIX = {
 function localChipVarToken(chip) {
   if (!chip.closest(".editing")) return "";
   var local = chip.dataset.fxLocal;
+  /* the gallery's two page-level variables name their PANE BINDING, not a
+     tile they sit inside - they're placed anywhere on the page (see
+     buildGalleryChipHtml()) - so their scope comes off the chip itself */
+  if (local === "gallery-current" || local === "gallery-total") {
+    return "${" + galleryVarScope(chip.dataset.fxDir || "") +
+      (local === "gallery-current" ? "Current" : "Total") + "}";
+  }
+  if (local === "gallery-dir") {
+    var gTile = chip.closest("[data-gallery-tile]");
+    var gDir = gTile && gTile.dataset.galleryDir;
+    return gDir ? "${" + galleryVarScope(gDir) + "Name}" : "";
+  }
   if (local === "filename") {
     var xTile = chip.closest("[data-extras-tile]");
     var xBase = xTile && xTile.dataset.extrasVar;
@@ -6338,6 +6376,7 @@ function localChipVarToken(chip) {
 function repaintLocalTileContent() {
   repaintExtrasFilenameChips();
   repaintDaysChips();
+  repaintGalleryChips();
   repaintExtrasTypeIcons();
 }
 
@@ -6463,6 +6502,191 @@ function insertDaysChip(tile, local) {
   commitTextFieldChange(field, before, field.innerHTML);
 }
 
+/* ---------------------------------------------------------------------------
+   THE GALLERY PAGE'S OWN VARIABLES AND ACTIONS
+
+   Both exist per PANE BINDING rather than per element: a placed "galleryPane"
+   (see buildCustomElementNode()) names a directory, and that binding is what
+   brings a pair of variables (which image it's on, how many there are) and a
+   pair of actions (step it back, step it forward) into existence. Two
+   directories on the page therefore means four variables to pick from, which
+   is exactly the ta's own "if we put BOTH on the page right now, we will have
+   4 (2x2)".
+
+   Neither is site content. The variables are LOCAL CHIPS (data-fx-local, same
+   machinery as a day tile's ${Day3Number}), so they never enter
+   content.variables and never show up in the content manager's variables list
+   or the formula menu's picker - they're meaningless anywhere but here. The
+   actions aren't stored at all: they're derived from whichever panes are
+   currently placed, and an element "is" the forward button purely because its
+   content.links entry points at one of them.
+   --------------------------------------------------------------------------- */
+
+/* the seeded pane's binding: "whatever the directory rail has selected", as
+   opposed to a pane pinned to one named directory. Spelled as a constant
+   rather than a bare "" everywhere so the two meanings of an empty string
+   (this, versus "no directory at all") can't be confused. */
+var GALLERY_SELECTED_DIR = "";
+
+/**
+ * The variable-name scope one pane binding contributes: "Gallery2026" for a
+ * pane pinned to the "2026" directory, "GallerySelected" for one following the
+ * rail. Non-alphanumerics are dropped so a directory a ta named "Field trip
+ * 2027" still spells a token they can read and type back.
+ * @param dir the binding's directory name, or "" for the rail-following one
+ * @return the scope, eg "Gallery2026"
+ */
+function galleryVarScope(dir) {
+  if (!dir) return "GallerySelected";
+  return "Gallery" + String(dir).replace(/[^A-Za-z0-9]/g, "");
+}
+
+/**
+ * Every distinct pane binding currently on the page, in the order the panes
+ * were placed. Read off the live DOM rather than CUSTOM_ELEMENTS so a pane a
+ * ta has just deleted stops offering its variables/actions immediately -
+ * the same "the dom is the state" stance pageLinkInventory() takes.
+ * @return an array of directory names ("" for the rail-following binding)
+ */
+function galleryPaneBindings() {
+  var seen = {};
+  var out = [];
+  document.querySelectorAll("[data-gallery-pane]").forEach(function (pane) {
+    var dir = pane.getAttribute("data-gallery-dir") || GALLERY_SELECTED_DIR;
+    if (seen[dir]) return;
+    seen[dir] = true;
+    out.push(dir);
+  });
+  return out;
+}
+
+/**
+ * How one binding reads in a menu: the directory's own name, or the wording
+ * that explains what the rail-following binding actually does.
+ * @param dir a binding's directory name
+ * @return the label
+ */
+function galleryBindingLabel(dir) {
+  return dir || "Selected directory";
+}
+
+/**
+ * Builds the markup for one gallery variable chip - the page-exclusive
+ * equivalent of buildDaysChipHtml(), carrying the binding it reads from in
+ * data-fx-dir rather than resolving off a tile it sits inside (these are
+ * placed anywhere on the page, not inside anything).
+ * @param local "gallery-current" or "gallery-total"
+ * @param dir the binding's directory name, "" for the rail-following one
+ * @return an HTML string for a single <span class="fx-chip">
+ */
+function buildGalleryChipHtml(local, dir) {
+  /* "1" is only the placeholder shown until repaintGalleryChips() resolves it
+     against the pane, same as every other chip's own label */
+  return '<span class="fx-chip" contenteditable="false" data-fx-local="' + escapeHtml(local) +
+    '" data-fx-dir="' + escapeHtml(dir || "") + '">1</span>';
+}
+
+/**
+ * Builds the markup for a directory tile's own name chip. Tile-local like the
+ * filename/day chips (it resolves off whichever tile it's rendered inside),
+ * which is what lets one shared label template print a different directory
+ * name on every tile in the rail.
+ * @return an HTML string for a single <span class="fx-chip">
+ */
+function buildGalleryDirChipHtml() {
+  return '<span class="fx-chip" contenteditable="false" data-fx-local="gallery-dir">name</span>';
+}
+
+/**
+ * Repaints every gallery chip off live data: the two page-level ones through
+ * js/gallery.js's own hook (it owns which image each binding is sitting on),
+ * the per-tile name chip off the tile it's actually inside. A no-op on every
+ * page that doesn't load js/gallery.js, same window.-gated cross-script
+ * pattern repaintExtrasTypeIcons() uses.
+ */
+function repaintGalleryChips() {
+  document.querySelectorAll('.fx-chip[data-fx-local="gallery-dir"]').forEach(function (chip) {
+    var tile = chip.closest("[data-gallery-tile]");
+    chip.textContent = localChipVarToken(chip) || ((tile && tile.dataset.galleryDir) || "");
+  });
+  if (!window.galleryChipValue) return;
+  document.querySelectorAll('.fx-chip[data-fx-local="gallery-current"], ' +
+    '.fx-chip[data-fx-local="gallery-total"]').forEach(function (chip) {
+    chip.textContent = localChipVarToken(chip) ||
+      window.galleryChipValue(chip.dataset.fxLocal, chip.dataset.fxDir || "");
+  });
+}
+
+/**
+ * Appends one gallery variable chip to the end of a text field, through the
+ * same commitTextFieldChange() path a typed edit takes (so undo and the shared-
+ * template mirror both work identically) - the gallery's answer to
+ * insertDaysChip(), reached from the right-click menu's "Insert gallery
+ * variable..." sub-view.
+ * @param field the [data-edit-id] text field to insert into
+ * @param local "gallery-current" or "gallery-total"
+ * @param dir the binding to read from
+ */
+function insertGalleryChip(field, local, dir) {
+  if (!field) return;
+  var before = field.innerHTML;
+  field.innerHTML = before + (before ? " " : "") + buildGalleryChipHtml(local, dir);
+  commitTextFieldChange(field, before, field.innerHTML);
+}
+
+/* what a content.links value looks like when it points at one of this page's
+   own actions instead of a url: "gallery:next" for the rail-following pane,
+   "gallery:next:2026" for one pinned to a directory. A prefix rather than a
+   separate content map, so an action link is stored, listed, edited, removed,
+   undone and copied by every mechanism a url link already goes through - see
+   applyOneLink()/pageLinkInventory(). */
+var GALLERY_ACTION_PREFIX = "gallery:";
+
+/**
+ * Parses a content.links value as a gallery action.
+ * @param url a links map value
+ * @return {step, dir} with step -1/1, or null if it isn't an action at all
+ */
+function galleryActionOf(url) {
+  if (typeof url !== "string" || url.indexOf(GALLERY_ACTION_PREFIX) !== 0) return null;
+  var rest = url.slice(GALLERY_ACTION_PREFIX.length);
+  var cut = rest.indexOf(":");
+  var verb = cut === -1 ? rest : rest.slice(0, cut);
+  if (verb !== "prev" && verb !== "next") return null;
+  return { step: verb === "prev" ? -1 : 1, dir: cut === -1 ? "" : rest.slice(cut + 1) };
+}
+
+/**
+ * A human name for one action, for the link editor's picker and the links
+ * view's rows - "Previous image (2026)" rather than the raw "gallery:prev:2026"
+ * a ta should never have to read, per "they will be named clearly to indicate
+ * what they are for".
+ * @param url a links map value
+ * @return the label, or "" if url isn't a gallery action
+ */
+function galleryActionLabel(url) {
+  var a = galleryActionOf(url);
+  if (!a) return "";
+  return (a.step === -1 ? "Previous image" : "Next image") + " — " + galleryBindingLabel(a.dir);
+}
+
+/**
+ * Every action this page currently offers: two per pane binding, in the same
+ * order the bindings themselves come in. This is the list that grows the
+ * moment a ta places another image pane.
+ * @return an array of {url, label}
+ */
+function galleryActionInventory() {
+  var out = [];
+  galleryPaneBindings().forEach(function (dir) {
+    ["prev", "next"].forEach(function (verb) {
+      var url = GALLERY_ACTION_PREFIX + verb + (dir ? ":" + dir : "");
+      out.push({ url: url, label: galleryActionLabel(url) });
+    });
+  });
+  return out;
+}
+
 /* the nav's real theme toggle (#themeBtn, templates/index.html)'s own sun/
    moon pair, verbatim: a placed "theme" custom element (buildCustomElement())
    starts out with this same auto day/night swap (css [data-theme] rule,
@@ -6576,7 +6800,14 @@ var ICON_LIBRARY = [
     '<path d="M8 11V8a4 4 0 0 1 8 0v3"/><path d="M12 14.5v2"/></svg>' },
   { label: "Unlock", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
     'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/>' +
-    '<path d="M8 11V8a4 4 0 0 1 7.5-2"/><path d="M12 14.5v2"/></svg>' }
+    '<path d="M8 11V8a4 4 0 0 1 7.5-2"/><path d="M12 14.5v2"/></svg>' },
+  /* the gallery viewer's own two chevrons, added to the shared library so a
+     back/forward arrow is available to everyone on every page, not only to
+     whoever inherits the two the gallery page ships with */
+  { label: "Arrow left", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>' },
+  { label: "Arrow right", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>' }
 ];
 
 /* ta-uploaded icons/videos/fonts, shared with every ta the moment they're
@@ -6765,7 +6996,7 @@ function buildCustomElement(d) {
      _LOGIN_USER_ENTRY), and pinning it would clip the label or the second
      error string the moment a ta bumps the font size */
   var isAutoHeightArea = d.kind === "extrasArea" || d.kind === "daysArea" ||
-    d.kind === "loginField" || d.kind === "loginError";
+    d.kind === "galleryDirArea" || d.kind === "loginField" || d.kind === "loginError";
   if (d.h && !isAutoHeightArea) { el.style.height = d.h + "px"; el.dataset.natH = d.h; }
   return el;
 }
@@ -6879,6 +7110,55 @@ function buildCustomElementNode(d) {
     el.style.setProperty("--tile-gap", "22px");
     el.style.width = "100%";
     el.style.minHeight = "40px";
+  } else if (d.kind === "galleryDirArea") {
+    /* transparent layout container for the gallery's directory rail (see
+       app/db.py's _GALLERY_DIRS_AREA_ENTRY) - js/gallery.js's renderDirs()
+       finds it by data-gallery-dirs-area and renders one tile per directory
+       inside; this only builds the empty shell. Exactly the same shape as the
+       dashboard's "extrasArea"/"daysArea" kinds above, and for exactly the
+       same reason: the ta's spec calls for "a transparent box, with tiles in
+       it or the text saying theres nothing", with the coloured rectangle
+       behind a tile kept separate from the area itself. It ships stacked
+       vertically (see AREA_FLOW_DEFAULTS) since that's where the rail has
+       always sat, but every stacking/lock control works on it like any other
+       flow container. */
+    el = document.createElement("div");
+    el.setAttribute("data-resize-id", d.id);
+    el.setAttribute("data-gallery-dirs-area", "1");
+    el.setAttribute("data-flow-area", "1");
+    el.setAttribute("data-tile-id", "gallery.dir.tile");
+    el.className = "tile-flow";
+    el.style.setProperty("--tile-gap", "8px");
+    el.style.minHeight = "40px";
+  } else if (d.kind === "galleryPane") {
+    /* one photo/clip stage (see app/db.py's _GALLERY_PANE_ENTRY). Unlike every
+       other kind here, a page can carry SEVERAL of these, each bound to a
+       named directory through d.dir - so a ta can show 2025 beside 2026 on the
+       same page. d.dir === "" is the special "follow the rail" binding the
+       page ships with, which is what keeps the directory tiles worth clicking.
+       js/gallery.js paints the actual media into the two children below and
+       owns which image each binding is currently on; this only builds the
+       empty stage, same "build the shell, fill it from the page's own script"
+       split as the dashboard's tile areas. */
+    el = document.createElement("div");
+    el.className = "gv-stage";
+    el.setAttribute("data-resize-id", d.id);
+    el.setAttribute("data-gallery-pane", "1");
+    el.setAttribute("data-gallery-dir", d.dir || "");
+    var gpImg = document.createElement("img");
+    gpImg.className = "gv-img";
+    gpImg.alt = "";
+    gpImg.setAttribute("data-gallery-media", "img");
+    el.appendChild(gpImg);
+    var gpVid = document.createElement("video");
+    gpVid.className = "gv-img";
+    gpVid.autoplay = true;
+    gpVid.muted = true;
+    gpVid.loop = true;
+    gpVid.setAttribute("playsinline", "");
+    gpVid.setAttribute("data-gallery-media", "vid");
+    gpVid.hidden = true;
+    el.appendChild(gpVid);
   } else if (d.kind === "loginField") {
     /* one of the login page's two credential boxes (see app/db.py's
        _LOGIN_USER_ENTRY/_LOGIN_PASS_ENTRY), the first of the three kinds the
@@ -7328,8 +7608,12 @@ function applyElementAnchors() {
     /* a login field/button spans its auth card for exactly the same reason a
        live area spans its section: the card's width is whatever the shared
        column resolves to today, not the hand-measured seed in app/db.py */
+    /* the gallery's photo stage spans the column beside its rail for the same
+       reason: the .gv row it anchors into is whatever the shared page column
+       resolves to today, not the hand-measured seed in app/db.py */
     if ((isLiveAreaEl(el) || el.hasAttribute("data-progress") ||
-         el.hasAttribute("data-login-fill")) && el.dataset.ovW === undefined) {
+         el.hasAttribute("data-login-fill") || el.hasAttribute("data-gallery-pane")) &&
+        el.dataset.ovW === undefined) {
       var colW = anchor.getBoundingClientRect().width;
       el.style.width = colW + "px";
       /* and this IS the element's natural size now, not just what it happens
@@ -8031,6 +8315,13 @@ function finishAddedElement(el, d, kind, extra) {
        convention window.renderExtras uses on the dashboard) */
     if (window.refreshLoginPage) window.refreshLoginPage();
   }
+  if (kind === "galleryPane") {
+    /* a brand new stage is empty markup until js/gallery.js paints the
+       directory it was just bound to into it - and placing one also creates
+       that binding's two variables and two link actions, so the counter/arrow
+       chips already on the page need repainting too (see renderGallery()) */
+    if (window.renderGallery) window.renderGallery();
+  }
   if (kind === "theme") {
     /* the button itself only carries data-resize-id; its nested ".tic-label"
        is the actual data-edit-id field, so it needs its own wireTextField()
@@ -8092,6 +8383,13 @@ function addCustomElement(kind, x, y, extra) {
      autocomplete hint and the default placeholder text, so it's baked into
      the descriptor rather than resolved at render time */
   if (kind === "loginField") d.field = extra.field === "password" ? "password" : "username";
+  /* which directory this stage flips through, picked before placing (the
+     right-click menu lists every directory the content manager currently has,
+     see renderCtxMenuGalleryDirPicker()) - it decides which images the pane
+     shows AND which pair of page-exclusive variables/link actions it brings
+     into existence, so it's baked into the descriptor rather than resolved at
+     render time. "" is the seeded pane's "follow the rail" binding. */
+  if (kind === "galleryPane") d.dir = extra.dir || "";
   /* a paste keeps the id its markup was already remapped to, rather than being
      handed a fresh "custom.clip.*" one: everything inside the stored html is
      namespaced under that root id, and the override maps were copied across
@@ -8621,6 +8919,19 @@ function renderCtxMenuRoot() {
        own markup, exactly the reasoning that already excludes the countdown
        and logistics tiles below */
     var isTileBox = CTX_TARGET_EL && isTileBoxEl(CTX_TARGET_EL);
+    /* a directory tile's label is a shared template like every other tile
+       text, so its name chip is restorable the same way a day tile's is (see
+       insertDaysChip()) - a ta who backspaced it out gets it back without
+       hand-writing markup */
+    var galleryTile = CTX_TARGET_EL && CTX_TARGET_EL.closest &&
+      CTX_TARGET_EL.closest("[data-gallery-tile]");
+    /* the page's own two variables per image pane, insertable into whichever
+       text field was right-clicked. Gated on there being a field to insert
+       INTO, since a chip is a piece of a text field's markup and nothing else
+       - "the progress button is just a normal text element or button with the
+       variables nested inside" */
+    var galleryVarField = currentPageKey() === "gallery" && CTX_TARGET_EL &&
+      CTX_TARGET_EL.hasAttribute("data-edit-id") && galleryPaneBindings().length;
     /* the login field's own input rectangle, undeletable for the same reason
        the attachments tile's download button is - see deleteElement() */
     var isLoginFixed = CTX_TARGET_EL && CTX_TARGET_EL.hasAttribute("data-login-fixed");
@@ -8639,13 +8950,17 @@ function renderCtxMenuRoot() {
     var isProgress = CTX_TARGET_EL && CTX_TARGET_EL.hasAttribute("data-progress");
     toggleHtml =
       '<div class="ctx-title">This element</div>' +
-      ((isSpecial || isExtrasRole || isDaysRole) ? "" : '<button type="button" data-dup="1">Duplicate</button>') +
+      ((isSpecial || isExtrasRole || isDaysRole ||
+        (CTX_TARGET_EL && CTX_TARGET_EL.hasAttribute("data-gallery-role")))
+        ? "" : '<button type="button" data-dup="1">Duplicate</button>') +
       (isSpecial ? "" : '<button type="button" data-delete="1">Delete</button>') +
       (extrasTile ? '<button type="button" data-extras-add-filename="1">Create textbox with filename variable</button>' : "") +
       (loginErrorEl ? '<button type="button" data-login-msg-swap="1">' +
         (loginErrorEl.classList.contains("edit-show-expired")
           ? "Show wrong-password wording" : "Show timed-out wording") +
         '</button>' : "") +
+      (galleryTile ? '<button type="button" data-gallery-add-name="1">Insert directory name</button>' : "") +
+      (galleryVarField ? '<button type="button" data-gallery-vars="1">Insert gallery variable...</button>' : "") +
       (daysTile ? '<button type="button" data-days-add-number="1">Insert day number</button>' +
         '<button type="button" data-days-add-date="1">Insert unlock date</button>' +
         '<button type="button" data-days-add-locked="1">Insert locked-state text</button>' +
@@ -8739,6 +9054,15 @@ function renderCtxMenuRoot() {
         '<button type="button" data-add="loginButton">Log in button</button>' +
         '<button type="button" data-add="loginError">Error message</button>'
       : "") +
+    /* the gallery's own kind, in its own labelled section for the same reason
+       the login page's are: a photo stage has nothing to resolve against on
+       any other page. Several can be placed, each bound to its own directory -
+       which is what makes this the entry point for "we can add multiple and
+       link them to a certain year or directory". */
+    (currentPageKey() === "gallery"
+      ? '<div class="ctx-title">Gallery page only</div>' +
+        '<button type="button" data-add="galleryPane">Image pane...</button>'
+      : "") +
     /* the landing page's own three, split the same way and gated one step
        further: which of them can be placed depends on which navbar is on show,
        since a Log out button has nothing to do on the page a signed-out
@@ -8794,6 +9118,23 @@ function renderCtxMenuRoot() {
       if (tile) insertExtrasFilenameChip(tile);
       hideCtxMenu();
     });
+  }
+  var galleryNameBtn = CTX_MENU.querySelector("[data-gallery-add-name]");
+  if (galleryNameBtn) {
+    galleryNameBtn.addEventListener("click", function () {
+      var tile = CTX_TARGET_EL && CTX_TARGET_EL.closest("[data-gallery-tile]");
+      var field = tile && tile.querySelector('[data-gallery-role="label"]');
+      if (field) {
+        var before = field.innerHTML;
+        field.innerHTML = before + (before ? " " : "") + buildGalleryDirChipHtml();
+        commitTextFieldChange(field, before, field.innerHTML);
+      }
+      hideCtxMenu();
+    });
+  }
+  var galleryVarsBtn = CTX_MENU.querySelector("[data-gallery-vars]");
+  if (galleryVarsBtn) {
+    galleryVarsBtn.addEventListener("click", function () { renderCtxMenuGalleryVars(); });
   }
   [["data-days-add-number", "day-number"], ["data-days-add-date", "day-date"],
    ["data-days-add-locked", "day-locked"], ["data-days-add-title", "day-title"],
@@ -8895,13 +9236,35 @@ function renderCtxMenuRoot() {
 function renderCtxMenuLinkEditor() {
   var id = CTX_TARGET_ID;
   var current = LINKS[id] || "";
+  /* the gallery's own actions, offered above the url box rather than instead
+     of it: an element on that page can still be pointed at an ordinary url,
+     it can just also be made to step an image pane. Each is one click, since
+     "which pane, forwards or backwards" is the entire decision - this is the
+     "CUSTOM LINK selection" the ta asked for, and it's what makes any button
+     they like into the back or forward button. */
+  var actions = currentPageKey() === "gallery" ? galleryActionInventory() : [];
   CTX_MENU.innerHTML =
+    (actions.length
+      ? '<div class="ctx-title">This page</div>' +
+        actions.map(function (a, i) {
+          return '<button type="button" data-gallery-action="' + i + '"' +
+            (current === a.url ? ' class="ctx-on"' : "") + '>' + escapeHtml(a.label) + '</button>';
+        }).join("")
+      : "") +
     '<div class="ctx-title">Element link</div>' +
     '<input type="url" class="ctx-link-input" placeholder="https://...">' +
     '<button type="button" class="ctx-link-save">Save</button>' +
     (current ? '<button type="button" class="ctx-link-remove">Remove link</button>' : "");
+  CTX_MENU.querySelectorAll("[data-gallery-action]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      setElementLink(id, actions[+btn.getAttribute("data-gallery-action")].url);
+      hideCtxMenu();
+    });
+  });
   var input = CTX_MENU.querySelector(".ctx-link-input");
-  input.value = current;
+  /* an action link has no url to show, and putting its raw token in the box
+     would invite a ta to edit it into something meaningless */
+  input.value = galleryActionOf(current) ? "" : current;
   input.focus();
   function save() {
     setElementLink(id, input.value.trim());
@@ -8979,6 +9342,14 @@ function pageLinkInventory() {
     if (!id || seen[id]) return;
     seen[id] = true;
     if (LINKS[id]) {
+      /* a gallery page action reads as what it does, not as its raw token, and
+         has no url to type over - but it's still a ta's own link, so it stays
+         removable exactly like any other entry they set */
+      var actionLabel = galleryActionLabel(LINKS[id]);
+      if (actionLabel) {
+        set.push({ id: id, el: el, url: "", editable: false, removable: true, note: actionLabel });
+        return;
+      }
       set.push({ id: id, el: el, url: LINKS[id], editable: true, removable: true, note: "" });
       return;
     }
@@ -9107,6 +9478,21 @@ function buildLinkListRow(entry) {
     note.className = "ctx-lnk-note";
     note.textContent = entry.note + (entry.url ? " — " + entry.url : "");
     row.appendChild(note);
+    /* a built-in link has nothing to remove (it's markup, see
+       BUILTIN_LINK_ACTIONS), but a gallery action a ta pointed an element at
+       is theirs to take back off it again */
+    if (entry.removable) {
+      var noteDel = document.createElement("button");
+      noteDel.type = "button";
+      noteDel.className = "ctx-lnk-del";
+      noteDel.title = "Remove this link";
+      noteDel.textContent = "×";
+      noteDel.addEventListener("click", function () {
+        setElementLink(entry.id, "");
+        renderCtxMenuLinkList();
+      });
+      row.appendChild(noteDel);
+    }
     return row;
   }
 
@@ -9188,12 +9574,111 @@ function renderCtxMenuLinkList() {
   addSection("Inside text", inv.inline);
   addSection("Set on another page", inv.elsewhere);
 
+  /* the gallery's own actions, listed whether or not anything currently points
+     at one: this is the "what can I make a button DO on this page?" half of
+     the question, and placing another image pane is what makes the list grow.
+     Read-only here - an action is attached to an element from that element's
+     own "Add link" editor, which is where the ta already is when they want
+     one. */
+  var actions = galleryActionInventory();
+  if (actions.length) {
+    var head = document.createElement("div");
+    head.className = "ctx-title ctx-lnk-head";
+    head.textContent = "Actions on this page";
+    list.appendChild(head);
+    actions.forEach(function (a) {
+      var arow = document.createElement("div");
+      arow.className = "ctx-lnk-row";
+      var name = document.createElement("span");
+      name.className = "ctx-lnk-name";
+      name.textContent = a.label;
+      var note = document.createElement("div");
+      note.className = "ctx-lnk-note";
+      note.textContent = 'Right-click a button and choose "Add link" to point it here';
+      arow.appendChild(name);
+      arow.appendChild(note);
+      list.appendChild(arow);
+    });
+  }
+
   if (!inv.set.length && !inv.builtin.length && !inv.inline.length && !inv.elsewhere.length) {
     var msg = document.createElement("div");
     msg.className = "ctx-file-msg";
     msg.textContent = 'Nothing on this page links anywhere yet. Right-click an element and choose "Add link".';
     list.appendChild(msg);
   }
+  clampCtxMenu();
+}
+
+/**
+ * Swaps the menu into its gallery-variable sub-view (the root menu's "Insert
+ * gallery variable..."): one row per pane binding on the page, each offering
+ * the two things a binding knows about itself - which image it's on, and how
+ * many it has. A sub-view rather than a flat list of buttons like the day
+ * tile's chips get, because this list GROWS with the page: two directories
+ * already means four entries, and a ta with eight would have sixteen buried in
+ * the root menu.
+ *
+ * The field these land in is whichever one was right-clicked - the chips are
+ * ordinary markup inside it (see buildGalleryChipHtml()), so the surrounding
+ * words, styling and layout stay completely the ta's, which is the whole point
+ * of "the progress button is just a normal text element ... with the variables
+ * nested inside".
+ */
+function renderCtxMenuGalleryVars() {
+  var field = CTX_TARGET_EL;
+  var rows = [];
+  galleryPaneBindings().forEach(function (dir) {
+    rows.push({ local: "gallery-current", dir: dir,
+      label: galleryBindingLabel(dir) + " — image number" });
+    rows.push({ local: "gallery-total", dir: dir,
+      label: galleryBindingLabel(dir) + " — how many images" });
+  });
+  CTX_MENU.innerHTML =
+    '<div class="ctx-title">Insert gallery variable</div>' +
+    rows.map(function (r, i) {
+      return '<button type="button" data-gvar="' + i + '">' + escapeHtml(r.label) + '</button>';
+    }).join("") +
+    '<button type="button" class="ctx-lnk-back">Back</button>';
+  CTX_MENU.querySelectorAll("[data-gvar]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var r = rows[+btn.getAttribute("data-gvar")];
+      insertGalleryChip(field, r.local, r.dir);
+      hideCtxMenu();
+    });
+  });
+  CTX_MENU.querySelector(".ctx-lnk-back").addEventListener("click", renderCtxMenuRoot);
+  clampCtxMenu();
+}
+
+/**
+ * Swaps the menu into the image pane's directory picker (the root menu's
+ * "Gallery page only > Image pane..."): which directory the new stage flips
+ * through, chosen before it's placed the same way a login box's username/
+ * password is (see handleCtxAdd()). "Selected directory" is offered first and
+ * is what the page ships with - a pane that follows the rail, which is the
+ * only binding that makes the rail's tiles worth clicking.
+ */
+function renderCtxMenuGalleryDirPicker() {
+  var dirs = (window.galleryDirNames ? window.galleryDirNames() : []).slice();
+  var rows = [{ dir: "", label: "Selected directory (follows the rail)" }].concat(
+    dirs.map(function (d) { return { dir: d, label: d }; }));
+  CTX_MENU.innerHTML =
+    '<div class="ctx-title">Which directory?</div>' +
+    rows.map(function (r, i) {
+      return '<button type="button" data-gdir="' + i + '">' + escapeHtml(r.label) + '</button>';
+    }).join("") +
+    (dirs.length ? "" : '<div class="ctx-file-msg">No named directories yet — add one in the ' +
+      'content manager\'s Gallery section.</div>') +
+    '<button type="button" class="ctx-lnk-back">Back</button>';
+  CTX_MENU.querySelectorAll("[data-gdir]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      addCustomElement("galleryPane", CTX_POS.x, CTX_POS.y,
+        { dir: rows[+btn.getAttribute("data-gdir")].dir });
+      hideCtxMenu();
+    });
+  });
+  CTX_MENU.querySelector(".ctx-lnk-back").addEventListener("click", renderCtxMenuRoot);
   clampCtxMenu();
 }
 
@@ -9701,6 +10186,10 @@ function handleCtxAdd(kind) {
     hideCtxMenu();
     return;
   }
+  /* which directory a new stage is bound to is the entire decision behind
+     placing one, so it's asked up front rather than configured afterward -
+     same shape as the login boxes just above */
+  if (kind === "galleryPane") { renderCtxMenuGalleryDirPicker(); return; }
   if (kind === "image") { renderCtxMenuImagePicker(); return; }
   if (kind === "video") { renderCtxMenuVideoPicker(); return; }
   if (kind === "object") { renderCtxMenuObjectPicker(); return; }
@@ -10137,10 +10626,17 @@ function isDuplicatable(el) {
      a second box js/login.js never reads. Adding another FIELD is what the
      right-click menu's "Login page only" section is for. */
   var isLoginFixed = el.hasAttribute("data-login-fixed");
-  var isSpecial = isDatetime || isTile || isExtrasFixed || isDaysFixed || isLoginFixed ||
+  /* a gallery directory tile and its two roles, for the same reason an
+     attachment tile's are: what a tile shows comes from the directory it was
+     rendered FOR, so a copy would be an orphan outside the shared-template
+     system. Copy/paste (this function's caller) has to refuse them exactly as
+     the right-click menu's own Duplicate row already does - isTileBoxEl()
+     covers the day/attachment tile boxes there too. */
+  var isGalleryRole = el.hasAttribute("data-gallery-role");
+  var isSpecial = isDatetime || isTile || isTileBoxEl(el) || isExtrasFixed || isDaysFixed || isLoginFixed ||
     (id && (id.indexOf("logistics.") === 0 || id.indexOf("countdown.") === 0)) ||
     (el.querySelector && el.querySelector("#heroCountdown, #logisticsGrid"));
-  return !(isSpecial || isExtrasRole || isDaysRole);
+  return !(isSpecial || isExtrasRole || isDaysRole || isGalleryRole);
 }
 
 /* the one floating text toolbar, shared by every text field, shown above
@@ -12493,6 +12989,12 @@ function applySharedOverridePasses(data, textMap) {
      same window.-gated cross-script pattern as window.initAllReels above */
   if (window.renderExtras) window.renderExtras();
   if (window.renderDays) window.renderDays();
+  /* same cross-script hook for the gallery page's directory rail and image
+     panes (see buildCustomElementNode()'s "galleryDirArea"/"galleryPane"
+     kinds): js/gallery.js owns which directories exist, which image each pane
+     is on, and what the two page variables therefore read - and only this pass
+     knows when those elements actually exist in the dom */
+  if (window.renderGallery) window.renderGallery();
   /* same cross-script hook, for the login page's own four placed elements
      (see buildCustomElementNode()'s "loginField"/"loginButton"/"loginError"
      kinds): js/login.js owns their live behaviour - placeholder visibility,
@@ -12571,6 +13073,32 @@ function initLoginPage() {
          this path - a ta who deliberately deleted a field on a working site
          is making a real choice, and this must never undo it. */
       if (window.buildLoginFallback) window.buildLoginFallback();
+    });
+}
+
+/**
+ * Boots the shared visual-editor engine on the gallery page
+ * (templates/gallery.html, identified by its #galleryDirsAnchor spacer - see
+ * currentPageKey()). Nothing to hydrate here beyond the generic override
+ * pipeline: the viewer itself is five ordinary placed custom elements (see
+ * app/db.py's _GALLERY_ENTRIES) which renderCustomElements() builds like any
+ * other, and everything around them (nav, heading, hint line, footer) is plain
+ * click-to-edit template markup. js/gallery.js wires the real behaviour on top,
+ * off the same window.renderGallery hook applySharedOverridePasses() calls.
+ *
+ * Gated into edit affordances the same isPreviewMode() && isEditMode() way
+ * every other page is, so a real visitor flipping through photos never sees a
+ * drag handle.
+ */
+function initGalleryPage() {
+  fetchContent()
+    .then(function (data) { applySharedEditorOverrides(data); })
+    .catch(function () {
+      /* the content api being unreachable must not take the gallery down with
+         it: js/gallery.js falls back to its own hardcoded directory list, but
+         it needs the placed elements to render into first, so the seeded
+         viewer is rebuilt from this file's own copy of them */
+      if (window.buildGalleryFallback) window.buildGalleryFallback();
     });
 }
 
@@ -12666,13 +13194,14 @@ document.addEventListener("DOMContentLoaded", function () {
   var slot = document.getElementById("heroCountdown");
   var grid = document.getElementById("logisticsGrid");
   if (!slot) {
-    /* not the landing page - the other two this file's shared editor engine
+    /* not the landing page - the other three this file's shared editor engine
        is wired onto are the student dashboard (its #dashProgressAnchor
-       spacer, see initDashboardPage()) and the login page (its #loginCard,
-       see initLoginPage()); anything else (gallery.html, ...) just isn't
-       wired up yet */
+       spacer, see initDashboardPage()), the login page (its #loginCard, see
+       initLoginPage()) and the gallery (its #galleryDirsAnchor spacer, see
+       initGalleryPage()) */
     if (document.getElementById("dashProgressAnchor")) initDashboardPage();
     else if (document.getElementById("loginCard")) initLoginPage();
+    else if (document.getElementById("galleryDirsAnchor")) initGalleryPage();
     return;
   }
 

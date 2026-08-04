@@ -132,6 +132,16 @@ h1, h2, h3 {
 .muted { color: var(--muted); }
 
 /* ---------- buttons ---------- */
+/* an icon-only button - nothing in it but a glyph, which is what the gallery's
+   two arrows are (see _GALLERY_PREV_ENTRY in app/db.py, and any button a ta
+   makes by replacing a label with an icon). The 12px/20px padding below is
+   sized for words: on a 42x42 round arrow it leaves the svg a 2px-wide content
+   box and squashes it out of existence, so an icon-only button drops the
+   padding and centres its glyph instead. */
+.btn:has(> svg:only-child) {
+  padding: 0;
+  justify-content: center;
+}
 .btn {
   display: inline-flex;
   align-items: center;
@@ -691,27 +701,64 @@ h1, h2, h3 {
   gap: 16px;
   align-items: stretch;
 }
-.gv-years {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+/* the reserved in-flow spacers the five placed gallery elements anchor to
+   (templates/gallery.html, app/db.py's _GALLERY_ENTRIES): the real rail/stage/
+   arrows/counter are absolutely positioned out of flow, so these hold their
+   default spots open. The rail spacer's height is grown to match whatever the
+   rail actually renders (js/gallery.js's renderDirs()), same as the student
+   dashboard's own area anchors. */
+.gv-dirs-anchor {
+  width: 120px;
+  flex: 0 0 auto;
+  min-height: 40px;
 }
+.gv-stage-anchor {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: min(66vh, 600px);
+}
+/* where the arrows and the counter sit ON the stage. Each is a box the same
+   size as the element that anchors to it, rather than a zero-size point:
+   applyElementAnchors() pins an element's TOP-LEFT corner to its anchor's
+   rect, so anything anchored right/bottom needs its own width and height here
+   for that corner to land in the right place - a zero-width anchor at
+   right:14px hangs the whole element off the edge instead of tucking it
+   inside. Sizes match _GALLERY_ENTRIES in app/db.py. */
+.gv-prev-anchor, .gv-next-anchor, .gv-count-anchor { position: absolute; }
+.gv-prev-anchor, .gv-next-anchor { width: 42px; height: 42px; top: calc(50% - 21px); }
+.gv-prev-anchor { left: 14px; }
+.gv-next-anchor { right: 14px; }
+.gv-count-anchor { right: 14px; bottom: 12px; width: 74px; height: 26px; }
+
+/* one directory tile in the rail's live area (js/gallery.js's
+   buildGalleryDirTileHtml()). Same split as .extras-tile/.extras-tile-rect:
+   the coloured rectangle is a separate absolutely-positioned sibling, not this
+   box's own background, so a ta deleting the rect never takes the label down
+   with it - and so the AREA around the tiles stays genuinely transparent, per
+   "the rectangle in the back that gives it the color is separate". */
 .gv-year {
-  border: none;
+  position: relative;
+  overflow: hidden;
   padding: 12px 18px;
-  border-radius: 10px;
-  background: var(--surface);
   color: var(--muted);
   font-family: var(--font-head);
   font-weight: 600;
   font-size: .95rem;
   cursor: pointer;
+  text-align: center;
 }
+.gv-year-rect {
+  position: absolute;
+  inset: 0;
+  border-radius: 10px;
+  background: var(--surface);
+  z-index: 0;
+}
+.gv-year > *:not(.gv-year-rect) { position: relative; z-index: 1; }
 .gv-year:hover { color: var(--text); }
-.gv-year.active {
-  background: var(--accent);
-  color: #fff;
-}
+.gv-year.active { color: #fff; }
+.gv-year.active .gv-year-rect { background: var(--accent); }
 .gv-stage {
   position: relative;
   flex: 1;
@@ -771,8 +818,8 @@ h1, h2, h3 {
 }
 @media (max-width: 700px) {
   .gv { flex-direction: column; }
-  .gv-years { flex-direction: row; }
-  .gv-stage { height: 55vh; }
+  .gv-dirs-anchor { width: 100%; }
+  .gv-stage-anchor { height: 55vh; }
 }
 
 /* ---------- footer ---------- */
@@ -1365,7 +1412,8 @@ body.edit-mode .login-field-ph { pointer-events: auto; }
    spans the whole row instead of taking a tile's column */
 .tile-flow > .tile-flow-full { grid-column: 1 / -1; }
 .tile-flow > [data-days-tile],
-.tile-flow > [data-extras-tile] {
+.tile-flow > [data-extras-tile],
+.tile-flow > [data-gallery-tile] {
   min-width: 0;
   min-height: var(--tile-h, auto);
 }
@@ -1415,7 +1463,8 @@ body.edit-mode .login-field-ph { pointer-events: auto; }
   align-content: flex-start;
 }
 .tile-flow.tile-flex > [data-days-tile],
-.tile-flow.tile-flex > [data-extras-tile] {
+.tile-flow.tile-flex > [data-extras-tile],
+.tile-flow.tile-flex > [data-gallery-tile] {
   /* a fixed basis, never flex-grow: a tile is the size the ta dragged it to
      (--tile-w, or 100% for the one-per-line default), and growing a lone
      trailing tile to fill its whole line is exactly the surprise this path
@@ -1429,6 +1478,13 @@ body.edit-mode .login-field-ph { pointer-events: auto; }
 /* the "nothing here yet" placeholder spans a full line here too (grid-column
    above means nothing to a flex container) */
 .tile-flow.tile-flex > .tile-flow-full { flex: 1 1 100%; width: 100%; }
+/* ...but "a full line" is the CROSS axis, and flex-basis follows the main one:
+   in a column that 100% basis is a full HEIGHT, so the placeholder ate the
+   whole container and pushed every tile out of view (the gallery's directory
+   rail, which ships as a column, is where this showed). Spanning the width and
+   taking only the height it needs is the same intent, stated for a column. */
+.tile-flow.tile-flex.flow-dir-column > .tile-flow-full,
+.tile-flow.tile-flex.flow-dir-column-reverse > .tile-flow-full { flex: 0 0 auto; }
 .tile-flow.tile-flex.flow-dir-row-reverse { flex-direction: row-reverse; }
 /* running down a column needs a definite height to wrap AT, which is what a
    locked y axis gives it (see areaFlowFor()); with y expanding there's
@@ -2706,6 +2762,10 @@ body.edit-mode .fx-chip { cursor: pointer; border-bottom: 1px dashed currentColo
   font-size: .85rem;
 }
 .ctx-menu button:hover { background: var(--surface-2); }
+/* the option already in force, in a menu whose rows are choices rather than
+   commands (the link editor's gallery-action picker, see
+   renderCtxMenuLinkEditor() in js/main.js) */
+.ctx-menu button.ctx-on { background: var(--surface-2); color: var(--accent); }
 .ctx-menu .ctx-icons {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

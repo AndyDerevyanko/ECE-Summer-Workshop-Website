@@ -533,6 +533,127 @@ DEFAULT_CONTENT["custom_elements"].extend(_LOGIN_ENTRIES)
 DEFAULT_CONTENT["radius"]["seed.login.field.username.box"] = 10
 DEFAULT_CONTENT["radius"]["seed.login.field.password.box"] = 10
 
+# the gallery page's four moving parts, given the same treatment the student
+# dashboard's tile areas got (_DASH_EXTRAS_AREA_ENTRY above): what used to be
+# hardcoded markup in templates/gallery.html (the year rail, the one photo
+# stage, its two arrows and its "1 / 57" counter) is now five real placed
+# custom elements a ta can move, resize, restyle, delete and re-add from the
+# visual editor's Gallery tab. Each anchors to its own reserved spacer in the
+# page's own flow, same mechanism as every other migrated element.
+#
+# The rail is a live area exactly like the dashboard's two: a TRANSPARENT box
+# that js/gallery.js renders one tile per directory into. The coloured
+# rectangle behind a directory is the tile's own rect role, and any backdrop
+# behind the whole rail is a separate box a ta places themselves - the area
+# itself never paints anything.
+_GALLERY_DIRS_AREA_ENTRY = {
+    "id": "seed.gallery.dirs.area", "kind": "galleryDirArea",
+    "page": "gallery",
+    "anchor": "#galleryDirsAnchor", "left": 0, "top": 0,
+    "w": 120, "h": 40,
+}
+# the photo/clip stage. "dir" is which directory it flips through: "" means
+# "whatever the rail has selected", which is what the page has always done and
+# what makes the rail worth having. A ta can place MORE of these from the
+# right-click menu and bind each to a fixed directory instead, so one page can
+# show 2025 and 2026 side by side (see the "galleryPane" kind in js/main.js).
+_GALLERY_PANE_ENTRY = {
+    "id": "seed.gallery.pane", "kind": "galleryPane", "dir": "",
+    "page": "gallery",
+    "anchor": "#galleryPaneAnchor", "left": 0, "top": 0,
+    "w": 900, "h": 600,
+}
+# the two arrows and the counter are deliberately ORDINARY elements - a button
+# and a textbox - not a special "gallery arrow" kind. What makes an arrow an
+# arrow is its LINK: content.links points it at a gallery page action rather
+# than a url (see GALLERY_ACTIONS/applyOneLink() in js/main.js), which is
+# exactly what lets a ta delete these and point any button they like at the
+# same action instead.
+_GALLERY_PREV_ENTRY = {
+    "id": "seed.gallery.prev", "kind": "button",
+    "page": "gallery",
+    "anchor": "#galleryPrevAnchor", "left": 0, "top": 0,
+    "w": 42, "h": 42,
+}
+_GALLERY_NEXT_ENTRY = {
+    "id": "seed.gallery.next", "kind": "button",
+    "page": "gallery",
+    "anchor": "#galleryNextAnchor", "left": 0, "top": 0,
+    "w": 42, "h": 42,
+}
+_GALLERY_COUNT_ENTRY = {
+    "id": "seed.gallery.count", "kind": "text",
+    "page": "gallery",
+    "anchor": "#galleryCountAnchor", "left": 0, "top": 0,
+    "w": 74, "h": 26,
+}
+_GALLERY_ENTRIES = [_GALLERY_DIRS_AREA_ENTRY, _GALLERY_PANE_ENTRY,
+                    _GALLERY_PREV_ENTRY, _GALLERY_NEXT_ENTRY, _GALLERY_COUNT_ENTRY]
+
+# the chevrons the page has always drawn, verbatim. They live in content.text
+# because a button's label IS its innerHTML (see applyTextOverrides() in
+# js/main.js) - so a ta can restyle the arrow, type a word beside it, or swap
+# it for one of the two new "Arrow left"/"Arrow right" entries in the editor's
+# icon library, all through the ordinary text tools.
+_GALLERY_PREV_SVG = (
+    '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" '
+    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    '<path d="M15 5l-7 7 7 7"/></svg>'
+)
+_GALLERY_NEXT_SVG = (
+    '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" '
+    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    '<path d="M9 5l7 7-7 7"/></svg>'
+)
+# "1 / 57", built out of the page's own two exclusive variables rather than
+# written by js: these chips resolve against whichever image the pane they
+# name is currently on (see buildGalleryChipHtml() in js/main.js). dir="" is
+# the seeded pane, so this counter follows the rail like the pane does.
+_GALLERY_COUNT_HTML = (
+    '<span class="fx-chip" contenteditable="false" data-fx-local="gallery-current" data-fx-dir=""'
+    '>1</span> / '
+    '<span class="fx-chip" contenteditable="false" data-fx-local="gallery-total" data-fx-dir=""'
+    '>1</span>'
+)
+# what the arrows DO, as content.links entries. "gallery:prev"/"gallery:next"
+# with no directory after them means "the pane following the rail", the same
+# "" convention _GALLERY_PANE_ENTRY's own dir uses.
+_GALLERY_LINKS = {
+    "seed.gallery.prev": "gallery:prev",
+    "seed.gallery.next": "gallery:next",
+}
+# matches the old hardcoded .gv-arrow/.gv-count rules so the migration is a
+# visual no-op by default: round grey pills over the photo. Both themes are
+# given the same var() so resolveThemedColor() never has to auto-derive a dark
+# variant out of a css variable name it can't parse as a colour.
+_GALLERY_COLORS = {
+    "seed.gallery.prev": "var(--surface-2)",
+    "seed.gallery.next": "var(--surface-2)",
+}
+_GALLERY_RADIUS = {
+    "seed.gallery.prev": 999,
+    "seed.gallery.next": 999,
+    "seed.gallery.count": 8,
+}
+# the counter is a TEXTBOX, so what used to be .gv-count's background is its
+# Fill (a textbox's own surface, separate from its font colour - see
+# colorTarget() in js/main.js) rather than a Color, and its centring is an
+# ordinary text-toolbar alignment. Every one of these is a control a ta can
+# reach and change; none of it is special-cased markup anymore.
+_GALLERY_FILL = {"seed.gallery.count": "var(--surface-2)"}
+_GALLERY_TEXT_STYLES = {"seed.gallery.count": {"align": "center"}}
+DEFAULT_CONTENT["custom_elements"].extend(_GALLERY_ENTRIES)
+DEFAULT_CONTENT["text"]["seed.gallery.prev"] = _GALLERY_PREV_SVG
+DEFAULT_CONTENT["text"]["seed.gallery.next"] = _GALLERY_NEXT_SVG
+DEFAULT_CONTENT["text"]["seed.gallery.count"] = _GALLERY_COUNT_HTML
+DEFAULT_CONTENT["links"].update(_GALLERY_LINKS)
+DEFAULT_CONTENT["colors"].update(_GALLERY_COLORS)
+DEFAULT_CONTENT["dark_colors"].update(_GALLERY_COLORS)
+DEFAULT_CONTENT["radius"].update(_GALLERY_RADIUS)
+DEFAULT_CONTENT["fill"].update(_GALLERY_FILL)
+DEFAULT_CONTENT["dark_fill"].update(_GALLERY_FILL)
+DEFAULT_CONTENT["text_styles"].update(_GALLERY_TEXT_STYLES)
+
 # starter "objects" library entries (see the objects table below): reusable
 # element bundles a ta can drop onto the page from the visual editor's
 # right-click "Add element" > "Object" picker (see placeObject() in
@@ -901,6 +1022,7 @@ def init_db():
     _migrate_dashboard_extras_area(conn)
     _migrate_dashboard_days_area(conn)
     _migrate_login_page(conn)
+    _migrate_gallery_page(conn)
     _migrate_login_labels(conn)
     _migrate_landing_nav_states(conn)
     _migrate_custom_elements_page_scope(conn)
@@ -1330,6 +1452,71 @@ def _migrate_dashboard_days_area(conn):
             return data, False
         data.setdefault("custom_elements", []).append(json.loads(json.dumps(_DASH_DAYS_AREA_ENTRY)))
         return data, True
+
+    row = conn.execute("SELECT data FROM content WHERE id = 1").fetchone()
+    if row:
+        data, changed = patch(json.loads(row["data"]))
+        if changed:
+            conn.execute("UPDATE content SET data = ? WHERE id = 1", (json.dumps(data),))
+
+    for prow in conn.execute("SELECT id, data FROM profiles").fetchall():
+        data, changed = patch(json.loads(prow["data"]))
+        if changed:
+            conn.execute("UPDATE profiles SET data = ? WHERE id = ?", (json.dumps(data), prow["id"]))
+
+    conn.commit()
+
+
+def _migrate_gallery_page(conn):
+    """one-time patch (same meta-flag trick as _migrate_login_page() below)
+    adding the five migrated gallery-page elements (_GALLERY_ENTRIES) plus the
+    arrow markup, arrow links and default arrow/counter styling to every
+    already-existing content blob/profile that predates them. Needed for the
+    same reason the login one is: the static viewer markup these replace is
+    gone from templates/gallery.html, so an old saved blob that only has the
+    anchor spacers would render a gallery page with no rail, no photo, no
+    arrows and no counter at all.
+
+    Entries already present (by id) are skipped one by one rather than the
+    whole patch being skipped on the first hit, so a blob that somehow has only
+    some of them still ends up complete. The text/links/colors/radius defaults
+    are only filled in where the blob has nothing of its own - a ta who already
+    restyled one of these on a newer db must not have it reset.
+    @param conn an open db connection
+    """
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO meta (key, value) VALUES ('gallery_page_migrated', '1')"
+    )
+    conn.commit()
+    if cur.rowcount == 0:
+        return
+
+    def patch(data):
+        changed = False
+        ids = [c.get("id") for c in data.get("custom_elements", [])]
+        for entry in _GALLERY_ENTRIES:
+            if entry["id"] in ids:
+                continue
+            data.setdefault("custom_elements", []).append(json.loads(json.dumps(entry)))
+            changed = True
+        for key, value in (("seed.gallery.prev", _GALLERY_PREV_SVG),
+                           ("seed.gallery.next", _GALLERY_NEXT_SVG),
+                           ("seed.gallery.count", _GALLERY_COUNT_HTML)):
+            if data.setdefault("text", {}).get(key) is None:
+                data["text"][key] = value
+                changed = True
+        for target, defaults in ((data.setdefault("links", {}), _GALLERY_LINKS),
+                                 (data.setdefault("colors", {}), _GALLERY_COLORS),
+                                 (data.setdefault("dark_colors", {}), _GALLERY_COLORS),
+                                 (data.setdefault("radius", {}), _GALLERY_RADIUS),
+                                 (data.setdefault("fill", {}), _GALLERY_FILL),
+                                 (data.setdefault("dark_fill", {}), _GALLERY_FILL),
+                                 (data.setdefault("text_styles", {}), _GALLERY_TEXT_STYLES)):
+            for key, value in defaults.items():
+                if target.get(key) is None:
+                    target[key] = value
+                    changed = True
+        return data, changed
 
     row = conn.execute("SELECT data FROM content WHERE id = 1").fetchone()
     if row:

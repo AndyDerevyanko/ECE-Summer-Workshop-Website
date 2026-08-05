@@ -155,20 +155,51 @@ h1, h2, h3 {
   border: 1px solid transparent;
   cursor: pointer;
   transition: background .15s ease, border-color .15s ease, color .15s ease;
+  /* a button label never breaks across lines. A shrink-to-fit button has no
+     slack at all: the editor freezes a moved element at its measured width
+     (see detachFromFlow() in js/main.js), and a measurement that lands a hair
+     short - sub-pixel rounding, or the heading webfont swapping in after it
+     was taken - is enough to fold "Apply Now" onto two lines inside a button
+     that visibly has room for it. Same fix, same reason, as
+     .login-submit-label below; nothing about a button label wants wrapping on
+     the live page either. */
+  white-space: nowrap;
 }
 /* default hover/press feedback for every button, including a bare custom
    "Button" element (buildCustomElementNode()'s "button" kind, just `.btn`
    with no btn-primary/btn-accent2/btn-ghost modifier) which otherwise had
    no hover OR press state of its own at all. A ta-picked Hover color/Click
-   color (style popover, see applyButtonStateColorOverrides() in
-   js/main.js) replaces this with an exact color instead - the
-   data-hover-override/data-active-override marker (only ever set once an
-   override exists) is what switches a button from the shared default over
-   to that color, so the two never stack. */
+   color (style popover, see applyStateColorOverrides() in js/main.js)
+   replaces this with an exact color instead - the marker attribute below
+   (only ever set once an override exists) is what switches a button from the
+   shared default over to that color, so the two never stack. */
 .btn:hover { text-decoration: none; filter: brightness(0.94); }
 .btn:active { filter: brightness(0.88); }
-.btn[data-hover-override]:hover { filter: none; background-color: var(--btn-hover-bg); }
-.btn[data-active-override]:active { filter: none; background-color: var(--btn-active-bg); }
+
+/* ---------- ta-picked hover/click colors ----------
+   Any recolorable element can carry one, not just a button: a box, an icon,
+   a heading, a nav link. Two things css alone can't express drove the shape
+   of this:
+
+   1. there's no such thing as an inline :hover, so the picked color travels
+      as a custom property and a marker attribute says which css property it
+      belongs on - background for a surface, foreground for text/icons, the
+      exact same split colorTarget() already makes for the plain Color row.
+   2. grouped elements are supposed to light up together (hover any one
+      member, the whole group goes to its hover color, each in its own
+      color), and no selector can reach sideways from a hovered element to
+      an unrelated one somewhere else on the page.
+
+   So the STATE is a class js/main.js paints on (see wireStateColorHover()),
+   not the :hover pseudo-class - which also gets the ancestor behaviour of
+   :hover for free, since that pass walks up from whatever is under the
+   cursor. !important because the resting color for these same elements is an
+   inline style (setElementColor()), which a plain rule here could never
+   outrank. */
+[data-el-hover-bg].el-hovered { background-color: var(--el-hover-bg) !important; filter: none !important; }
+[data-el-hover-fg].el-hovered { color: var(--el-hover-fg) !important; }
+[data-el-press-bg].el-pressed { background-color: var(--el-press-bg) !important; filter: none !important; }
+[data-el-press-fg].el-pressed { color: var(--el-press-fg) !important; }
 .btn-lg { font-size: 1.05rem; padding: 16px 28px; }
 
 .btn-primary {
@@ -235,6 +266,31 @@ h1, h2, h3 {
   top: 0;
   z-index: 50;
   background: var(--surface-2);
+}
+/* a second copy of the bar's own surface, one layer up, so that "send to
+   back" can actually put a nav element BEHIND the bar. A stacking context
+   paints its own background first and everything inside it afterwards,
+   negative z-index children included, so while the surface was ONLY the
+   nav's own background there was no z-index low enough for the theme toggle
+   to hide under it - sending it to the back visibly did nothing. This layer
+   sits at z-index:-1, which leaves room underneath: applyLayerOrder()
+   (js/main.js) hands out -2 and down to anything a ta ranks below the nav
+   itself, and those now slide under the bar the way the layer menu says.
+   `inherit`, not a literal colour, so a ta's own navbar colour (an inline
+   background-color on .nav, see setElementColor()) still shows - the
+   pseudo-element is what's actually seen now, and a hard-coded colour here
+   would quietly paint over every recolour of the bar. The one cost of
+   inheriting rather than moving the colour outright: a navbar a ta has FADED
+   with the opacity slider now composites its colour twice (the nav's own
+   layer, then this one) and reads a little more solid than the slider says.
+   Taking the colour off `.nav` entirely would fix that and break the
+   inheritance this depends on, so the trade goes this way. */
+.nav::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: inherit;
+  z-index: -1;
 }
 /* the landing page ships two navbars, one per session state (see the two
    <nav> elements in templates/index.html and applyNavState() in js/main.js);
@@ -330,7 +386,20 @@ h1, h2, h3 {
 .tic.moon { display: none; }
 [data-theme="light"] .tic.sun { display: none; }
 [data-theme="light"] .tic.moon { display: block; }
-.tic-label { white-space: nowrap; }
+/* the button's own text, not a text box parked on top of one: it takes all
+   the room the icon leaves and right-justifies inside it, so the wording
+   sits against the button's trailing edge and widening the button opens up
+   space between the icon and the words rather than trailing dead space after
+   them. Being a real flex item with real width is also what makes the text
+   toolbar's align buttons work here at all - text-align has nothing to act on
+   in a shrink-to-fit box - so a ta can pull the wording back to centre or
+   left, and pad it off either edge, without any of it being a special case
+   (see applyTextAlignStyle()/applyPaddingOverrides() in js/main.js). */
+.tic-label {
+  white-space: nowrap;
+  flex: 1 1 auto;
+  text-align: right;
+}
 
 /* ---------- hero ---------- */
 .hero {
@@ -1059,6 +1128,14 @@ body.edit-mode #loginErrorAnchor { min-height: 50px; }
 }
 .login-field-box.has-value .login-field-ph { display: none; }
 .login-submit { width: 100%; justify-content: center; }
+/* the submit button's label, which never breaks across lines. A shrink-to-fit
+   label has no slack at all: the editor freezes a moved element at its
+   measured width (see detachFromFlow() in js/main.js), and a measurement that
+   lands a hair short - sub-pixel rounding, or the heading webfont swapping in
+   after it was taken - is enough to fold "Log in" onto two lines inside a
+   button with room for twenty characters. Nothing about a button label wants
+   wrapping on the live page either. */
+.login-submit-label { white-space: nowrap; }
 
 /* the failure line: invisible until something actually fails, and never
    showing both of its two strings at once (see buildCustomElementNode()'s
@@ -2051,6 +2128,30 @@ body.edit-mode [data-resize-id] {
 }
 body.edit-mode [data-resize-id]:hover { outline-style: solid; }
 
+/* a theme toggle's wording is part of its button, so it doesn't get a hitbox
+   of its own: one box around the button is the truth, and a second dashed
+   rectangle hugging the words only ever advertised an element that can't be
+   moved or resized (clicking it selects the button, see
+   resolveSelectableTarget()). The text is still click-to-edit - the caret and
+   the text toolbar show up on click exactly as before, and the solid
+   ".editing" frame below still lights up while it's being typed into. */
+body.edit-mode .tic-label:not(.editing) { outline: none; }
+
+/* in the editor the pointer is a tool, not a visitor's cursor: every hover
+   here is a ta reaching for something to select, drag or restyle. Leaving the
+   page's own hover recolouring live meant the style popover primed its Color
+   swatch off whatever the element looked like WHILE hovered - open the
+   popover on a theme toggle's wording and it read back the accent blue of
+   `.theme-btn:hover` instead of the white/black the text actually is. Only
+   the rules that change an actual colour are neutralised; `filter`-based
+   press/hover feedback is left alone, since it never shows up in a computed
+   colour. A ta-picked hover colour (.el-hovered above) is separately held off
+   in the editor by wireStateColorHover(), same reasoning. */
+body.edit-mode .theme-btn:hover { color: var(--text); }
+body.edit-mode .nav-links a:hover,
+body.edit-mode .nav-back:hover { color: var(--muted); }
+body.edit-mode .btn-ghost:hover { background: var(--surface-2); }
+
 /* an element "promoted to navbar" (right-click > Promote to navbar, see
    toggleFixed()/applyFixedHighlight() in js/main.js): its hitbox goes red
    instead of the usual accent color, so it's obvious at a glance which
@@ -2809,6 +2910,39 @@ body.edit-mode .apply-bob { animation: none; }
 .text-toolbar .tt-link-rm svg { width: 14px; height: 14px; }
 .text-toolbar .tt-link-rm { color: var(--rose, #c0576b); }
 .text-toolbar .tt-link-rm:hover { background: var(--rose, #c0576b); color: #fff; }
+
+/* the padding editor, same full-width-row-of-its-own shape as the link
+   editor above: four side boxes plus a link toggle that drives all four at
+   once, which is how padding is usually wanted (an even inset) and is the
+   only comfortable way to nudge it with the arrow keys. */
+.text-toolbar .tt-padbar { display: none; width: 100%; align-items: center; gap: 3px; }
+.text-toolbar .tt-padbar.show { display: flex; }
+.text-toolbar .tt-padbar label {
+  font-size: .62rem;
+  color: var(--muted);
+  letter-spacing: .04em;
+}
+.text-toolbar .tt-pad-in {
+  width: 30px;
+  flex: none;
+  /* no spinner arrows: they'd eat most of a box this narrow, and the useful
+     ways to change these are typing and the arrow keys, both of which the
+     spinners aren't needed for */
+  -moz-appearance: textfield;
+  appearance: textfield;
+  border: none;
+  background: var(--surface-2);
+  color: var(--text);
+  border-radius: 5px;
+  font-family: var(--font-body);
+  font-size: .7rem;
+  padding: 0 4px;
+  height: 22px;
+}
+.text-toolbar .tt-pad-in::-webkit-outer-spin-button,
+.text-toolbar .tt-pad-in::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.text-toolbar .tt-pad-in:focus { outline: 1px solid var(--accent); }
+.text-toolbar .tt-pad-lock { width: auto; padding: 0 6px; font-size: .62rem; }
 
 /* a linked run of words inside a text field (js/main.js's INLINE LINKS
    section) - the same accent-coloured, underline-on-hover treatment the

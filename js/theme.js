@@ -71,6 +71,18 @@
     document.addEventListener("click", function (e) {
       var btn = e.target.closest && e.target.closest("[data-theme-toggle], #themeBtn");
       if (!btn) return;
+      /* inert inside the visual editor, where every click on this button is a
+         ta selecting it, dragging it, or opening its text for editing - and
+         each of those was flipping the whole page underneath them. On a
+         toggle placed from the Objects menu it looked like the element itself
+         was broken: the icon swapped, the wording changed length so the
+         button resized mid-drag, and its surface (var(--surface-2)) jumped to
+         the other theme's colour, which reads as an element flickering,
+         wandering and losing its background at random. The editor has its own
+         way to preview the other theme - the right-click menu's own
+         light/dark entry, see renderCtxMenuRoot() in js/main.js - so nothing
+         is lost by leaving the real toggle alone while editing. */
+      if (document.body.classList.contains("edit-mode")) return;
       setTheme(currentTheme() === "dark" ? "light" : "dark");
     });
   });
@@ -81,4 +93,11 @@
      editor; a no-op if this script isn't loaded on the current page (see the
      `window.refreshThemeToggles &&` guards at each call site). */
   window.refreshThemeToggles = function () { updateIcon(currentTheme()); };
+
+  /* exposed for the visual editor's own light/dark entry (see
+     renderCtxMenuRoot() in js/main.js), which is how a ta previews the other
+     theme while editing now that the real toggle sits out the editor - it has
+     to go through this same setTheme() so the icons, labels, and every
+     ta-picked themed colour re-resolve exactly as they do on the live site. */
+  window.setSiteTheme = setTheme;
 })();

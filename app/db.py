@@ -325,6 +325,11 @@ DEFAULT_CONTENT = {
     # text toolbar's font/align/letter-spacing, keyed by data-edit-id,
     # {id: {fontFamily, align, letterSpacing}}.
     "text_styles": {},
+    # text toolbar's padding row, keyed by data-edit-id/data-resize-id, a css
+    # padding shorthand string ("12px 20px 12px 20px"). Its own map rather
+    # than a fourth key under text_styles: padding is box geometry, not
+    # typography, and applies to anything with edges.
+    "padding": {},
     # move-handle drags in the visual editor, text fields only, keyed by
     # data-edit-id, {id: {x, y}} left/top offsets in css px.
     "positions": {},

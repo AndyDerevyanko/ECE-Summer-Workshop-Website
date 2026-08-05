@@ -101,6 +101,9 @@ function seed() {
     /* text toolbar's font/align/letter-spacing, keyed by data-edit-id,
        {id: {fontFamily, align, letterSpacing}} */
     text_styles: {},
+    /* text toolbar's padding row, keyed by data-edit-id/data-resize-id, a css
+       padding shorthand string */
+    padding: {},
     /* move-handle drags in the visual editor, keyed the same way as sizes,
        {id: {tx, ty}} translate offsets in css px */
     positions: {},
@@ -328,6 +331,7 @@ function normalizeState() {
   if (!STATE.sizes || typeof STATE.sizes !== "object") STATE.sizes = {};
   if (!STATE.font_sizes || typeof STATE.font_sizes !== "object") STATE.font_sizes = {};
   if (!STATE.text_styles || typeof STATE.text_styles !== "object") STATE.text_styles = {};
+  if (!STATE.padding || typeof STATE.padding !== "object") STATE.padding = {};
   if (!STATE.positions || typeof STATE.positions !== "object") STATE.positions = {};
   if (!Array.isArray(STATE.hidden)) STATE.hidden = [];
   if (!Array.isArray(STATE.custom_elements)) STATE.custom_elements = [];

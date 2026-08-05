@@ -1307,9 +1307,24 @@ function moveBoundsContainer(el) {
      card. Looked up from the PARENT so the container itself isn't its own
      bounds (a login element is freely placeable, unlike a tile) - the tile
      branch above doesn't need that because a tile can't be moved at all, see
-     isMoveLockedTileRole(). */
-  var loginBox = el.parentElement && el.parentElement.closest("[data-login-el]");
-  if (loginBox) return loginBox;
+     isMoveLockedTileRole().
+
+     Matched on the input rectangle too, not just the outer login element: a
+     placeholder belongs to the BOX it's painted into, and once that box can
+     be dragged out of its wrapper (see just below) clamping the placeholder
+     to the wrapper would drag it back off the box on the first nudge. */
+  var loginBox = el.parentElement &&
+    el.parentElement.closest("[data-login-el], [data-login-fixed]");
+  /* the credential rectangle itself is the exception: it IS its field's body,
+     filling the wrapper edge to edge with nothing else in there, so bounding
+     it to that wrapper bounds it to itself and every drag clamps to exactly
+     zero pixels. It was the one thing on the login page that couldn't be
+     moved at all - and since it covers the wrapper completely, every click on
+     a credential box lands on it, so the field looked immovable too, the same
+     way the failure line did before resolveSelectableTarget() started
+     redirecting its message string. Free like any other placed element
+     instead; the wrapper left behind paints nothing of its own. */
+  if (loginBox && !el.hasAttribute("data-login-fixed")) return loginBox;
   var area = el.parentElement && el.parentElement.closest("[data-extras-area], [data-days-area]");
   return area || null;
 }
@@ -1422,9 +1437,20 @@ function resolveSelectableTarget(target) {
  * @return true if el is a theme toggle's label
  */
 function isThemeToggleLabel(el) {
-  return !!(el.classList && el.classList.contains("tic-label") &&
-    el.parentElement && el.parentElement.hasAttribute &&
-    (el.parentElement.hasAttribute("data-theme-toggle") || el.parentElement.id === "themeBtn"));
+  return !!(el.classList && el.classList.contains("tic-label") && isThemeToggleEl(el.parentElement));
+}
+
+/**
+ * True for a light/dark toggle button itself: the nav's own `#themeBtn` on
+ * every page, or a "theme" custom element a ta has placed (see
+ * buildCustomElementNode()), both tagged data-theme-toggle. One helper since
+ * a handful of places need the exact same test and each was spelling it out.
+ * @param el the element
+ * @return true if el is a theme toggle button
+ */
+function isThemeToggleEl(el) {
+  return !!(el && el.hasAttribute &&
+    (el.hasAttribute("data-theme-toggle") || el.id === "themeBtn"));
 }
 
 /**
@@ -1446,9 +1472,32 @@ function isLoginErrorMsg(el) {
 }
 
 /**
+ * True for a login element's own text, rather than something a ta placed on
+ * top of one: the submit button's label, a credential box's greyed
+ * placeholder, and either of the failure line's two strings.
+ *
+ * Each of these is the content of the thing it sits in - a button IS its
+ * label, a placeholder is painted onto the box it hints at - so none of them
+ * can stay behind when that thing moves ("the login button is a button, the
+ * text is supposed to move with it"). They're separately tracked purely so
+ * each can be reworded and restyled on its own, exactly like a theme toggle's
+ * ".tic-label", which is why they get the same treatment (see isGluedChild()).
+ * Their own move offset still applies on top, so a ta can still nudge a label
+ * off-centre inside its button - it just travels with the button afterwards.
+ * @param el the element
+ * @return true if el is a login element's own text
+ */
+function isLoginOwnText(el) {
+  if (!el || !el.classList) return false;
+  return isLoginErrorMsg(el) ||
+    el.classList.contains("login-submit-label") ||
+    el.classList.contains("login-field-ph");
+}
+
+/**
  * True for any tracked element that's physically part of its parent rather
  * than an independent element that merely sits on top of it - a theme
- * toggle's label, a failure line's message. Both are exempt from the "no
+ * toggle's label, a login element's own text. Both are exempt from the "no
  * attachment between elements" rule every other tracked descendant follows
  * (see ancestorPos(), freezeDescendants()): they move and reflow as one piece
  * with the element they belong to.
@@ -1456,7 +1505,7 @@ function isLoginErrorMsg(el) {
  * @return true if el is glued to its parent
  */
 function isGluedChild(el) {
-  return isThemeToggleLabel(el) || isLoginErrorMsg(el);
+  return isThemeToggleLabel(el) || isLoginOwnText(el);
 }
 
 /**
@@ -1553,7 +1602,7 @@ function getSize(el) {
  * again via its own, landing it exactly backwards instead of standing
  * still.
  * A glued child (see isGluedChild(): a theme toggle's own ".tic-label", a
- * login failure line's message string) is one exception: it isn't an
+ * login element's own label/placeholder/message) is one exception: it isn't an
  * independent element at all, so its parent is never treated as a
  * cancel-worthy ancestor - it's supposed to move/resize as one piece with
  * the element it belongs to, exactly like the plain (untracked) icon markup
@@ -2002,9 +2051,79 @@ function applyTextStyleOverrides(styles) {
       if (s.fontUrl) ensureFontFace(s.fontFamily, s.fontUrl);
       el.style.fontFamily = s.fontFamily;
     }
-    if (s.align) el.style.textAlign = s.align;
+    if (s.align) applyTextAlignStyle(el, s.align);
     if (s.letterSpacing) el.style.letterSpacing = s.letterSpacing;
   });
+}
+
+/* which flex justification each text alignment means, for an element that
+   lays its own content out with flex instead of as running text. "justify"
+   has no flex equivalent that spreads a single run of words, so it takes the
+   nearest honest reading of the same intent: content pushed out to both
+   edges. */
+var ALIGN_JUSTIFY = { left: "flex-start", center: "center", right: "flex-end", justify: "space-between" };
+
+/**
+ * Sets one element's text alignment - the single place that decision is
+ * made, so the toolbar's align buttons, the datetime element's own align
+ * buttons, undo/redo and the load-time apply pass can't drift apart.
+ *
+ * `text-align` alone silently does nothing on a flex container, and every
+ * button on this site is one (`.btn`/`.theme-btn` are inline-flex, so a
+ * label can sit beside an icon): its text becomes an anonymous flex ITEM,
+ * and where that item sits is `justify-content`'s call, not text-align's.
+ * That's why alignment appeared to be ignored on buttons specifically while
+ * working everywhere else. Both properties are written, so the same saved
+ * "align" value reads correctly whether the element turns out to lay its
+ * content out as text or as flex items, with no per-element special-casing
+ * and nothing extra stored.
+ * @param el the element
+ * @param align "left"/"center"/"right"/"justify", or "" for the template default
+ */
+function applyTextAlignStyle(el, align) {
+  el.style.textAlign = align;
+  if (/flex/.test(getComputedStyle(el).display)) {
+    el.style.justifyContent = align ? (ALIGN_JUSTIFY[align] || "") : "";
+  }
+}
+
+/**
+ * Applies saved padding overrides (the text toolbar's padding row, see
+ * buildTextToolbar()) on top of whatever padding the stylesheet gives an
+ * element. Runs on every load, live site included, same as
+ * applyTextStyleOverrides().
+ *
+ * Stored as one css shorthand string per id rather than four numbers: it's
+ * what actually gets written, it round-trips through the snapshot as plain
+ * text, and "no override" is just the absent key - the same shape every
+ * other single-value override map in here already has.
+ * @param padding content.padding, {id: css padding shorthand}
+ */
+function applyPaddingOverrides(padding) {
+  padding = padding || {};
+  document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
+    var v = padding[elId(el)];
+    if (!v) return;
+    el.style.padding = v;
+  });
+}
+
+/**
+ * Reads an element's current padding as the four side values the toolbar's
+ * padding row edits, rounded to whole px (the row only ever writes whole px,
+ * and a computed sub-pixel value would show up as an unusable "11.328" in a
+ * number box).
+ * @param el the element
+ * @return {t, r, b, l} in px
+ */
+function currentPaddingValues(el) {
+  var cs = getComputedStyle(el);
+  return {
+    t: Math.round(parseFloat(cs.paddingTop) || 0),
+    r: Math.round(parseFloat(cs.paddingRight) || 0),
+    b: Math.round(parseFloat(cs.paddingBottom) || 0),
+    l: Math.round(parseFloat(cs.paddingLeft) || 0)
+  };
 }
 
 /**
@@ -2095,6 +2214,13 @@ function applyHiddenOverrides(hidden) {
  */
 function hasTrackedDescendants(el) {
   if (el.hasAttribute && el.hasAttribute("data-login-el")) return false;
+  /* a theme toggle, for the same reason: its icon and its wording are the
+     button's own two pieces (see isGluedChild()), not elements that happen to
+     be sitting inside it. Treating it as a wrapper is what made "send to
+     back" a no-op on it - a wrapper is deliberately never given a z-index at
+     all (see applyLayerOrder()) - and left deleting one showing a floating
+     icon and label over a button that had gone invisible underneath them. */
+  if (isThemeToggleEl(el)) return false;
   return el.querySelectorAll(RESIZABLE_SEL).length > 0;
 }
 
@@ -2804,6 +2930,33 @@ wireInlineLinks();
  * leaf first, z-index has no effect otherwise.
  * @param layers content.layers, ordered ids bottom to top
  */
+/**
+ * Whether an element has been ranked below the navbar it lives in - a ta
+ * asking for it to sit behind the bar itself, not merely behind the bar's
+ * other contents.
+ *
+ * A navbar is the one container on this site worth asking that about: it
+ * paints a surface of its own AND walls its children into its own stacking
+ * context, so its children can't be ranked against the rest of the page at
+ * all (see applyLayerOrder()'s doc comment) and, until `.nav::before` split
+ * the surface out into a layer of its own, couldn't get under that surface
+ * either. Ranking below the container is the trigger rather than some
+ * separate flag because it's already exactly what the layer menu means:
+ * domOrderIds() seeds a container ahead of its own children, so everything
+ * in a nav starts out above it and only a deliberate "send backward"/"send to
+ * back" can put anything under.
+ * @param m a member ({el, id}) from applyLayerOrder()
+ * @param rank id -> its position in the layer order
+ * @return true if el belongs under its own navbar's surface
+ */
+function barRankedOver(m, rank) {
+  var bar = m.el.parentElement && m.el.parentElement.closest(".nav");
+  if (!bar) return false;
+  var barId = elId(bar);
+  if (!barId || rank[barId] === undefined || rank[m.id] === undefined) return false;
+  return rank[m.id] < rank[barId];
+}
+
 function applyLayerOrder(layers) {
   var order = (layers || []).slice();
   var have = {};
@@ -2856,6 +3009,25 @@ function applyLayerOrder(layers) {
   var byRank = function (a, b) { return (rank[a.id] || 0) - (rank[b.id] || 0); };
   nonFixed.sort(byRank);
   fixed.sort(byRank);
+
+  /* leaves a ta has ranked below their own navbar, which is the one case
+     where "send to back" has to reach past a container's own surface rather
+     than just past its other children. Everything inside a nav shares the
+     nav's stacking context, and a stacking context always paints its own
+     background before ANY of its children - so while the bar's surface was
+     the nav's own `background` there was simply no z-index low enough to hide
+     under it, and sending the theme toggle to the back visibly did nothing.
+     The surface is a child layer of its own now (`.nav::before`, z-index:-1),
+     which leaves room underneath: these get -2 and down, most-negative to the
+     lowest-ranked, so they slide under the bar in the order the layer menu
+     shows. Ranking below the container is the trigger because that's exactly
+     what the layer menu already means by it - domOrderIds() lists a container
+     before its own children, so nothing is behind its bar until a ta puts it
+     there. */
+  var behind = members.filter(function (m) { return m.assignZ && barRankedOver(m, rank); });
+  behind.sort(byRank);
+  behind.forEach(function (m, i) { m.behindZ = -(behind.length - i + 1); });
+
   var z = 1;
   nonFixed.concat(fixed).forEach(function (m) {
     if (!m.assignZ) {
@@ -2880,6 +3052,7 @@ function applyLayerOrder(layers) {
       return;
     }
     if (getComputedStyle(m.el).position === "static") m.el.style.position = "relative";
+    if (m.behindZ !== undefined) { m.el.style.zIndex = String(m.behindZ); return; }
     m.el.style.zIndex = String(z);
     /* a tint overlay (setElementTint()) is a plain untracked sibling div
        appended right after its image inside the same free-wrap: without
@@ -3414,7 +3587,7 @@ function hideLayerMenu() {
  * @return true if el is a button
  */
 function isButtonEl(el) {
-  return (el.tagName === "A" && el.classList.contains("btn")) || el.id === "themeBtn" || el.hasAttribute("data-theme-toggle");
+  return (el.tagName === "A" && el.classList.contains("btn")) || isThemeToggleEl(el);
 }
 
 /**
@@ -3646,51 +3819,200 @@ function applyTextColorOverrides(colors, darkColors) {
   });
 }
 
+/* ================= HOVER / CLICK COLORS =================
+ *
+ * A second and third color for any element a ta can already recolor - not
+ * just buttons: what it looks like under the cursor, and what it looks like
+ * while it's being pressed. Boxes, icons, headings and links all take one.
+ *
+ * Three things shape how it's stored and applied:
+ *
+ *  - There is no inline :hover. The picked color travels as a css custom
+ *    property, and a marker attribute says which css property it belongs on
+ *    (see .el-hovered/.el-pressed in css/style.css). Which of the two it is
+ *    follows colorTarget(), the same split the plain Color row already makes:
+ *    a surface gets a background, text and icons get a foreground.
+ *
+ *  - The two states default into each other rather than being independent:
+ *    with nothing picked an element just keeps its normal color, picking a
+ *    hover color gives the press state the same one, and picking a click
+ *    color is what finally splits them apart. So a ta gets sensible pressed
+ *    feedback from one decision, and still has the second when they want it.
+ *
+ *  - Grouped elements light up together (see stateColorTargets()): hovering
+ *    any member puts the whole group into its hover state, each in its own
+ *    color. That's why the state is a class this file paints on rather than
+ *    the :hover pseudo-class - no selector can reach sideways from a hovered
+ *    element to an unrelated one elsewhere on the page.
+ */
+
 /**
- * Applies saved button Hover color/Click color overrides (the style
- * popover, buttons only) on top of the page's own default hover/press
- * darken effect (.btn:hover/.btn:active in css/style.css, always on -
- * see the "default behaviour" note on those rules). Unlike every other
- * color override here, these can't just be painted as a plain inline
- * style (there's no such thing as an inline :hover/:active) - instead each
- * one is written as a css custom property, and a data-hover-override/
- * data-active-override marker attribute flips the matching css rule
- * (css/style.css) from the shared default filter over to that custom
- * property, so a manual pick never doubles up with the default darken.
- * Runs on every load, live site included, same as applyColorOverrides().
+ * Applies saved Hover color/Click color overrides on top of the page's own
+ * default hover/press feedback (.btn:hover/.btn:active in css/style.css,
+ * still what an element with no pick of its own gets). Runs on every load,
+ * live site included, same as applyColorOverrides().
  * @param hoverColor content.hover_color, {id: css color string}
  * @param darkHoverColor content.dark_hover_color, {id: css color string}
  * @param activeColor content.active_color, {id: css color string}
  * @param darkActiveColor content.dark_active_color, {id: css color string}
  */
-function applyButtonStateColorOverrides(hoverColor, darkHoverColor, activeColor, darkActiveColor) {
-  hoverColor = hoverColor || {};
-  darkHoverColor = darkHoverColor || {};
-  activeColor = activeColor || {};
-  darkActiveColor = darkActiveColor || {};
-  THEMED_OVERRIDE_MAPS.hoverColor = hoverColor;
-  THEMED_OVERRIDE_MAPS.darkHoverColor = darkHoverColor;
-  THEMED_OVERRIDE_MAPS.activeColor = activeColor;
-  THEMED_OVERRIDE_MAPS.darkActiveColor = darkActiveColor;
+function applyStateColorOverrides(hoverColor, darkHoverColor, activeColor, darkActiveColor) {
+  THEMED_OVERRIDE_MAPS.hoverColor = hoverColor || {};
+  THEMED_OVERRIDE_MAPS.darkHoverColor = darkHoverColor || {};
+  THEMED_OVERRIDE_MAPS.activeColor = activeColor || {};
+  THEMED_OVERRIDE_MAPS.darkActiveColor = darkActiveColor || {};
   document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
-    if (!isButtonEl(el)) return;
+    paintElementStateColor(el, "hover");
+    paintElementStateColor(el, "press");
+  });
+  wireStateColorHover();
+}
+
+/**
+ * Writes one element's hover-or-press color out as the custom property +
+ * marker attribute pair the stylesheet reads, clearing both when there's
+ * nothing picked. Split out from applyStateColorOverrides() so the style
+ * popover's live swatches repaint through the exact same code the load-time
+ * pass uses, rather than a second copy that could drift from it.
+ * @param el the element
+ * @param which "hover" or "press"
+ */
+function paintElementStateColor(el, which) {
+  var id = elId(el);
+  var hover = which === "hover";
+  var lv = hover ? THEMED_OVERRIDE_MAPS.hoverColor[id] : THEMED_OVERRIDE_MAPS.activeColor[id];
+  var dv = hover ? THEMED_OVERRIDE_MAPS.darkHoverColor[id] : THEMED_OVERRIDE_MAPS.darkActiveColor[id];
+  /* an unpicked click color follows the hover color, so one decision covers
+     both states and a ta only has to think about the press separately when
+     they actually want it to differ */
+  if (!hover && !lv && !dv) {
+    lv = THEMED_OVERRIDE_MAPS.hoverColor[id];
+    dv = THEMED_OVERRIDE_MAPS.darkHoverColor[id];
+  }
+  var prop = hover ? "--el-hover" : "--el-press";
+  var attr = hover ? "data-el-hover" : "data-el-press";
+  el.style.removeProperty(prop + "-bg");
+  el.style.removeProperty(prop + "-fg");
+  el.removeAttribute(attr + "-bg");
+  el.removeAttribute(attr + "-fg");
+  if (!lv && !dv) return;
+  /* a picked color paints whatever the element's own Color row paints: a
+     surface for a box/card/button, the glyph or the words for an icon or a
+     text field. One color per element per state, always aimed at the thing a
+     ta was already recoloring, so there's nothing extra to explain. */
+  var side = colorTarget(el) === "bg" ? "-bg" : "-fg";
+  el.style.setProperty(prop + side, resolveThemedColor(lv, dv));
+  el.setAttribute(attr + side, "1");
+}
+
+/* every element currently wearing a hover or press state class, so the next
+   move of the cursor can take them back off again without re-deriving which
+   ones they were (a group's members can be anywhere on the page, and the
+   element that was hovered may since have been deleted or re-rendered) */
+var STATE_HOVERED = [];
+var STATE_PRESSED = [];
+var STATE_HOVER_WIRED = false;
+
+/* the element the style popover is currently holding in a hover/press state
+   so its colour can be seen while it's being picked, see
+   previewElementState() */
+var STATE_PREVIEW_EL = null;
+
+/**
+ * Holds one element in its hover or press look while that colour is being
+ * picked in the style popover, and drops whatever was being held before.
+ * Only ever one at a time, and never more than one state at once, so the
+ * element shows exactly the thing the row being edited controls.
+ * @param el the element, or null to just drop the current preview
+ * @param which "hover", "press", or null
+ */
+function previewElementState(el, which) {
+  if (STATE_PREVIEW_EL) {
+    STATE_PREVIEW_EL.classList.remove("el-hovered", "el-pressed");
+    STATE_PREVIEW_EL = null;
+  }
+  if (!el || !which) return;
+  el.classList.add(which === "hover" ? "el-hovered" : "el-pressed");
+  STATE_PREVIEW_EL = el;
+}
+
+/**
+ * Every element that shares a hover/press state with the one under the
+ * cursor: the tracked element itself, each of its tracked ancestors (what
+ * :hover does natively - hovering a card's title hovers the card), and every
+ * member of any group those belong to.
+ * @param node the event target, or null for "nothing hovered"
+ * @return an array of elements
+ */
+function stateColorTargets(node) {
+  var out = [];
+  var seen = {};
+  var el = node && node.closest ? node.closest(RESIZABLE_SEL) : null;
+  var ids = [];
+  while (el) {
     var id = elId(el);
-    var hv = hoverColor[id], hdv = darkHoverColor[id];
-    if (hv || hdv) {
-      el.style.setProperty("--btn-hover-bg", resolveThemedColor(hv, hdv));
-      el.dataset.hoverOverride = "1";
-    } else {
-      el.style.removeProperty("--btn-hover-bg");
-      delete el.dataset.hoverOverride;
-    }
-    var av = activeColor[id], adv = darkActiveColor[id];
-    if (av || adv) {
-      el.style.setProperty("--btn-active-bg", resolveThemedColor(av, adv));
-      el.dataset.activeOverride = "1";
-    } else {
-      el.style.removeProperty("--btn-active-bg");
-      delete el.dataset.activeOverride;
-    }
+    if (id && !seen[id]) { seen[id] = true; ids.push(id); out.push(el); }
+    el = el.parentElement ? el.parentElement.closest(RESIZABLE_SEL) : null;
+  }
+  ids.forEach(function (id) {
+    var g = groupOf(id);
+    if (!g) return;
+    g.forEach(function (mate) {
+      if (seen[mate]) return;
+      seen[mate] = true;
+      document.querySelectorAll('[data-edit-id="' + mate + '"], [data-resize-id="' + mate + '"]')
+        .forEach(function (mateEl) { out.push(mateEl); });
+    });
+  });
+  return out;
+}
+
+/**
+ * Moves one of the two state classes onto a fresh set of elements, taking it
+ * off whatever was wearing it before.
+ * @param cls "el-hovered" or "el-pressed"
+ * @param held the module array tracking who currently wears it
+ * @param els the new set (see stateColorTargets())
+ * @return the new set, to be stored back
+ */
+function setStateColorClass(cls, held, els) {
+  held.forEach(function (el) { el.classList.remove(cls); });
+  els.forEach(function (el) { el.classList.add(cls); });
+  return els;
+}
+
+/**
+ * Wires the hover/press states once per page. Delegated off the document
+ * (one listener each, never per element) so elements that come and go -
+ * dashboard tiles, gallery tiles, anything a ta places or duplicates - are
+ * covered with no re-wiring, the same reasoning wireTooltipHover() uses.
+ *
+ * Deliberately inert inside the visual editor: there the cursor is a tool,
+ * not a visitor's, so lighting elements up under it would fight the ring and
+ * the drag handles, and - the reason this matters more than it sounds - the
+ * style popover primes its swatches from an element's live computed color,
+ * which would then read back a hover color instead of the resting one every
+ * time the popover was opened by clicking the element it belongs to. The
+ * page's own stylesheet hover rules are held off in the editor for that same
+ * reason, see body.edit-mode in css/style.css.
+ */
+function wireStateColorHover() {
+  if (STATE_HOVER_WIRED || (isPreviewMode() && isEditMode())) return;
+  STATE_HOVER_WIRED = true;
+  document.addEventListener("mouseover", function (e) {
+    STATE_HOVERED = setStateColorClass("el-hovered", STATE_HOVERED, stateColorTargets(e.target));
+  });
+  document.addEventListener("mouseleave", function () {
+    STATE_HOVERED = setStateColorClass("el-hovered", STATE_HOVERED, []);
+    STATE_PRESSED = setStateColorClass("el-pressed", STATE_PRESSED, []);
+  });
+  document.addEventListener("mousedown", function (e) {
+    STATE_PRESSED = setStateColorClass("el-pressed", STATE_PRESSED, stateColorTargets(e.target));
+  });
+  /* on the window, not the document: a press that ends outside the page (or
+     over the browser's own chrome) still has to let go of the pressed look */
+  window.addEventListener("mouseup", function () {
+    STATE_PRESSED = setStateColorClass("el-pressed", STATE_PRESSED, []);
   });
 }
 
@@ -3951,7 +4273,7 @@ function reapplyThemedColors() {
   applyBorderOverrides(THEMED_OVERRIDE_MAPS.border, THEMED_OVERRIDE_MAPS.darkBorder);
   applyProgressBindings(THEMED_OVERRIDE_MAPS.progressFill, THEMED_OVERRIDE_MAPS.darkProgressFill,
     THEMED_OVERRIDE_MAPS.progressTrack, THEMED_OVERRIDE_MAPS.darkProgressTrack);
-  applyButtonStateColorOverrides(THEMED_OVERRIDE_MAPS.hoverColor, THEMED_OVERRIDE_MAPS.darkHoverColor,
+  applyStateColorOverrides(THEMED_OVERRIDE_MAPS.hoverColor, THEMED_OVERRIDE_MAPS.darkHoverColor,
     THEMED_OVERRIDE_MAPS.activeColor, THEMED_OVERRIDE_MAPS.darkActiveColor);
   repaintInlineTextColors();
   /* a tooltip's own two colors resolve the same way (see paintTooltipBubble()),
@@ -4797,7 +5119,7 @@ function buildStyleMenu() {
       '<button type="button" class="sm-dark-toggle sm-hovercolor-dark-toggle"></button>' +
     '</div>' +
     '<div class="sm-row sm-dark-row sm-btnstate-row sm-hovercolor-dark-row">' +
-      '<label>Dark mode hover color</label>' +
+      '<label>Dark mode hover</label>' +
       '<input type="color" class="sm-hovercolor-dark">' +
       '<button type="button" class="sm-hovercolor-dark-reset" title="Reset to auto">×</button>' +
     '</div>' +
@@ -4810,7 +5132,7 @@ function buildStyleMenu() {
       '<button type="button" class="sm-dark-toggle sm-activecolor-dark-toggle"></button>' +
     '</div>' +
     '<div class="sm-row sm-dark-row sm-btnstate-row sm-activecolor-dark-row">' +
-      '<label>Dark mode click color</label>' +
+      '<label>Dark mode click</label>' +
       '<input type="color" class="sm-activecolor-dark">' +
       '<button type="button" class="sm-activecolor-dark-reset" title="Reset to auto">×</button>' +
     '</div>' +
@@ -5256,20 +5578,18 @@ function buildStyleMenu() {
   });
 
   /**
-   * Wires one button-state color row (Hover color/Click color, each with
-   * its own light+dark pair) - same 6-listener shape (light input/change/
-   * reset, dark input/change/reset) every other themed color row in this
-   * popover already follows (see textColorInput's handlers just above),
-   * factored out since Hover/Click are otherwise identical but for which
-   * THEMED_OVERRIDE_MAPS entry/css custom property/data-attribute flag/undo
-   * type each one writes to. Unlike a plain color row there's no rendered
-   * "current" value a reset can read back (a hover/press color only ever
-   * paints during that pseudo-state, see applyButtonStateColorOverrides()),
-   * so light reset just clears to a neutral "#000000" swatch display.
+   * Wires one state-color row (Hover color/Click color, each with its own
+   * light+dark pair) - same 6-listener shape (light input/change/reset, dark
+   * input/change/reset) every other themed color row in this popover already
+   * follows (see textColorInput's handlers just above), factored out since
+   * Hover/Click are otherwise identical but for which THEMED_OVERRIDE_MAPS
+   * entry and undo type each one writes to. Unlike a plain color row there's
+   * no rendered "current" value a reset can read back (a hover/press color
+   * only ever paints during that state, see applyStateColorOverrides()), so
+   * light reset just clears to a neutral "#000000" swatch display.
    * @param lightInput/lightReset/darkInput/darkReset/darkToggle the row's controls
    * @param mapKey/darkMapKey THEMED_OVERRIDE_MAPS keys (eg "hoverColor"/"darkHoverColor")
-   * @param cssVar the custom property applyButtonStateColorOverrides() writes (eg "--btn-hover-bg")
-   * @param flagKey el.dataset key applyButtonStateColorOverrides() sets (eg "hoverOverride")
+   * @param which "hover" or "press", for paintElementStateColor()
    * @param saveFn/darkSaveFn the light/dark saveEdited*() persistence functions
    * @param undoType/darkUndoType the EDIT_UNDO entry "type" strings for this row
    * @param getBefore/setBefore/getDarkBefore/setDarkBefore accessors for this
@@ -5277,18 +5597,21 @@ function buildStyleMenu() {
    *   reference, hence the get/set closures)
    */
   function wireButtonStateColorRow(lightInput, lightReset, darkInput, darkReset,
-      mapKey, darkMapKey, cssVar, flagKey, saveFn, darkSaveFn, undoType, darkUndoType,
+      mapKey, darkMapKey, which, saveFn, darkSaveFn, undoType, darkUndoType,
       getBefore, setBefore, getDarkBefore, setDarkBefore) {
     function apply(el) {
-      var lv = THEMED_OVERRIDE_MAPS[mapKey][STYLE_MENU_ID];
-      var dv = THEMED_OVERRIDE_MAPS[darkMapKey][STYLE_MENU_ID];
-      if (lv || dv) {
-        el.style.setProperty(cssVar, resolveThemedColor(lv, dv));
-        el.dataset[flagKey] = "1";
-      } else {
-        el.style.removeProperty(cssVar);
-        delete el.dataset[flagKey];
-      }
+      paintElementStateColor(el, which);
+      /* a click color left unpicked follows the hover color, so editing the
+         hover row has to repaint the press state too - otherwise the two only
+         agree again after a reload */
+      if (which === "hover") paintElementStateColor(el, "press");
+      /* and hold the element in the state being edited so a ta can see what
+         they're picking. These are the two colors that never show at rest,
+         and the editor deliberately doesn't light elements up under the
+         cursor (see wireStateColorHover()), so without this the swatch would
+         be the only thing that ever changed. Same "see what you're styling"
+         idea as the tooltip sub-editor pinning its bubble open. */
+      previewElementState(el, which);
     }
     lightInput.addEventListener("input", function () {
       if (!STYLE_MENU_ID) return;
@@ -5315,7 +5638,9 @@ function buildStyleMenu() {
       THEMED_OVERRIDE_MAPS[mapKey][STYLE_MENU_ID] = "";
       apply(el);
       saveFn(STYLE_MENU_ID, "");
-      lightInput.value = "#000000";
+      /* back to "this state is just the normal color", so show that color
+         rather than a black the element never had */
+      lightInput.value = currentColorValue(el);
       if (before !== "") {
         EDIT_UNDO.push({ type: undoType, id: STYLE_MENU_ID, before: before, after: "" });
         EDIT_REDO.length = 0;
@@ -5357,12 +5682,12 @@ function buildStyleMenu() {
     });
   }
   wireButtonStateColorRow(hoverColorInput, hoverColorReset, hoverColorDarkInput, hoverColorDarkReset,
-    "hoverColor", "darkHoverColor", "--btn-hover-bg", "hoverOverride", saveEditedHoverColor, saveEditedDarkHoverColor,
+    "hoverColor", "darkHoverColor", "hover", saveEditedHoverColor, saveEditedDarkHoverColor,
     "hovercolor", "darkhovercolor",
     function () { return STYLE_HOVERCOLOR_BEFORE; }, function (v) { STYLE_HOVERCOLOR_BEFORE = v; },
     function () { return STYLE_DARKHOVERCOLOR_BEFORE; }, function (v) { STYLE_DARKHOVERCOLOR_BEFORE = v; });
   wireButtonStateColorRow(activeColorInput, activeColorReset, activeColorDarkInput, activeColorDarkReset,
-    "activeColor", "darkActiveColor", "--btn-active-bg", "activeOverride", saveEditedActiveColor, saveEditedDarkActiveColor,
+    "activeColor", "darkActiveColor", "press", saveEditedActiveColor, saveEditedDarkActiveColor,
     "activecolor", "darkactivecolor",
     function () { return STYLE_ACTIVECOLOR_BEFORE; }, function (v) { STYLE_ACTIVECOLOR_BEFORE = v; },
     function () { return STYLE_DARKACTIVECOLOR_BEFORE; }, function (v) { STYLE_DARKACTIVECOLOR_BEFORE = v; });
@@ -5831,7 +6156,7 @@ function buildStyleMenu() {
       var align = btn.getAttribute("data-align");
       var before = el.style.textAlign || "";
       var next = before === align ? "" : align;
-      el.style.textAlign = next;
+      applyTextAlignStyle(el, next);
       saveTextStyle(STYLE_MENU_ID, "align", next);
       EDIT_UNDO.push({ type: "align", id: STYLE_MENU_ID, before: before, after: next });
       EDIT_REDO.length = 0;
@@ -6016,7 +6341,9 @@ function autoDarkVariant(hex) {
  * keys off (resolveThemedColor(), the style popover's primary/secondary
  * swatch binding, see primeThemedColorRow()). Reads straight off
  * documentElement rather than caching, since a ta can flip it at any moment
- * by clicking the nav's own toggle (see js/theme.js's setTheme()) - default
+ * at any moment - the site's own light/dark button on a live page, the
+ * right-click menu's "Preview in ... mode" inside the editor, both landing in
+ * js/theme.js's setTheme(). Default
  * theme with no [data-theme] set at all would be dark (js/theme.js's
  * currentTheme() convention), but templates/index.html always sets one
  * explicitly, so that fallback is mostly theoretical here.
@@ -6315,19 +6642,41 @@ function primeStyleMenuThemedRows(el) {
       STYLE_MENU.querySelector(".sm-textcolor-dark-toggle"), THEMED_OVERRIDE_MAPS.textColor, THEMED_OVERRIDE_MAPS.darkTextColor, "text color");
     STYLE_TEXTCOLOR_BEFORE = textColorBefore.lightBefore;
     STYLE_DARKTEXTCOLOR_BEFORE = textColorBefore.darkBefore;
+  }
 
-    /* unlike color/text color/fill, hover/click have no rendered "live"
-       value at rest (they only ever paint during that pseudo-state, see
-       applyButtonStateColorOverrides()) - the closest equivalent is just
-       whatever's already in the override map, or a neutral black default */
-    var hoverColorBefore = primeThemedColorRow(THEMED_OVERRIDE_MAPS.hoverColor[STYLE_MENU_ID] || "#000000",
+  if (!isImg && !isProgress && !isExtrasArea) {
+    /* unlike color/text color/fill, hover/click have no rendered "live" value
+       at rest - they only ever paint while the cursor is on the element (see
+       applyStateColorOverrides()). An unpicked one reads back as the color
+       the element already is, which is the honest answer: with nothing picked
+       these states ARE the normal color, so the swatch opens on it and any
+       drag from there is a real change rather than a jump from an invented
+       black. */
+    var restingColor = currentColorValue(el);
+    /* what these two WOULD paint right now, resolved for the theme in force
+       (see resolveThemedColor()) exactly the way the rendered rows above read
+       their live value - so the primary swatch is the colour a ta would
+       actually see under the cursor, not whichever of the pair happens to be
+       stored */
+    var liveState = function (lightMap, darkMap) {
+      var lv = lightMap[STYLE_MENU_ID], dv = darkMap[STYLE_MENU_ID];
+      return (lv || dv) ? resolveThemedColor(lv, dv) : restingColor;
+    };
+    var hoverColorBefore = primeThemedColorRow(
+      liveState(THEMED_OVERRIDE_MAPS.hoverColor, THEMED_OVERRIDE_MAPS.darkHoverColor),
       STYLE_MENU.querySelector(".sm-hovercolor"), STYLE_MENU.querySelector(".sm-hovercolor-dark"),
       STYLE_MENU.querySelector(".sm-hovercolor-row"), STYLE_MENU.querySelector(".sm-hovercolor-dark-row"),
       STYLE_MENU.querySelector(".sm-hovercolor-dark-toggle"), THEMED_OVERRIDE_MAPS.hoverColor, THEMED_OVERRIDE_MAPS.darkHoverColor, "hover color");
     STYLE_HOVERCOLOR_BEFORE = hoverColorBefore.lightBefore;
     STYLE_DARKHOVERCOLOR_BEFORE = hoverColorBefore.darkBefore;
 
-    var activeColorBefore = primeThemedColorRow(THEMED_OVERRIDE_MAPS.activeColor[STYLE_MENU_ID] || "#000000",
+    /* and an unpicked click color reads back as the hover color, matching
+       what it actually does (see paintElementStateColor()'s fallback) rather
+       than what it's stored as */
+    var activeColorBefore = primeThemedColorRow(
+      (THEMED_OVERRIDE_MAPS.activeColor[STYLE_MENU_ID] || THEMED_OVERRIDE_MAPS.darkActiveColor[STYLE_MENU_ID])
+        ? liveState(THEMED_OVERRIDE_MAPS.activeColor, THEMED_OVERRIDE_MAPS.darkActiveColor)
+        : liveState(THEMED_OVERRIDE_MAPS.hoverColor, THEMED_OVERRIDE_MAPS.darkHoverColor),
       STYLE_MENU.querySelector(".sm-activecolor"), STYLE_MENU.querySelector(".sm-activecolor-dark"),
       STYLE_MENU.querySelector(".sm-activecolor-row"), STYLE_MENU.querySelector(".sm-activecolor-dark-row"),
       STYLE_MENU.querySelector(".sm-activecolor-dark-toggle"), THEMED_OVERRIDE_MAPS.activeColor, THEMED_OVERRIDE_MAPS.darkActiveColor, "click color");
@@ -6435,9 +6784,17 @@ function toggleStyleMenu(anchorEl) {
   STYLE_MENU.querySelector(".sm-textcolor-row").style.display = isBtn ? "" : "none";
   STYLE_MENU.querySelector(".sm-textcolor-dark-row").style.display = isBtn ? "" : "none";
   STYLE_MENU.querySelector(".sm-textcolor-toggle-row").style.display = isBtn ? "" : "none";
-  /* Hover color/Click color, buttons only - primeStyleMenuThemedRows() below
-     handles which of each row's light/dark pair actually shows */
-  STYLE_MENU.querySelectorAll(".sm-btnstate-row").forEach(function (row) { row.style.display = isBtn ? "" : "none"; });
+  /* Hover color/Click color: offered wherever the plain Color row is, since
+     they paint the same thing it does (see paintElementStateColor()) - a box,
+     an icon and a heading all get a look under the cursor now, not just a
+     button. Hidden exactly where Color is hidden, for the same reasons: an
+     image has no surface to recolor, a progress bar paints its own two
+     colors, the extras area is deliberately transparent.
+     primeStyleMenuThemedRows() below handles which of each row's light/dark
+     pair actually shows. */
+  STYLE_MENU.querySelectorAll(".sm-btnstate-row").forEach(function (row) {
+    row.style.display = (isImg || isProgress || isExtrasArea) ? "none" : "";
+  });
   STYLE_MENU.querySelector(".sm-theme-row").style.display = isThemeToggle ? "" : "none";
   /* a datetime element paints its own text color via the Color row, so its
      Fill row (a text field's background) would just be clutter; hide it */
@@ -6578,6 +6935,9 @@ function primeStyleMenuReelRows(panel) {
 function hideStyleMenu() {
   if (STYLE_MENU) STYLE_MENU.classList.remove("show");
   STYLE_MENU_ID = null;
+  /* whatever was being held in its hover/press look for the Hover/Click rows
+     goes back to normal, see previewElementState() */
+  previewElementState(null, null);
 }
 
 /**
@@ -9632,7 +9992,7 @@ function copyDuplicateOverrides(pairs, skipMaps) {
   var snap;
   try { snap = raw ? JSON.parse(raw) : {}; } catch (e) { snap = {}; }
   var skip = skipMaps || [];
-  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "shade", "radius", "border", "links", "text_color", "theme_icons", "dark_colors", "dark_text_color", "dark_fill", "dark_border", "progress_fill", "dark_progress_fill", "progress_track", "dark_progress_track", "rotate", "hover_color", "dark_hover_color", "active_color", "dark_active_color", "tooltips"];
+  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "shade", "radius", "border", "links", "text_color", "theme_icons", "dark_colors", "dark_text_color", "dark_fill", "dark_border", "progress_fill", "dark_progress_fill", "progress_track", "dark_progress_track", "rotate", "hover_color", "dark_hover_color", "active_color", "dark_active_color", "padding", "tooltips"];
   var flatLists = ["shadow", "flip_h", "flip_v"].concat(VIDEO_PLAYBACK_KEYS);
   pairs.forEach(function (p) {
     plainMaps.forEach(function (m) {
@@ -10423,6 +10783,7 @@ function applyLiveAreaOverrides(data) {
   applyTileFlow();
   applyFontSizeOverrides(data.font_sizes);
   applyTextStyleOverrides(data.text_styles);
+  applyPaddingOverrides(data.padding);
   applyPositionOverrides(data.positions);
   applyColorOverrides(data.colors, data.dark_colors);
   applyRadiusOverrides(data.radius);
@@ -10482,7 +10843,7 @@ function placeObject(objData, x, y) {
   });
   snap.custom_elements = (snap.custom_elements || []).concat(newParts);
 
-  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "shade", "radius", "border", "links", "text_color", "theme_icons", "dark_colors", "dark_text_color", "dark_fill", "dark_border", "progress_fill", "dark_progress_fill", "progress_track", "dark_progress_track", "tooltips"];
+  var plainMaps = ["sizes", "positions", "font_sizes", "colors", "opacity", "text", "fill", "tint", "shade", "radius", "border", "links", "text_color", "theme_icons", "dark_colors", "dark_text_color", "dark_fill", "dark_border", "progress_fill", "dark_progress_fill", "progress_track", "dark_progress_track", "padding", "tooltips"];
   plainMaps.forEach(function (m) {
     if (!objData[m]) return;
     snap[m] = snap[m] || {};
@@ -10558,11 +10919,12 @@ function placeObject(objData, x, y) {
   applySizeOverrides(snap.sizes);
   applyFontSizeOverrides(snap.font_sizes);
   applyTextStyleOverrides(snap.text_styles);
+  applyPaddingOverrides(snap.padding);
   applyPositionOverrides(snap.positions);
   applyColorOverrides(snap.colors, snap.dark_colors);
   applyFillOverrides(snap.fill, snap.dark_fill);
   applyTextColorOverrides(snap.text_color, snap.dark_text_color);
-  applyButtonStateColorOverrides(snap.hover_color, snap.dark_hover_color, snap.active_color, snap.dark_active_color);
+  applyStateColorOverrides(snap.hover_color, snap.dark_hover_color, snap.active_color, snap.dark_active_color);
   applyTintOverrides(snap.tint);
   applyShadeOverrides(snap.shade);
   applyVideoPlaybackOverrides(snap.video_no_autoplay, snap.video_controls, snap.video_pausable);
@@ -10920,10 +11282,26 @@ function renderCtxMenuRoot() {
        renderCtxMenuLinkList() for why the whole link inventory belongs in
        the editor at all */
     '<div class="ctx-title">This page</div>' +
-    '<button type="button" data-link-list="1">Links on this page</button>';
+    '<button type="button" data-link-list="1">Links on this page</button>' +
+    /* the editor's own way to look at the other theme. The site's real
+       light/dark button can't do this job inside the editor - there every
+       click on it is a ta selecting, dragging or retyping it, and flipping the
+       page underneath them made the button itself look broken (see the
+       edit-mode guard in js/theme.js). This goes through the same setTheme(),
+       so ta-picked dark colours, the sun/moon icons and the style popover's
+       light/dark swatch swap all follow exactly as they do for a visitor. */
+    '<button type="button" data-theme-preview="1">Preview in ' +
+    (isDarkThemeActive() ? "light" : "dark") + ' mode</button>';
   CTX_MENU.querySelectorAll("button[data-add]").forEach(function (btn) {
     btn.addEventListener("click", function () { handleCtxAdd(btn.getAttribute("data-add")); });
   });
+  var themePreviewBtn = CTX_MENU.querySelector("[data-theme-preview]");
+  if (themePreviewBtn) {
+    themePreviewBtn.addEventListener("click", function () {
+      if (window.setSiteTheme) window.setSiteTheme(isDarkThemeActive() ? "light" : "dark");
+      hideCtxMenu();
+    });
+  }
   var dupBtn = CTX_MENU.querySelector("[data-dup]");
   if (dupBtn) {
     dupBtn.addEventListener("click", function () {
@@ -12819,6 +13197,7 @@ function buildTextToolbar() {
     '<span class="tt-sep"></span>' +
     '<button type="button" class="ls-dn" title="Tighter letter spacing">Sp-</button>' +
     '<button type="button" class="ls-up" title="Wider letter spacing">Sp+</button>' +
+    '<button type="button" class="tt-pad" title="Padding (space between this text and its own edges)">Pad</button>' +
     '<span class="tt-sep"></span>' +
     '<button type="button" class="tt-fx" title="Insert a live value from a variable">ƒx</button>' +
     /* the link editor itself, a full-width row of its own that only appears
@@ -12831,6 +13210,21 @@ function buildTextToolbar() {
       '<input type="url" class="tt-link-input" placeholder="https://...">' +
       '<button type="button" class="tt-link-ok" title="Apply">Link</button>' +
       '<button type="button" class="tt-link-rm" title="Remove this link">' + LINK_ICONS.unlink + '</button>' +
+    '</span>' +
+    /* the padding editor, same full-width-row-of-its-own arrangement as the
+       link editor above and hidden the same way until its button is pressed.
+       Four sides rather than one number because that's what padding is for
+       here: pushing a button's wording off one particular edge (a theme
+       toggle's right-justified label, say) is the common case, an even inset
+       the other - hence the link toggle, which drives all four at once. */
+    '<span class="tt-padbar">' +
+      '<label>PAD</label>' +
+      '<input type="number" class="tt-pad-in" data-side="t" min="0" max="200" title="Top">' +
+      '<input type="number" class="tt-pad-in" data-side="r" min="0" max="200" title="Right">' +
+      '<input type="number" class="tt-pad-in" data-side="b" min="0" max="200" title="Bottom">' +
+      '<input type="number" class="tt-pad-in" data-side="l" min="0" max="200" title="Left">' +
+      '<button type="button" class="tt-pad-lock" title="Change all four sides together">LINK</button>' +
+      '<button type="button" class="tt-pad-rm" title="Back to the default padding">×</button>' +
     '</span>';
   document.body.appendChild(TEXT_TOOLBAR);
 
@@ -12923,7 +13317,7 @@ function buildTextToolbar() {
          the template's own default), same toggle feel as everything else
          in this editor rather than a one-way ratchet */
       var next = before === align ? "" : align;
-      el.style.textAlign = next;
+      applyTextAlignStyle(el, next);
       saveTextStyle(id, "align", next);
       EDIT_UNDO.push({ type: "align", id: id, before: before, after: next });
       EDIT_REDO.length = 0;
@@ -12950,6 +13344,62 @@ function buildTextToolbar() {
   TEXT_TOOLBAR.querySelector(".tt-fx").addEventListener("click", function () {
     if (!TEXT_TOOLBAR_EL || this.disabled) return;
     openFormulaMenu(TEXT_TOOLBAR_EL, null);
+  });
+
+  /* the padding editor. Its own row, opened and closed by the Pad button the
+     same way the link editor's is, so the toolbar stays one line until a ta
+     actually wants it. */
+  TEXT_TOOLBAR.querySelector(".tt-pad").addEventListener("click", function () {
+    var bar = TEXT_TOOLBAR.querySelector(".tt-padbar");
+    var open = !bar.classList.contains("show");
+    bar.classList.toggle("show", open);
+    this.classList.toggle("active", open);
+    if (open) primeTextToolbarPadding();
+    positionTextToolbar();
+  });
+  TEXT_TOOLBAR.querySelector(".tt-pad-lock").addEventListener("click", function () {
+    this.classList.toggle("active");
+  });
+  TEXT_TOOLBAR.querySelectorAll(".tt-pad-in").forEach(function (input) {
+    /* the number inputs can't have their mousedown swallowed the way the
+       buttons do (that would block typing into them and dragging the spinner),
+       so just keep it off the drag-anywhere handler underneath, same
+       special-case the font <select> already gets */
+    input.addEventListener("mousedown", function (e) { e.stopPropagation(); });
+    input.addEventListener("input", function () {
+      if (!TEXT_TOOLBAR_EL) return;
+      if (TEXT_TOOLBAR.querySelector(".tt-pad-lock").classList.contains("active")) {
+        TEXT_TOOLBAR.querySelectorAll(".tt-pad-in").forEach(function (other) {
+          if (other !== input) other.value = input.value;
+        });
+      }
+      writeTextToolbarPadding();
+    });
+    /* one undo entry per settled value, not one per keystroke, same rule the
+       colour swatches follow (input paints, change records) */
+    input.addEventListener("change", function () {
+      if (!TEXT_TOOLBAR_EL) return;
+      var after = TEXT_TOOLBAR_EL.style.padding || "";
+      if (after !== TEXT_PADDING_BEFORE) {
+        EDIT_UNDO.push({ type: "padding", id: elId(TEXT_TOOLBAR_EL), before: TEXT_PADDING_BEFORE, after: after });
+        EDIT_REDO.length = 0;
+      }
+      TEXT_PADDING_BEFORE = after;
+    });
+  });
+  TEXT_TOOLBAR.querySelector(".tt-pad-rm").addEventListener("click", function () {
+    if (!TEXT_TOOLBAR_EL) return;
+    var el = TEXT_TOOLBAR_EL;
+    var before = el.style.padding || "";
+    el.style.padding = "";
+    savePadding(elId(el), "");
+    primeTextToolbarPadding();
+    if (before !== "") {
+      EDIT_UNDO.push({ type: "padding", id: elId(el), before: before, after: "" });
+      EDIT_REDO.length = 0;
+    }
+    TEXT_PADDING_BEFORE = "";
+    positionRing();
   });
 
   /* the inline link editor (see the INLINE LINKS section above). The one
@@ -13273,6 +13723,49 @@ function hideTextToolbar() {
   /* the link bar is per-edit-session state (it holds a cloned range into the
      field that just went away), so it never carries over into the next one */
   TEXT_TOOLBAR.querySelector(".tt-linkbar").classList.remove("show");
+  /* the padding row isn't per-session state the way the link bar is, but a
+     row left open would reposition the next field's toolbar for a control
+     nobody asked for; the Pad button reopens it in one click */
+  TEXT_TOOLBAR.querySelector(".tt-padbar").classList.remove("show");
+  TEXT_TOOLBAR.querySelector(".tt-pad").classList.remove("active");
+}
+
+/* the padding the field being edited had when its last settled value was
+   recorded, so the number boxes can push one undo entry per value rather than
+   one per keystroke - same split every colour swatch in this editor uses */
+var TEXT_PADDING_BEFORE = "";
+
+/**
+ * Fills the toolbar's four padding boxes in from the field's current padding
+ * (its own override if it has one, otherwise whatever the stylesheet gives
+ * it, so the numbers always start from what a ta can actually see).
+ */
+function primeTextToolbarPadding() {
+  if (!TEXT_TOOLBAR || !TEXT_TOOLBAR_EL) return;
+  var p = currentPaddingValues(TEXT_TOOLBAR_EL);
+  TEXT_TOOLBAR.querySelectorAll(".tt-pad-in").forEach(function (input) {
+    input.value = p[input.getAttribute("data-side")];
+  });
+  TEXT_PADDING_BEFORE = TEXT_TOOLBAR_EL.style.padding || "";
+}
+
+/**
+ * Writes the four boxes back onto the field and into the snapshot, as one
+ * css shorthand (see applyPaddingOverrides()). Runs on every keystroke, so
+ * the field resizes under the cursor as the number changes; the ring is
+ * repositioned with it since padding is real box geometry, not paint.
+ */
+function writeTextToolbarPadding() {
+  if (!TEXT_TOOLBAR || !TEXT_TOOLBAR_EL) return;
+  var el = TEXT_TOOLBAR_EL;
+  var side = {};
+  TEXT_TOOLBAR.querySelectorAll(".tt-pad-in").forEach(function (input) {
+    side[input.getAttribute("data-side")] = Math.max(0, Math.min(200, parseInt(input.value, 10) || 0));
+  });
+  var value = side.t + "px " + side.r + "px " + side.b + "px " + side.l + "px";
+  el.style.padding = value;
+  savePadding(elId(el), value);
+  positionRing();
 }
 
 /* the text toolbar's "ƒx" button's own popover: picks an operation + one or
@@ -13758,6 +14251,15 @@ function applyHistoryAction(action, side) {
     setTooltipDescriptor(action.id, val ? JSON.parse(val) : null);
     return;
   }
+  if (action.type === "padding") {
+    var padEl = elByAnyId(action.id);
+    if (!padEl) return;
+    padEl.style.padding = val || "";
+    savePadding(action.id, val || "");
+    if (TEXT_TOOLBAR_EL === padEl) primeTextToolbarPadding();
+    positionRing();
+    return;
+  }
   if (action.type === "text") {
     var textEls = document.querySelectorAll('[data-edit-id="' + action.id + '"]');
     if (!textEls.length) return;
@@ -13796,7 +14298,7 @@ function applyHistoryAction(action, side) {
     var styleEl = elByAnyId(action.id);
     if (!styleEl) return;
     if (action.type === "align") {
-      styleEl.style.textAlign = val;
+      applyTextAlignStyle(styleEl, val);
       saveTextStyle(action.id, "align", val);
       if (TEXT_TOOLBAR_EL === styleEl) updateTextToolbarState();
       if (STYLE_MENU_ID === action.id && STYLE_MENU && STYLE_MENU.classList.contains("show")) {
@@ -13971,18 +14473,17 @@ function applyHistoryAction(action, side) {
     var bscEl = styleMenuElById(action.id);
     if (!bscEl) return;
     var bscMapKey = action.type === "hovercolor" ? "hoverColor" : "activeColor";
-    var bscDarkMapKey = action.type === "hovercolor" ? "darkHoverColor" : "darkActiveColor";
-    var bscCssVar = action.type === "hovercolor" ? "--btn-hover-bg" : "--btn-active-bg";
-    var bscFlagKey = action.type === "hovercolor" ? "hoverOverride" : "activeOverride";
     var bscSaveFn = action.type === "hovercolor" ? saveEditedHoverColor : saveEditedActiveColor;
     THEMED_OVERRIDE_MAPS[bscMapKey][action.id] = val || "";
     bscSaveFn(action.id, val || "");
-    var bscLv = THEMED_OVERRIDE_MAPS[bscMapKey][action.id], bscDv = THEMED_OVERRIDE_MAPS[bscDarkMapKey][action.id];
-    if (bscLv || bscDv) { bscEl.style.setProperty(bscCssVar, resolveThemedColor(bscLv, bscDv)); bscEl.dataset[bscFlagKey] = "1"; }
-    else { bscEl.style.removeProperty(bscCssVar); delete bscEl.dataset[bscFlagKey]; }
+    /* both states repaint either way: an unpicked click color follows the
+       hover color, so undoing a hover pick has to take the press state back
+       with it (see paintElementStateColor()) */
+    paintElementStateColor(bscEl, "hover");
+    paintElementStateColor(bscEl, "press");
     if (STYLE_MENU_ID === action.id) {
       var bscSel = action.type === "hovercolor" ? ".sm-hovercolor" : ".sm-activecolor";
-      STYLE_MENU.querySelector(bscSel).value = val || "#000000";
+      STYLE_MENU.querySelector(bscSel).value = val || currentColorValue(bscEl);
       if (action.type === "hovercolor") STYLE_HOVERCOLOR_BEFORE = val || "";
       else STYLE_ACTIVECOLOR_BEFORE = val || "";
     }
@@ -13993,17 +14494,15 @@ function applyHistoryAction(action, side) {
     if (!dbscEl) return;
     var dbscMapKey = action.type === "darkhovercolor" ? "darkHoverColor" : "darkActiveColor";
     var dbscLightMapKey = action.type === "darkhovercolor" ? "hoverColor" : "activeColor";
-    var dbscCssVar = action.type === "darkhovercolor" ? "--btn-hover-bg" : "--btn-active-bg";
-    var dbscFlagKey = action.type === "darkhovercolor" ? "hoverOverride" : "activeOverride";
     var dbscSaveFn = action.type === "darkhovercolor" ? saveEditedDarkHoverColor : saveEditedDarkActiveColor;
     THEMED_OVERRIDE_MAPS[dbscMapKey][action.id] = val || "";
     dbscSaveFn(action.id, val || "");
-    var dbscLv = THEMED_OVERRIDE_MAPS[dbscLightMapKey][action.id], dbscDv = THEMED_OVERRIDE_MAPS[dbscMapKey][action.id];
-    if (dbscLv || dbscDv) { dbscEl.style.setProperty(dbscCssVar, resolveThemedColor(dbscLv, dbscDv)); dbscEl.dataset[dbscFlagKey] = "1"; }
-    else { dbscEl.style.removeProperty(dbscCssVar); delete dbscEl.dataset[dbscFlagKey]; }
+    var dbscLv = THEMED_OVERRIDE_MAPS[dbscLightMapKey][action.id];
+    paintElementStateColor(dbscEl, "hover");
+    paintElementStateColor(dbscEl, "press");
     if (STYLE_MENU_ID === action.id) {
       var dbscSel = action.type === "darkhovercolor" ? ".sm-hovercolor-dark" : ".sm-activecolor-dark";
-      var dbscBase = dbscLv || "#000000";
+      var dbscBase = dbscLv || currentColorValue(dbscEl);
       STYLE_MENU.querySelector(dbscSel).value = val || autoDarkVariant(dbscBase);
       if (action.type === "darkhovercolor") STYLE_DARKHOVERCOLOR_BEFORE = val || "";
       else STYLE_DARKACTIVECOLOR_BEFORE = val || "";
@@ -14291,6 +14790,17 @@ function saveTextStyle(id, prop, value) {
 }
 
 /**
+ * Persists one element's padding (the text toolbar's Pad row, see
+ * writeTextToolbarPadding()) into the preview snapshot. A map of its own
+ * rather than a fourth key under text_styles: padding is box geometry, not
+ * typography - it applies to anything with edges, and it belongs with the
+ * size/position overrides in spirit even though it's stored the plain way.
+ * @param id the element's data-edit-id or data-resize-id
+ * @param value a css padding shorthand, or "" to clear back to the default
+ */
+function savePadding(id, value) { saveEditedMapValue("padding", id, value); }
+
+/**
  * Persists a font choice (see showTextToolbar()'s font select) into the
  * preview snapshot, the same as saveTextStyle() but carrying the font
  * file's url alongside a ta-uploaded font's family name: a built-in
@@ -14511,7 +15021,7 @@ function saveEditedDarkProgressTrack(id, value) { saveEditedMapValue("dark_progr
 /**
  * Persists a button's Hover color/Click color pick from the style popover
  * into the preview snapshot, buttons only, same draft everything else here
- * uses. See applyButtonStateColorOverrides()'s doc comment for why these
+ * uses. See applyStateColorOverrides()'s doc comment for why these
  * paint as css custom properties rather than a plain inline style.
  * @param id the button's data-edit-id
  * @param value a css color string, or "" to clear back to the default
@@ -15126,11 +15636,12 @@ function applySharedOverridePasses(data, textMap) {
   applySizeOverrides(data.sizes);
   applyFontSizeOverrides(data.font_sizes);
   applyTextStyleOverrides(data.text_styles);
+  applyPaddingOverrides(data.padding);
   applyPositionOverrides(data.positions);
   applyColorOverrides(data.colors, data.dark_colors);
   applyFillOverrides(data.fill, data.dark_fill);
   applyTextColorOverrides(data.text_color, data.dark_text_color);
-  applyButtonStateColorOverrides(data.hover_color, data.dark_hover_color, data.active_color, data.dark_active_color);
+  applyStateColorOverrides(data.hover_color, data.dark_hover_color, data.active_color, data.dark_active_color);
   applyTintOverrides(data.tint);
   applyShadeOverrides(data.shade);
   applyVideoPlaybackOverrides(data.video_no_autoplay, data.video_controls, data.video_pausable);
@@ -15313,11 +15824,12 @@ function initObjectCanvas() {
     applySizeOverrides(data.sizes);
     applyFontSizeOverrides(data.font_sizes);
     applyTextStyleOverrides(data.text_styles);
+    applyPaddingOverrides(data.padding);
     applyPositionOverrides(data.positions);
     applyColorOverrides(data.colors, data.dark_colors);
     applyFillOverrides(data.fill, data.dark_fill);
     applyTextColorOverrides(data.text_color, data.dark_text_color);
-    applyButtonStateColorOverrides(data.hover_color, data.dark_hover_color, data.active_color, data.dark_active_color);
+    applyStateColorOverrides(data.hover_color, data.dark_hover_color, data.active_color, data.dark_active_color);
     applyTintOverrides(data.tint);
     applyShadeOverrides(data.shade);
     applyVideoPlaybackOverrides(data.video_no_autoplay, data.video_controls, data.video_pausable);

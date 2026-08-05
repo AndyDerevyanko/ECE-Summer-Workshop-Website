@@ -2953,13 +2953,25 @@ body.edit-mode .apply-bob { animation: none; }
    editor above: four side boxes plus a link toggle that drives all four at
    once, which is how padding is usually wanted (an even inset) and is the
    only comfortable way to nudge it with the arrow keys. */
-.text-toolbar .tt-padbar { display: none; width: 100%; align-items: center; gap: 3px; }
+.text-toolbar .tt-padbar { display: none; width: 100%; align-items: center; gap: 7px; }
 .text-toolbar .tt-padbar.show { display: flex; }
-.text-toolbar .tt-padbar label {
+.text-toolbar .tt-pad-title {
   font-size: .62rem;
   color: var(--muted);
   letter-spacing: .04em;
 }
+/* each box wears its side's letter. The gap inside a cell is much tighter
+   than the gap between cells, so the letter reads as part of its own box
+   rather than as a caption for whichever box happens to be nearer. */
+.text-toolbar .tt-pad-cell { display: flex; align-items: center; gap: 3px; cursor: pointer; }
+.text-toolbar .tt-pad-cell > span {
+  font-size: .58rem;
+  color: var(--muted);
+  width: 8px;
+  text-align: center;
+}
+.text-toolbar .tt-pad-cell:hover > span,
+.text-toolbar .tt-pad-cell:focus-within > span { color: var(--accent); }
 .text-toolbar .tt-pad-in {
   width: 30px;
   flex: none;
@@ -2981,6 +2993,20 @@ body.edit-mode .apply-bob { animation: none; }
 .text-toolbar .tt-pad-in::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .text-toolbar .tt-pad-in:focus { outline: 1px solid var(--accent); }
 .text-toolbar .tt-pad-lock { width: auto; padding: 0 6px; font-size: .62rem; }
+
+/* the band the hovered padding box lights up on the element itself (see
+   js/main.js's showPadSideHint()). It IS the padding, drawn at its real
+   width, so it answers "which side" and "how much" with the same rectangle.
+   Never in the way: no pointer events, and it goes as soon as the box does. */
+.pad-hint {
+  position: fixed;
+  z-index: 9998;
+  pointer-events: none;
+  display: none;
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.pad-hint.show { display: block; }
 
 /* a linked run of words inside a text field (js/main.js's INLINE LINKS
    section) - the same accent-coloured, underline-on-hover treatment the

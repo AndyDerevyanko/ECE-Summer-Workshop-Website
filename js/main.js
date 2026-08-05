@@ -13546,13 +13546,25 @@ function buildTextToolbar() {
        Four sides rather than one number because that's what padding is for
        here: pushing a button's wording off one particular edge (a theme
        toggle's right-justified label, say) is the common case, an even inset
-       the other - hence the link toggle, which drives all four at once. */
+       the other - hence the link toggle, which drives all four at once.
+
+       Each box wears its side's letter and lights the edge it belongs to on
+       the real element while it's hovered or focused. Four bare numbers in a
+       row are only readable if you already know the order they're in, and the
+       one person who does is whoever wrote them; the whole point of a padding
+       box is that you can see which edge is about to move. The <label> wrapper
+       is what makes the letter part of the box rather than a caption near it -
+       clicking it focuses the input. */
     '<span class="tt-padbar">' +
-      '<label>PAD</label>' +
-      '<input type="number" class="tt-pad-in" data-side="t" min="0" max="200" title="Top">' +
-      '<input type="number" class="tt-pad-in" data-side="r" min="0" max="200" title="Right">' +
-      '<input type="number" class="tt-pad-in" data-side="b" min="0" max="200" title="Bottom">' +
-      '<input type="number" class="tt-pad-in" data-side="l" min="0" max="200" title="Left">' +
+      '<label class="tt-pad-title">PAD</label>' +
+      '<label class="tt-pad-cell" title="Top padding"><span>T</span>' +
+        '<input type="number" class="tt-pad-in" data-side="t" min="0" max="200"></label>' +
+      '<label class="tt-pad-cell" title="Right padding"><span>R</span>' +
+        '<input type="number" class="tt-pad-in" data-side="r" min="0" max="200"></label>' +
+      '<label class="tt-pad-cell" title="Bottom padding"><span>B</span>' +
+        '<input type="number" class="tt-pad-in" data-side="b" min="0" max="200"></label>' +
+      '<label class="tt-pad-cell" title="Left padding"><span>L</span>' +
+        '<input type="number" class="tt-pad-in" data-side="l" min="0" max="200"></label>' +
       '<button type="button" class="tt-pad-lock" title="Change all four sides together">LINK</button>' +
       '<button type="button" class="tt-pad-rm" title="Back to the default padding">×</button>' +
     '</span>';
@@ -13696,6 +13708,22 @@ function buildTextToolbar() {
        so just keep it off the drag-anywhere handler underneath, same
        special-case the font <select> already gets */
     input.addEventListener("mousedown", function (e) { e.stopPropagation(); });
+    /* light the edge this box drives, on the element itself. Hover shows it,
+       focus keeps it: a box you've clicked into is the one you're about to
+       type a number at, so it stays lit while the pointer wanders off to
+       nothing in particular. */
+    var side = input.getAttribute("data-side");
+    var cell = input.parentElement;
+    /* the letter is part of the box, so clicking it has to behave like
+       clicking the box: kept off the drag-anywhere handler, but NOT
+       preventDefault()ed, which is what hands focus on to the input */
+    cell.addEventListener("mousedown", function (e) { e.stopPropagation(); });
+    cell.addEventListener("mouseenter", function () { showPadSideHint(side); });
+    cell.addEventListener("mouseleave", function () {
+      if (document.activeElement !== input) hidePadSideHint();
+    });
+    input.addEventListener("focus", function () { showPadSideHint(side); });
+    input.addEventListener("blur", function () { hidePadSideHint(); });
     input.addEventListener("input", function () {
       if (!TEXT_TOOLBAR_EL) return;
       if (TEXT_TOOLBAR.querySelector(".tt-pad-lock").classList.contains("active")) {
@@ -14058,6 +14086,7 @@ function hideTextToolbar() {
      nobody asked for; the Pad button reopens it in one click */
   TEXT_TOOLBAR.querySelector(".tt-padbar").classList.remove("show");
   TEXT_TOOLBAR.querySelector(".tt-pad").classList.remove("active");
+  hidePadSideHint();
 }
 
 /* the padding the field being edited had when its last settled value was
@@ -14096,6 +14125,62 @@ function writeTextToolbarPadding() {
   el.style.padding = value;
   savePadding(elId(el), value);
   positionRing();
+  /* the band being pointed at is the thing that just changed size, so it has
+     to be redrawn with it or it'd sit over the old edge */
+  if (PAD_HINT_SIDE) showPadSideHint(PAD_HINT_SIDE);
+}
+
+/* the overlay that shows which edge a padding box belongs to, and the side
+   it's currently showing (kept so writeTextToolbarPadding() can redraw it as
+   the number changes). Same lazy-singleton, appended-once shape as the snap
+   guides. */
+var PAD_HINT = null;
+var PAD_HINT_SIDE = "";
+
+/**
+ * Lays a band over one side's padding on the field being edited: "t", "r",
+ * "b" or "l". The band is the padding itself, so it grows and shrinks as the
+ * number does and a ta can see the space they're actually buying. A side set
+ * to 0 has no band to draw, so it falls back to a hairline on that edge -
+ * still an answer to "which one is this", which is the question being asked.
+ */
+function showPadSideHint(side) {
+  var el = TEXT_TOOLBAR_EL;
+  if (!el) { hidePadSideHint(); return; }
+  if (!PAD_HINT) {
+    PAD_HINT = document.createElement("div");
+    PAD_HINT.className = "pad-hint";
+    document.body.appendChild(PAD_HINT);
+  }
+  var r = el.getBoundingClientRect();
+  var cs = getComputedStyle(el);
+  var widths = {
+    t: parseFloat(cs.paddingTop) || 0,
+    r: parseFloat(cs.paddingRight) || 0,
+    b: parseFloat(cs.paddingBottom) || 0,
+    l: parseFloat(cs.paddingLeft) || 0
+  };
+  var band = Math.max(widths[side] || 0, 2);
+  var s = PAD_HINT.style;
+  if (side === "t" || side === "b") {
+    s.left = r.left + "px";
+    s.width = r.width + "px";
+    s.height = band + "px";
+    s.top = (side === "t" ? r.top : r.bottom - band) + "px";
+  } else {
+    s.top = r.top + "px";
+    s.height = r.height + "px";
+    s.width = band + "px";
+    s.left = (side === "l" ? r.left : r.right - band) + "px";
+  }
+  PAD_HINT_SIDE = side;
+  PAD_HINT.classList.add("show");
+}
+
+/** Takes the padding band away (pointer left the box, or the toolbar closed). */
+function hidePadSideHint() {
+  PAD_HINT_SIDE = "";
+  if (PAD_HINT) PAD_HINT.classList.remove("show");
 }
 
 /* the text toolbar's "ƒx" button's own popover: picks an operation + one or

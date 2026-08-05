@@ -1505,52 +1505,55 @@ function pushDashViewToFrame() {
 }
 
 /* ---------------------------------------------------------------------------
-   THE EDITOR'S GRID SNAP SWITCH
+   THE EDITOR'S SNAP SWITCH
 
-   The portal-side face of js/main.js's GRID SNAPPING section: whether drags
-   in the editor round to a pixel grid. Unlike the two switches above it, this
-   one isn't a view of the page being edited - it's how editing itself
-   behaves - so it's shown on every tab and it IS remembered, in the same
-   localStorage key the frame reads (same origin, so the two sides need no
-   message passing at all). Shift+R inside the frame flips the same setting,
-   which is why main.js calls syncGridSnapSwitch() back out here afterwards.
+   The portal-side face of js/main.js's SNAPPING section: whether drags in the
+   editor line themselves up with the elements around them. Unlike the two
+   switches above it, this one isn't a view of the page being edited - it's how
+   editing itself behaves - so it's shown on every tab and it IS remembered, in
+   the same localStorage key the frame reads (same origin, so the two sides
+   need no message passing at all). Shift+R inside the frame flips the same
+   setting, which is why main.js calls syncSnapSwitch() back out here
+   afterwards.
    --------------------------------------------------------------------------- */
 
-/* the key js/main.js's gridSnapOn() reads - kept in step by hand rather than
-   shared, since the two files have no module system between them */
-var GRID_SNAP_KEY = "editor_grid_snap";
+/* the key js/main.js's snapOn() reads - kept in step by hand rather than
+   shared, since the two files have no module system between them. Still named
+   for the pixel grid this used to be, so a ta who had snapping on doesn't
+   quietly lose it, see that section's own note. */
+var SNAP_KEY = "editor_grid_snap";
 
 /** @return true if editor drags are currently snapping */
-function gridSnapOn() {
-  try { return localStorage.getItem(GRID_SNAP_KEY) === "1"; } catch (e) { return false; }
+function snapOn() {
+  try { return localStorage.getItem(SNAP_KEY) === "1"; } catch (e) { return false; }
 }
 
 /** Redraws the Snap switch from the stored setting. Called by the frame too, after a Shift+R in there. */
-function syncGridSnapSwitch() {
-  var sw = document.getElementById("edGridSnap");
+function syncSnapSwitch() {
+  var sw = document.getElementById("edSnap");
   if (!sw) return;
-  var on = gridSnapOn();
+  var on = snapOn();
   sw.setAttribute("aria-checked", on ? "true" : "false");
-  document.getElementById("edGridSnapText").textContent = on ? "On" : "Off";
+  document.getElementById("edSnapText").textContent = on ? "On" : "Off";
   sw.title = on
-    ? "Drags and resizes round to an 8px grid. Shift+R, or click, to turn off. Arrow keys still nudge 1px at a time."
-    : "Drags and resizes are free. Shift+R, or click, to snap them to an 8px grid.";
+    ? "Drags and resizes line up with the edges and centres of nearby elements, and a pink guide shows what they caught. Shift+R, or click, to turn off. Arrow keys still nudge 1px at a time."
+    : "Drags and resizes are free. Shift+R, or click, to line them up with the elements around them.";
 }
 
-/** Flips grid snapping, from the switch or from Shift+R pressed out here in the portal chrome. */
-function toggleEditorGridSnap() {
+/** Flips snapping, from the switch or from Shift+R pressed out here in the portal chrome. */
+function toggleEditorSnapping() {
   var win = editorFrameWindow();
   /* the frame owns the setting (it writes the key, shows its own toast and
-     hides the grid overlay if one is up); this only asks. With no frame
-     loaded yet there's nothing to ask, so write the key here instead. */
+     takes down any guides that are up); this only asks. With no frame loaded
+     yet there's nothing to ask, so write the key here instead. */
   var done = false;
   try {
-    if (win && win.toggleGridSnap) { win.toggleGridSnap(); done = true; }
+    if (win && win.toggleSnapping) { win.toggleSnapping(); done = true; }
   } catch (e) {}
   if (!done) {
-    try { localStorage.setItem(GRID_SNAP_KEY, gridSnapOn() ? "0" : "1"); } catch (e) {}
+    try { localStorage.setItem(SNAP_KEY, snapOn() ? "0" : "1"); } catch (e) {}
   }
-  syncGridSnapSwitch();
+  syncSnapSwitch();
 }
 
 /**
@@ -2335,11 +2338,11 @@ document.addEventListener("DOMContentLoaded", function () {
   document.getElementById("edFrame").addEventListener("load", pushDashViewToFrame);
   syncDashViewSwitch();
 
-  /* grid snapping: the switch, plus Shift+R for when focus is out here in the
+  /* snapping: the switch, plus Shift+R for when focus is out here in the
      portal rather than in the frame (the frame has its own handler for the
      other case, see wireResizable() in js/main.js) */
-  document.getElementById("edGridSnap").addEventListener("click", toggleEditorGridSnap);
-  syncGridSnapSwitch();
+  document.getElementById("edSnap").addEventListener("click", toggleEditorSnapping);
+  syncSnapSwitch();
 
   document.getElementById("edFullscreen").addEventListener("click", toggleEditorFullscreen);
   document.addEventListener("keydown", function (e) {
@@ -2356,7 +2359,7 @@ document.addEventListener("DOMContentLoaded", function () {
       if (key === "z" && !e.shiftKey) { e.preventDefault(); clickEditUndo(); }
       else if (key === "y" || (key === "z" && e.shiftKey)) { e.preventDefault(); clickEditRedo(); }
     }
-    /* Shift+R toggles grid snapping, for the same reason undo/redo are
+    /* Shift+R toggles snapping, for the same reason undo/redo are
        repeated out here: the shortcut has to work whether focus is in the
        iframe or on the portal chrome around it. Skipped while a real form
        control has focus, so it can't eat an R being typed into the content
@@ -2366,7 +2369,7 @@ document.addEventListener("DOMContentLoaded", function () {
       var act = document.activeElement;
       if (act && (act.isContentEditable || act.tagName === "INPUT" || act.tagName === "TEXTAREA" || act.tagName === "SELECT")) return;
       e.preventDefault();
-      toggleEditorGridSnap();
+      toggleEditorSnapping();
     }
   });
 

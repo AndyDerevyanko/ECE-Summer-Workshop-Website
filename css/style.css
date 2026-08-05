@@ -2277,23 +2277,32 @@ body.edit-mode .apply-bob { animation: none; }
 }
 .edit-toast.show { opacity: 1; transform: translate(-50%, 0); }
 
-/* the visual editor's snapping grid (js/main.js's GRID SNAPPING section):
-   two 1px line patterns, spacing set from GRID_SIZE in js so the drawn grid
-   and the one drags round to can't drift apart. Only up while something is
-   actually being dragged, and under the selection ring's z-index so a dragged
-   element's own handles stay readable on top of it. */
-.grid-overlay {
+/* the visual editor's snap guides (js/main.js's SNAPPING section): a hairline
+   through each edge or centre the dragged element is currently flush with,
+   drawn only while it's flush with one. Pink rather than the editor's own
+   violet/accent outlines on purpose - a guide is a passing hint about a drag,
+   not one more box around one more element, and Canva's are pink for the same
+   reason. No transition at all: a guide appears and vanishes as an edge
+   catches and lets go, and a fade would smear those into a permanent haze.
+   Under the selection ring's z-index so the dragged element's own handles
+   stay readable on top of it. */
+.snap-guides {
   position: fixed;
   inset: 0;
   z-index: 9999;
+  /* never in the way of the drag that put it there */
   pointer-events: none;
-  opacity: 0;
-  transition: opacity .12s ease;
-  background-image:
-    linear-gradient(to right, color-mix(in srgb, var(--accent) 26%, transparent) 1px, transparent 1px),
-    linear-gradient(to bottom, color-mix(in srgb, var(--accent) 26%, transparent) 1px, transparent 1px);
+  display: none;
 }
-.grid-overlay.show { opacity: 1; }
+.snap-guides.show { display: block; }
+.snap-guide {
+  position: absolute;
+  background: #ff3d8b;
+}
+/* 1px hairlines, grown a touch by the shadow so they read over a busy
+   background without ever looking like a border on something */
+.snap-guide.snap-x { width: 1px; box-shadow: 0 0 0 .5px rgba(255, 61, 139, .35); }
+.snap-guide.snap-y { height: 1px; box-shadow: 0 0 0 .5px rgba(255, 61, 139, .35); }
 
 /* the visual editor's one selection ring (wireResizable() in js/main.js):
    a floating frame that follows whatever tracked element the mouse is

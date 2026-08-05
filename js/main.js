@@ -7085,13 +7085,34 @@ function freezeDescendants(el) {
 }
 
 /* ---------------------------------------------------------------------------
-   GRID SNAPPING
+   SNAPPING (SMART GUIDES)
 
-   An optional pixel grid every drag in the visual editor rounds to, so a ta
-   lining two things up doesn't have to land the same figure by hand twice.
-   Off by default and toggled with SHIFT+R (Canva's own rulers-and-guides
-   shortcut - it has no separate snap one - see the Snap switch in js/ta.js,
-   which is the same setting from the portal side).
+   Canva's kind of snapping: while something is dragged or resized, its edges
+   and its centre are pulled onto the edges and centres of the OTHER elements
+   around it, and a pink line is drawn through whatever it just lined up with,
+   so the ta can see WHY it stuck. What it snaps to depends entirely on what
+   happens to be near it.
+
+   This section used to round every drag to a fixed 8px grid instead, which
+   sounds like the same feature and isn't: a grid only ever lines two things
+   up when both of them already sit on it, and on a page built out of flowing
+   text, flex rows, percentage widths and a tile grid that re-tiles itself,
+   almost nothing does. Lining a caption up under a photo means flush with
+   THAT photo's edge - no grid spacing is guaranteed to contain it.
+
+   The lines a drag can stick to, per axis, are each nearby element's two
+   edges and its centre, plus the same three for the box the dragged element
+   lives in (its tile/live area if it's inside one, otherwise the nearest
+   tracked ancestor) - that last one is what gives "centred in its container",
+   Canva's page-centre guide. Nearby means "currently on screen": a line
+   through something the ta can't see reads as the drag sticking for no
+   reason. Everything is measured once at mousedown and held in document
+   coordinates, so a drag that scrolls the frame doesn't drag its own targets
+   along with it.
+
+   Toggled with SHIFT+R (Canva's own rulers-and-guides shortcut - it has no
+   separate snap one - see the Snap switch in js/ta.js, which is the same
+   setting from the portal side).
 
    Everything about it is editor-only and lives in localStorage rather than in
    the saved content: it changes how a drag BEHAVES, not what the page is, so
@@ -7101,20 +7122,34 @@ function freezeDescendants(el) {
    keeps the setting through the frame reloads Apply/Save trigger.
 
    Two things deliberately DON'T snap: the arrow-key nudge (1px a press, the
-   precise escape hatch when the grid is the wrong size for the job) and a
-   reel tile's drag (it reorders a strip, it has no free position to round).
+   precise escape hatch for placing something a few px off an edge without
+   turning the whole thing off) and a reel tile's drag (it reorders a strip,
+   it has no free position to snap).
    --------------------------------------------------------------------------- */
 
-/* the spacing of the grid, in css px. 8 rather than a rounder 10 because the
-   rest of the page's spacing is already built in multiples of it. */
-var GRID_SIZE = 8;
-var GRID_SNAP_KEY = "editor_grid_snap";
-/* the one grid overlay, built on first use (see showGridOverlay()) */
-var GRID_OVERLAY = null;
+/* how close (css px) a moving edge has to come before it's pulled in. About
+   Canva's: wide enough to catch a hand-held drag, tight enough that a ta who
+   means to sit a few px off an edge still can. */
+var SNAP_TOL = 6;
+/* two lines count as "the same line" for drawing purposes below this. Not the
+   same figure as the tolerance above: that decides what a drag sticks TO,
+   this only decides what already-aligned means once it has stuck, and it's
+   sub-pixel purely to absorb rounding in the rects. */
+var SNAP_HIT = 0.75;
+/* still the old key: it's a private editor setting, and a ta who had snapping
+   on shouldn't have it silently turn itself off because the feature behind it
+   grew up. js/ta.js names the same string. */
+var SNAP_KEY = "editor_grid_snap";
+/* the drag in progress, all null between drags: what's being dragged, the
+   lines it can stick to (document coordinates, measured once at mousedown),
+   and the overlay the guides are drawn into. */
+var SNAP_EL = null;
+var SNAP_TARGETS = null;
+var SNAP_LAYER = null;
 
-/** @return true if drags should currently round to the grid */
-function gridSnapOn() {
-  try { return localStorage.getItem(GRID_SNAP_KEY) === "1"; } catch (e) { return false; }
+/** @return true if drags should currently snap */
+function snapOn() {
+  try { return localStorage.getItem(SNAP_KEY) === "1"; } catch (e) { return false; }
 }
 
 /**
@@ -7124,80 +7159,237 @@ function gridSnapOn() {
  * page is running inside the editor's iframe.
  * @param on true to snap
  */
-function setGridSnap(on) {
-  try { localStorage.setItem(GRID_SNAP_KEY, on ? "1" : "0"); } catch (e) {}
-  if (!on) showGridOverlay(false);
-  showEditToast(on ? "Grid snap on · " + GRID_SIZE + "px · Shift+R" : "Grid snap off · Shift+R");
+function setSnapping(on) {
+  try { localStorage.setItem(SNAP_KEY, on ? "1" : "0"); } catch (e) {}
+  if (!on) endSnapDrag();
+  showEditToast(on ? "Snapping on · edges and centres · Shift+R" : "Snapping off · Shift+R");
   /* the switch in the portal chrome reads the same key, but nothing tells it
      the key changed - a shortcut pressed in here is exactly that case */
   try {
-    if (window.parent !== window && window.parent.syncGridSnapSwitch) window.parent.syncGridSnapSwitch();
+    if (window.parent !== window && window.parent.syncSnapSwitch) window.parent.syncSnapSwitch();
   } catch (e) {}
 }
 
 /** Flips snapping, from the Shift+R shortcut or the portal's Snap switch. */
-function toggleGridSnap() { setGridSnap(!gridSnapOn()); }
+function toggleSnapping() { setSnapping(!snapOn()); }
 
 /**
- * Rounds one axis of a drag to the grid: takes where the edge being dragged
- * started in DOCUMENT coordinates and the raw pointer delta, and gives back
- * the delta that lands that edge on the nearest grid line. Document
- * coordinates rather than the element's own offset, so two elements dragged
- * to "the same place" really do line up - an offset-based snap would only
- * ever round each element's distance from wherever it happens to sit.
+ * One box's six snappable lines in DOCUMENT coordinates - both edges and the
+ * centre, on each axis. Document rather than viewport coordinates so a drag
+ * that scrolls the page doesn't drag its own targets along with it, and so
+ * two elements lined up "in the same place" really are.
+ * @param r a getBoundingClientRect()
+ * @return {x1, xc, x2, y1, yc, y2}
+ */
+function snapLinesOf(r) {
+  var x = r.left + window.scrollX, y = r.top + window.scrollY;
+  return {
+    x1: x, xc: x + r.width / 2, x2: x + r.width,
+    y1: y, yc: y + r.height / 2, y2: y + r.height
+  };
+}
+
+/**
+ * The box a dragged element is placed WITHIN, whose edges and centre it can
+ * also line up against: the tile or live area that already bounds its drag if
+ * there is one (see moveBoundsContainer(), so the guides agree with the clamp
+ * rather than fighting it), otherwise the nearest tracked ancestor - a card, a
+ * section - and failing that the page's own column.
+ * @param el the element being dragged
+ * @return the framing element, or null
+ */
+function snapFrameFor(el) {
+  if (!el || !el.closest) return null;
+  return moveBoundsContainer(el) ||
+    (el.parentElement && el.parentElement.closest(RESIZABLE_SEL)) ||
+    document.querySelector("main") ||
+    document.body;
+}
+
+/**
+ * Starts a snapping drag: measures everything the element could line up with,
+ * once, here. Cheap enough at mousedown (one rect per tracked element) and far
+ * too expensive per mousemove, which is the other reason the targets are held
+ * in document coordinates - they stay true for the whole drag without being
+ * re-measured, even as the thing being dragged moves through them.
+ *
+ * Ancestors and descendants are left out: an element can't sensibly line up
+ * with something it contains or sits inside (its own framing box comes back
+ * separately, above), and so are the other members of a rigid group, which
+ * travel with it rather than standing still to be measured against.
+ * @param el the element being dragged or resized
+ * @param skipEls other elements moving with it, or null
+ */
+function beginSnapDrag(el, skipEls) {
+  SNAP_EL = el;
+  SNAP_TARGETS = [];
+  if (!snapOn() || !el) return;
+  var skip = skipEls || [];
+  var vw = window.innerWidth, vh = window.innerHeight;
+  document.querySelectorAll(RESIZABLE_SEL).forEach(function (t) {
+    if (t === el || t.contains(el) || el.contains(t)) return;
+    if (skip.indexOf(t) !== -1) return;
+    var r = t.getBoundingClientRect();
+    /* nothing laid out (a hidden tab's contents), or off screen */
+    if (r.width < 2 || r.height < 2) return;
+    if (r.bottom < 0 || r.top > vh || r.right < 0 || r.left > vw) return;
+    SNAP_TARGETS.push(snapLinesOf(r));
+  });
+  var frame = snapFrameFor(el);
+  if (frame && frame !== el) SNAP_TARGETS.push(snapLinesOf(frame.getBoundingClientRect()));
+}
+
+/** Ends a snapping drag and takes the guides down with it. */
+function endSnapDrag() {
+  SNAP_EL = null;
+  SNAP_TARGETS = null;
+  clearSnapGuides();
+}
+
+/**
+ * The pull on one axis: given where the moving element's lines would land
+ * without snapping, the nudge that puts the closest of them onto the closest
+ * target line. Zero when nothing is within tolerance, which is also what an
+ * unsnapped drag gets, so callers need no branch of their own.
+ * @param positions the moving lines' document coordinates on this axis
+ * @param axis "x" or "y"
+ * @return the correction to add to the drag delta
+ */
+function snapPull(positions, axis) {
+  if (!SNAP_TARGETS || !SNAP_TARGETS.length) return 0;
+  var keys = axis === "x" ? ["x1", "xc", "x2"] : ["y1", "yc", "y2"];
+  var pull = 0, near = SNAP_TOL;
+  SNAP_TARGETS.forEach(function (t) {
+    keys.forEach(function (k) {
+      positions.forEach(function (p) {
+        var d = t[k] - p, a = Math.abs(d);
+        /* <= so an exact 6px tie still catches, and strictly < near so the
+           first of two equally close lines wins rather than the last */
+        if (a <= SNAP_TOL && a < near) { near = a; pull = d; }
+      });
+    });
+  });
+  return pull;
+}
+
+/**
+ * Snaps a move drag. Takes the moving element's lines as they were at
+ * mousedown and the raw pointer delta, and gives back the delta to actually
+ * apply - each axis pulled independently, so an element can be flush with one
+ * thing horizontally and something else vertically at the same time, exactly
+ * as it can in Canva.
  *
  * Applied before the container clamp, never after, so an element dragged
- * against the edge of a tile/live area still grinds along that edge exactly
- * as it did before rather than stopping a grid cell short (see clampOwnPos()).
- * @param origin the dragged edge's document coordinate at mousedown
- * @param d the raw pointer delta on that axis
- * @return the delta to actually apply
+ * against the edge of a tile/live area still grinds along that edge rather
+ * than sticking short of it (see clampOwnPos()). The clamp gets the last
+ * word, which is why the guides are painted from what actually landed rather
+ * than from what was proposed here - see paintSnapGuides().
+ * @param lines snapLinesOf(the element's rect at mousedown)
+ * @param dx the raw pointer delta, x
+ * @param dy the raw pointer delta, y
+ * @return {dx, dy} the deltas to apply
  */
-function snapDelta(origin, d) {
-  if (!gridSnapOn()) return d;
-  return Math.round((origin + d) / GRID_SIZE) * GRID_SIZE - origin;
+function snapMoveDelta(lines, dx, dy) {
+  if (!SNAP_TARGETS || !SNAP_TARGETS.length) return { dx: dx, dy: dy };
+  return {
+    dx: dx + snapPull([lines.x1 + dx, lines.xc + dx, lines.x2 + dx], "x"),
+    dy: dy + snapPull([lines.y1 + dy, lines.yc + dy, lines.y2 + dy], "y")
+  };
 }
 
 /**
- * Shows or hides the grid itself. Only ever up DURING a drag: a permanent
- * 8px grid over the whole page is unreadable noise, and the only moment it
- * says anything useful is while something is being lined up against it.
- * @param on true to show it
+ * Snaps a resize drag: the same pull, but only ONE line is moving - the edge
+ * the grabbed handle pulls. Snapped per edge rather than per size, because
+ * rounding the width would only ever line the box up with something when the
+ * edge it's pinned to already was.
+ * @param axis "x" or "y"
+ * @param edge that edge's document coordinate at mousedown
+ * @param d the raw pointer delta on this axis
+ * @return the delta to apply
  */
-function showGridOverlay(on) {
-  if (on && !gridSnapOn()) return;
-  if (!GRID_OVERLAY) {
-    if (!on) return;
-    GRID_OVERLAY = document.createElement("div");
-    GRID_OVERLAY.className = "grid-overlay";
-    GRID_OVERLAY.style.backgroundSize = GRID_SIZE + "px " + GRID_SIZE + "px";
-    document.body.appendChild(GRID_OVERLAY);
+function snapEdgeDelta(axis, edge, d) {
+  if (!SNAP_TARGETS || !SNAP_TARGETS.length) return d;
+  return d + snapPull([edge + d], axis);
+}
+
+/**
+ * Draws a guide through every line the dragged element is currently flush
+ * with, and nothing when it's flush with nothing. Measured from where the
+ * element actually IS, not from what the snap proposed: the container clamp
+ * can overrule a pull (see clampOwnPos()), and a guide drawn through a line
+ * the element didn't reach would be a lie about why it stopped.
+ *
+ * Each guide runs the full extent of the two boxes it joins, the way Canva's
+ * do, so it reads as "these two edges are the same edge" rather than as a
+ * ruler mark floating somewhere near them.
+ */
+function paintSnapGuides() {
+  if (!SNAP_EL || !SNAP_TARGETS || !SNAP_TARGETS.length) { clearSnapGuides(); return; }
+  var m = snapLinesOf(SNAP_EL.getBoundingClientRect());
+  /* keyed by axis+position so three things sharing one edge draw one line
+     spanning all of them, not three stacked on the same pixel */
+  var found = {};
+  [["x", ["x1", "xc", "x2"], ["y1", "y2"]], ["y", ["y1", "yc", "y2"], ["x1", "x2"]]]
+    .forEach(function (spec) {
+      var axis = spec[0], keys = spec[1], span = spec[2];
+      SNAP_TARGETS.forEach(function (t) {
+        keys.forEach(function (tk) {
+          keys.forEach(function (mk) {
+            if (Math.abs(t[tk] - m[mk]) > SNAP_HIT) return;
+            var at = t[tk];
+            var key = axis + Math.round(at);
+            var from = Math.min(t[span[0]], m[span[0]]);
+            var to = Math.max(t[span[1]], m[span[1]]);
+            if (!found[key]) found[key] = { axis: axis, at: at, from: from, to: to };
+            else {
+              found[key].from = Math.min(found[key].from, from);
+              found[key].to = Math.max(found[key].to, to);
+            }
+          });
+        });
+      });
+    });
+  drawSnapGuides(Object.keys(found).map(function (k) { return found[k]; }));
+}
+
+/**
+ * Puts the guide lines on screen. The overlay is fixed to the viewport (a
+ * document-sized layer would have to be re-measured every time anything on
+ * the page changed height) and the lines live in document coordinates, so
+ * each one is converted by the current scroll as it's drawn - which is also
+ * why a scroll mid-drag simply repaints, see wireResizable().
+ * @param lines [{axis, at, from, to}] in document coordinates
+ */
+function drawSnapGuides(lines) {
+  if (!lines.length) { clearSnapGuides(); return; }
+  if (!SNAP_LAYER) {
+    SNAP_LAYER = document.createElement("div");
+    SNAP_LAYER.className = "snap-guides";
+    document.body.appendChild(SNAP_LAYER);
   }
-  if (on) positionGridOverlay();
-  GRID_OVERLAY.classList.toggle("show", !!on);
+  SNAP_LAYER.innerHTML = "";
+  lines.forEach(function (l) {
+    var d = document.createElement("div");
+    d.className = "snap-guide snap-" + l.axis;
+    if (l.axis === "x") {
+      d.style.left = (l.at - window.scrollX) + "px";
+      d.style.top = (l.from - window.scrollY) + "px";
+      d.style.height = Math.max(1, l.to - l.from) + "px";
+    } else {
+      d.style.top = (l.at - window.scrollY) + "px";
+      d.style.left = (l.from - window.scrollX) + "px";
+      d.style.width = Math.max(1, l.to - l.from) + "px";
+    }
+    SNAP_LAYER.appendChild(d);
+  });
+  SNAP_LAYER.classList.add("show");
 }
 
-/**
- * Re-offsets the drawn grid by the current scroll. The overlay is fixed to
- * the viewport (a document-sized div would have to be re-measured every time
- * anything on the page changed height), but the grid it draws belongs to the
- * DOCUMENT, because that's what snapDelta() rounds against - so the pattern
- * is shifted by however far the page is scrolled and the two stay aligned.
- */
-function positionGridOverlay() {
-  if (!GRID_OVERLAY) return;
-  GRID_OVERLAY.style.backgroundPosition =
-    (-window.scrollX % GRID_SIZE) + "px " + (-window.scrollY % GRID_SIZE) + "px";
-}
-
-/**
- * One drag's snapping origin: where an element's top-left corner sits in
- * document coordinates, taken at mousedown.
- * @param rect the element's rect before the drag moved anything
- * @return {x, y} in document coordinates
- */
-function snapOriginOf(rect) {
-  return { x: rect.left + window.scrollX, y: rect.top + window.scrollY };
+/** Takes every guide down, leaving the (empty) overlay in place for reuse. */
+function clearSnapGuides() {
+  if (!SNAP_LAYER) return;
+  SNAP_LAYER.innerHTML = "";
+  SNAP_LAYER.classList.remove("show");
 }
 
 /**
@@ -7252,12 +7444,12 @@ function startResizeDrag(e) {
   var start = getSize(el);
   var base = getPos(el);
   /* where the edges THIS handle pulls are right now, in document coordinates:
-     what the grid rounds them to, when snapping is on (see snapDelta()). A
-     handle that doesn't pull on an axis leaves that figure unused. */
+     what they're snapped against, when snapping is on (see snapEdgeDelta()).
+     A handle that doesn't pull on an axis leaves that figure unused. */
   var startRect = el.getBoundingClientRect();
   var edgeX = (dir[0] === -1 ? startRect.left : startRect.right) + window.scrollX;
   var edgeY = (dir[1] === -1 ? startRect.top : startRect.bottom) + window.scrollY;
-  showGridOverlay(true);
+  beginSnapDrag(el, null);
   /* the last box a mousemove actually WROTE, which is how onUp tells the axes
      the ta pulled from the ones that merely moved: a flow container measures
      an unlocked axis live (see getSize()), and dragging such a container
@@ -7283,10 +7475,9 @@ function startResizeDrag(e) {
   }
 
   function onMove(ev) {
-    /* snapped per EDGE, not per size: rounding the width would only line the
-       box up with the grid when the edge it's pinned to already was */
-    var mx = snapDelta(edgeX, ev.clientX - startX);
-    var my = snapDelta(edgeY, ev.clientY - startY);
+    /* snapped per EDGE, not per size, see snapEdgeDelta() */
+    var mx = snapEdgeDelta("x", edgeX, ev.clientX - startX);
+    var my = snapEdgeDelta("y", edgeY, ev.clientY - startY);
     var w = dir[0] ? Math.max(16, start.w + dir[0] * mx) : start.w;
     var h = dir[1] ? Math.max(12, start.h + dir[1] * my) : start.h;
     /* shift forces the shape to hold on ANY element (an icon holds its shape
@@ -7318,6 +7509,7 @@ function startResizeDrag(e) {
     if (tileBox) {
       setTileTrackSize(el, w, h);
       positionRing();
+      paintSnapGuides();
       return;
     }
     dragged = { w: w, h: h };
@@ -7337,12 +7529,13 @@ function startResizeDrag(e) {
       base.tx + (dir[0] === -1 ? start.w - w : 0),
       base.ty + (dir[1] === -1 ? start.h - h : 0));
     positionRing();
+    paintSnapGuides();
   }
   function onUp() {
     document.removeEventListener("mousemove", onMove);
     document.removeEventListener("mouseup", onUp);
     RING_DRAGGING = false;
-    showGridOverlay(false);
+    endSnapDrag();
     var s = getSize(el), p = getPos(el);
     commitSize(el);
     commitPosition(el);
@@ -7413,16 +7606,17 @@ function startMoveDrag(e) {
   detachFromFlow(el, elRect);
   var base = getPos(el);
   groupMembers.forEach(function (m) { detachFromFlow(m.el, m.preRect); });
-  /* the grid rounds the corner of the element actually being dragged; every
-     other member of its group then moves by that same rounded delta, so the
-     group still travels as one rigid unit rather than each piece drifting to
-     its own nearest line (see groupMembersFor()) */
-  var snapFrom = snapOriginOf(elRect);
-  showGridOverlay(true);
+  /* snapping follows the edges of the element actually being dragged; every
+     other member of its group then moves by that same snapped delta, so the
+     group still travels as one rigid unit rather than each piece sticking to
+     its own nearest line (see groupMembersFor()). Its members are also left
+     out of the targets, since they're moving too. */
+  var snapFrom = snapLinesOf(elRect);
+  beginSnapDrag(el, groupMembers.map(function (m) { return m.el; }));
 
   function onMove(ev) {
-    var dx = snapDelta(snapFrom.x, ev.clientX - startX);
-    var dy = snapDelta(snapFrom.y, ev.clientY - startY);
+    var s = snapMoveDelta(snapFrom, ev.clientX - startX, ev.clientY - startY);
+    var dx = s.dx, dy = s.dy;
     /* inside a tile/live area the drag stops dead at the container's edge
        and grinds along it rather than escaping, see clampOwnPos() */
     var c = clampOwnPos(el, base.tx + dx, base.ty + dy);
@@ -7432,12 +7626,13 @@ function startMoveDrag(e) {
       setOwnPos(m.el, mc.tx, mc.ty);
     });
     positionRing();
+    paintSnapGuides();
   }
   function onUp() {
     document.removeEventListener("mousemove", onMove);
     document.removeEventListener("mouseup", onUp);
     RING_DRAGGING = false;
-    showGridOverlay(false);
+    endSnapDrag();
     var p = getPos(el);
     commitPosition(el);
     var moves = [{ id: elId(el), before: base, after: p }];
@@ -12621,10 +12816,11 @@ function wireResizable() {
   buildRing();
   window.addEventListener("scroll", positionRing, true);
   window.addEventListener("resize", positionRing);
-  /* the grid is fixed to the viewport but drawn in document coordinates, so
-     it has to be re-offset whenever the page moves under it - a drag near the
-     bottom edge scrolls the frame, see positionGridOverlay() */
-  window.addEventListener("scroll", positionGridOverlay, true);
+  /* the snap guides are fixed to the viewport but held in document
+     coordinates, so they have to be redrawn whenever the page moves under
+     them - a drag near the bottom edge scrolls the frame. A no-op with no
+     drag in progress, see paintSnapGuides(). */
+  window.addEventListener("scroll", paintSnapGuides, true);
 
   /* drag-anywhere move, delegated so it covers rerendered content too */
   document.addEventListener("mousedown", function (e) {
@@ -12702,7 +12898,7 @@ function wireResizable() {
     var startX = e.clientX, startY = e.clientY;
     var base = getPos(el);
     var moving = false;
-    /* set once the drag really starts, see snapOriginOf() */
+    /* set once the drag really starts, see snapLinesOf() */
     var snapFrom = null;
     /* other members of el's group (see groupOf()), each moved by the exact
        same delta as el so the group drags as one rigid unit; locked members
@@ -12731,12 +12927,12 @@ function wireResizable() {
            pointer travel, not an element one), so this rect is still the
            element's pre-drag corner, same as the handle drag's - see
            startMoveDrag() */
-        snapFrom = snapOriginOf(elRect);
-        showGridOverlay(true);
+        snapFrom = snapLinesOf(elRect);
+        beginSnapDrag(el, groupMembers.map(function (m) { return m.el; }));
       }
       ev.preventDefault();
-      var dx = snapDelta(snapFrom.x, ev.clientX - startX);
-      var dy = snapDelta(snapFrom.y, ev.clientY - startY);
+      var s = snapMoveDelta(snapFrom, ev.clientX - startX, ev.clientY - startY);
+      var dx = s.dx, dy = s.dy;
       /* same edge-clamp a handle drag gets, see clampOwnPos() */
       var c = clampOwnPos(el, base.tx + dx, base.ty + dy);
       setOwnPos(el, c.tx, c.ty);
@@ -12745,13 +12941,14 @@ function wireResizable() {
         setOwnPos(m.el, mc.tx, mc.ty);
       });
       positionRing();
+      paintSnapGuides();
     }
     function onUp() {
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
       if (!moving) return; /* plain click, let it click/edit as normal */
       RING_DRAGGING = false;
-      showGridOverlay(false);
+      endSnapDrag();
       document.body.style.userSelect = "";
       JUST_DRAGGED = true;
       setTimeout(function () { JUST_DRAGGED = false; }, 0);
@@ -12797,20 +12994,19 @@ function wireResizable() {
     deleteElement(RING_EL);
   });
 
-  /* Shift+R turns grid snapping on and off (see the GRID SNAPPING section).
-     Canva's shortcut, which is its rulers-and-guides toggle - it has no
-     separate one for snapping itself - and it's free here, where the portal's
-     own Snap switch is the same setting from outside the frame. Same "not
-     while text is being typed" guard as every shortcut above; unlike them it
-     doesn't need a selection, since it's about the next drag, not this
-     element. */
+  /* Shift+R turns snapping on and off (see the SNAPPING section). Canva's
+     shortcut, which is its rulers-and-guides toggle - it has no separate one
+     for snapping itself - and it's free here, where the portal's own Snap
+     switch is the same setting from outside the frame. Same "not while text
+     is being typed" guard as every shortcut above; unlike them it doesn't
+     need a selection, since it's about the next drag, not this element. */
   document.addEventListener("keydown", function (e) {
     if (e.key !== "r" && e.key !== "R") return;
     if (!e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
     var active = document.activeElement;
     if (active && (active.isContentEditable || active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT")) return;
     e.preventDefault();
-    toggleGridSnap();
+    toggleSnapping();
   });
 
   /* Arrow keys nudge whatever the ring is currently on, 1px a press, 10px
@@ -12819,9 +13015,9 @@ function wireResizable() {
      element can't be nudged either, same rule a drag already follows, see
      startMoveDrag()), plus its own one-entry-per-press undo step since
      each press is already its own discrete action, not a drag gesture.
-     Deliberately NOT rounded to the grid when snapping is on: this is the
-     one way to place something between two grid lines without turning the
-     whole thing off, see the GRID SNAPPING section. */
+     Deliberately NOT snapped: this is the one way to place something a few
+     px off a neighbour's edge without turning snapping off, see the SNAPPING
+     section. */
   var ARROW_DELTAS = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] };
   document.addEventListener("keydown", function (e) {
     var d = ARROW_DELTAS[e.key];

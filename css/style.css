@@ -84,7 +84,11 @@ img { max-width: 100%; display: block; }
 
 /* faint logo watermark behind the "from circuits to robots" copy, scrolls
    with the page. #about clips it (overflow: hidden) so it can never bleed
-   into the lighter section below */
+   into the lighter section below. The z-index below is only the no-js
+   default: js/main.js ranks this in the layer order like any other element
+   (see BACKDROP_IDS) and stamps a real one, which is what lets a ta send a
+   photo behind it - at a hardcoded 0 nothing could ever get under it, since
+   applyLayerOrder() hands every tracked element 1 or more */
 #about { position: relative; overflow: hidden; }
 .bg-logo {
   position: absolute;
@@ -2379,6 +2383,25 @@ body.edit-mode .apply-bob { animation: none; }
    available, so only the trash handle goes, not the whole ring. */
 .sel-ring.undeletable .delh { display: none; }
 
+/* the page itself (see isPageEl()/selectPage() in js/main.js), selected by
+   clicking any empty spot on it. It's a surface, not something sitting on
+   one: it can't be moved, resized, deleted, layered or stepped up to a
+   parent, so every handle but the style one goes, leaving a plain frame
+   around the viewport and one way in to its colors. Dashed rather than the
+   solid line every other selection gets, since this frame is the whole
+   window edge and a solid one reads as a border a ta has somehow drawn on
+   the page. */
+.sel-ring.page-ring {
+  border-style: dashed;
+}
+.sel-ring.page-ring .rh,
+.sel-ring.page-ring .mvh,
+.sel-ring.page-ring .delh,
+.sel-ring.page-ring .lyh,
+.sel-ring.page-ring .parh {
+  display: none;
+}
+
 /* a day/attachment tile box (see isTileBoxEl() in js/main.js): freely
    resizable - that's how a ta re-tiles the container around it - but never
    movable, since a tile's position IS its container's packing order. Same
@@ -2496,12 +2519,18 @@ body.edit-mode .apply-bob { animation: none; }
   width: 50px;
   flex-shrink: 0;
 }
-/* "Background" (the Color row's own label on a button, see toggleStyleMenu())
-   and "Text color" both run longer than every other row's label, so this one
-   row needs a bit more room and no wrap, unlike the fixed 50px every other
-   short one-word label fits fine in */
+/* "Background" (the Color row's own label on a button, see toggleStyleMenu()),
+   "Text color", "Hover color" and "Click color" all run longer than every
+   other row's label, so these rows need a bit more room and no wrap, unlike
+   the fixed 50px every other short one-word label fits fine in. Without it the
+   two words break across two lines, which only showed up once the popover got
+   narrow enough for it to matter - on the page itself (see isPageEl()), whose
+   rows are all short and so never widen the panel the way a longer "Dark
+   mode ..." label happens to. */
 .ctx-menu .sm-color-row label,
-.ctx-menu .sm-textcolor-row label {
+.ctx-menu .sm-textcolor-row label,
+.ctx-menu .sm-hovercolor-row label,
+.ctx-menu .sm-activecolor-row label {
   width: 74px;
   white-space: nowrap;
 }

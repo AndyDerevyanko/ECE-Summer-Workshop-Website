@@ -1509,6 +1509,28 @@ function isGluedChild(el) {
 }
 
 /**
+ * True for the page itself: `<body data-resize-id="box.page">`, the surface
+ * every other element is painted onto rather than one more element painted
+ * onto it.
+ *
+ * The page is tracked like anything else so a ta can recolor it through the
+ * exact same machinery every other surface uses - light/dark pair, hover and
+ * click colors, opacity, its own undo entries - with no separate "page
+ * settings" pane to keep in sync (see selectPage()). What it can't do is
+ * everything that only makes sense for something ON the page: it never moves,
+ * resizes, is deleted, duplicated or reordered, since there's nothing for any
+ * of those to be relative to. This is the one test all those refusals share.
+ * Matched on the tag rather than the id so it stays right on a page whose body
+ * isn't tagged at all (the ta portal's own object canvas, see
+ * initObjectCanvas(), which wires the same editor).
+ * @param el the element
+ * @return true if el is the page
+ */
+function isPageEl(el) {
+  return !!(el && el.tagName === "BODY");
+}
+
+/**
  * Classifies an element so a resize drag can pick the right aspect-ratio
  * rule: an icon never distorts no matter what (its box's own ratio always
  * locked); an image or video never distorts its pixels either (object-fit:
@@ -2281,17 +2303,30 @@ function setHiddenVisual(el, hide) {
    re-deriving everything from content.layers again. */
 var LAYER_ORDER = [];
 
-/* the hero's own background video/scrim are deliberately not
-   data-edit-id/data-resize-id elements (no ring, no move/resize handles,
-   see CLAUDE.md's Media bullets), but a ta still needs "send to back" on
-   some OTHER element to be able to reach all the way behind them, not just
-   behind other tracked content, since visually they're as much a part of
-   "the page" as anything else. Two fixed synthetic ids, resolved by a
-   plain selector instead of a data attribute, let them take part in the
-   exact same flat z-index ranking as every real tracked leaf (see
-   applyLayerOrder()) without making them independently selectable/
-   resizable, which is still deliberately not offered for these two. */
-var HERO_MEDIA_IDS = { "media.hero.video": ".hero-bg", "media.hero.scrim": ".hero-scrim" };
+/* the page's own painted-in backdrops - the hero's background video and its
+   darkening scrim, and the faint logo watermark behind the about copy - are
+   deliberately not data-edit-id/data-resize-id elements (no ring, no move/
+   resize handles, see CLAUDE.md's Media bullets), but a ta still needs "send
+   to back" on some OTHER element to be able to reach all the way behind them,
+   not just behind other tracked content, since visually they're as much a part
+   of "the page" as anything else. Fixed synthetic ids, resolved by a plain
+   selector instead of a data attribute, let them take part in the exact same
+   flat z-index ranking as every real tracked leaf (see applyLayerOrder())
+   without making them independently selectable/resizable, which is still
+   deliberately not offered for any of them.
+
+   The watermark is why this isn't just the hero's two: it carries its own
+   `z-index: 0` in css/style.css, and applyLayerOrder() hands out 1 and up, so
+   EVERY tracked element on the page outranked it no matter where the layer
+   menu put it - sending the about photo to the back moved it behind every
+   other element and still left it painted over the logo, with no lower number
+   left to give it. Ranked here instead, "send to back" reaches past it like
+   anything else. */
+var BACKDROP_IDS = {
+  "media.hero.video": ".hero-bg",
+  "media.hero.scrim": ".hero-scrim",
+  "media.about.logo": ".bg-logo"
+};
 
 /**
  * Every currently-rendered tracked element's id, in DOM (paint) order,
@@ -2299,15 +2334,16 @@ var HERO_MEDIA_IDS = { "media.hero.video": ".hero-bg", "media.hero.scrim": ".her
  * list doesn't know about yet (a fresh blob, or a template id added since
  * it was saved), so an untouched page's stacking still matches exactly what
  * it looked like before any layer system existed. The hero's background
- * video/scrim (see HERO_MEDIA_IDS) are seeded first, ahead of everything
- * else, matching the backdrop position they've always visually had.
+ * video/scrim and the about watermark (see BACKDROP_IDS) are seeded first,
+ * ahead of everything else, matching the backdrop position they've always
+ * visually had.
  * @return array of ids, document order
  */
 function domOrderIds() {
   var seen = {};
   var ids = [];
-  Object.keys(HERO_MEDIA_IDS).forEach(function (id) {
-    if (document.querySelector(HERO_MEDIA_IDS[id])) { seen[id] = true; ids.push(id); }
+  Object.keys(BACKDROP_IDS).forEach(function (id) {
+    if (document.querySelector(BACKDROP_IDS[id])) { seen[id] = true; ids.push(id); }
   });
   document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
     var id = elId(el);
@@ -2961,22 +2997,21 @@ function applyLayerOrder(layers) {
   var order = (layers || []).slice();
   var have = {};
   order.forEach(function (id) { have[id] = true; });
-  /* the hero media ids specifically default to the very back (see
-     HERO_MEDIA_IDS), never merged in via the generic "append to the end"
-     rule below: an already-saved, already-customized order predates these
-     two (they didn't used to be part of the ranking at all), so a plain
+  /* the backdrop ids specifically default to the very back (see
+     BACKDROP_IDS), never merged in via the generic "append to the end"
+     rule below: an already-saved, already-customized order predates them
+     (they didn't used to be part of the ranking at all), so a plain
      append would land them in FRONT of everything already on the page,
-     exactly backwards for what's meant to be its own backdrop. Iterated in
-     REVERSE key order (video, scrim, so reversed: scrim, video) because
-     unshift() prepends, the opposite of domOrderIds()'s own push(): walking
-     the keys forward here would unshift video first then scrim second,
-     landing scrim BEHIND video (scrim would win the last unshift and end up
-     at index 0), invisibly hiding the scrim's own darkening under the
-     opaque video regardless of its opacity. Reversing first fixes the final
-     order to [video, scrim, ...], video truly backmost, scrim just above
-     it, matching domOrderIds()'s own video-then-scrim push order. */
-  Object.keys(HERO_MEDIA_IDS).reverse().forEach(function (id) {
-    if (!have[id] && document.querySelector(HERO_MEDIA_IDS[id])) { order.unshift(id); have[id] = true; }
+     exactly backwards for what's meant to be a backdrop. Iterated in
+     REVERSE key order because unshift() prepends, the opposite of
+     domOrderIds()'s own push(): walking the keys forward here would unshift
+     video first and scrim second, landing scrim BEHIND video (scrim would
+     win the last unshift and end up at index 0), invisibly hiding the
+     scrim's own darkening under the opaque video regardless of its opacity.
+     Reversing first fixes the final order to [video, scrim, watermark, ...],
+     video truly backmost, matching domOrderIds()'s own push order. */
+  Object.keys(BACKDROP_IDS).reverse().forEach(function (id) {
+    if (!have[id] && document.querySelector(BACKDROP_IDS[id])) { order.unshift(id); have[id] = true; }
   });
   domOrderIds().forEach(function (id) {
     if (!have[id]) { order.push(id); have[id] = true; }
@@ -2996,12 +3031,12 @@ function applyLayerOrder(layers) {
     if (!id) return;
     members.push({ el: el, id: id, assignZ: !hasTrackedDescendants(el) });
   });
-  /* the hero's background video/scrim (see HERO_MEDIA_IDS) join the same
-     flat ranking as any other leaf, always assignZ (neither ever wraps
+  /* the page's painted-in backdrops (see BACKDROP_IDS) join the same
+     flat ranking as any other leaf, always assignZ (none of them ever wraps
      tracked content), so "send to back" on some other element can outrank
      them same as it would any other leaf. */
-  Object.keys(HERO_MEDIA_IDS).forEach(function (id) {
-    var el = document.querySelector(HERO_MEDIA_IDS[id]);
+  Object.keys(BACKDROP_IDS).forEach(function (id) {
+    var el = document.querySelector(BACKDROP_IDS[id]);
     if (el) members.push({ el: el, id: id, assignZ: true });
   });
   var nonFixed = members.filter(function (m) { return !isFixedInstance(m.el); });
@@ -6599,7 +6634,10 @@ function primeStyleMenuThemedRows(el) {
   var isExtrasArea = isLiveAreaEl(el);
   var isText = colorTarget(el) === "text";
   var isBtn = isButtonEl(el);
-  var shapeDisplay = (isIcon || isDatetime) ? "none" : "";
+  /* kept in step with toggleStyleMenu()'s own copy: this one owns the border
+     pair's dark row, which swaps in and out by theme and so can't just be
+     hidden once with the rest of the .sm-shape-row group */
+  var shapeDisplay = (isIcon || isDatetime || isPageEl(el)) ? "none" : "";
 
   if (!isImg && !isProgress && !isExtrasArea) {
     var colorBefore = primeThemedColorRow(currentColorValue(el),
@@ -6768,6 +6806,7 @@ function toggleStyleMenu(anchorEl) {
   var isText = colorTarget(el) === "text";
   var isBtn = isButtonEl(el);
   var isThemeToggle = el.hasAttribute("data-theme-toggle");
+  var isPage = isPageEl(el);
   /* a progress element paints its own Progress color/Bar color rows
      instead of the generic Color row (see colorTarget(), which would
      otherwise call it a plain "bg" target); the extras/days-area container
@@ -6779,8 +6818,10 @@ function toggleStyleMenu(anchorEl) {
   STYLE_MENU.querySelectorAll(".sm-progress-row").forEach(function (row) { row.style.display = isProgress ? "" : "none"; });
   /* for every other bg-target element "Color" is the only surface control
      there is, but a button also gets its own separate Text color row right
-     below, so it's worth spelling out which one this now is */
-  STYLE_MENU.querySelector(".sm-color-label").textContent = isBtn ? "Background" : "Color";
+     below, so it's worth spelling out which one this now is - and on the page,
+     where "Color" alone could just as easily read as its text colour, saying
+     background is what makes it unambiguous */
+  STYLE_MENU.querySelector(".sm-color-label").textContent = (isBtn || isPage) ? "Background" : "Color";
   STYLE_MENU.querySelector(".sm-textcolor-row").style.display = isBtn ? "" : "none";
   STYLE_MENU.querySelector(".sm-textcolor-dark-row").style.display = isBtn ? "" : "none";
   STYLE_MENU.querySelector(".sm-textcolor-toggle-row").style.display = isBtn ? "" : "none";
@@ -6804,8 +6845,12 @@ function toggleStyleMenu(anchorEl) {
   STYLE_MENU.querySelector(".sm-tint-row").style.display = isImg ? "" : "none";
   STYLE_MENU.querySelector(".sm-shade-row").style.display = isImg ? "" : "none";
   /* rounding/border/shadow on the bare digits text make no more sense than
-     on an icon, so hide the shape group for a datetime element too */
-  var shapeDisplay = (isIcon || isDatetime) ? "none" : "";
+     on an icon, so hide the shape group for a datetime element too - and for
+     the page, which has no edges to round or outline: a page background is
+     propagated to the browser's canvas and painted over the whole window,
+     body's own box (which is what a radius or a border would follow) isn't
+     what a visitor ever sees. */
+  var shapeDisplay = (isIcon || isDatetime || isPage) ? "none" : "";
   STYLE_MENU.querySelectorAll(".sm-shape-row").forEach(function (row) { row.style.display = shapeDisplay; });
   STYLE_MENU.querySelectorAll(".sm-dt-row").forEach(function (row) { row.style.display = isDatetime ? "" : "none"; });
   /* Flip/Rotate only make sense on a leaf shape a TA actually placed to look
@@ -6871,7 +6916,7 @@ function toggleStyleMenu(anchorEl) {
     STYLE_DT_BEFORE = { target: dtd.target, format: fmt, strftime: dtd.strftime || "" };
   }
 
-  if (!isIcon && !isDatetime) {
+  if (!isIcon && !isDatetime && !isPage) {
     /* a progress bar is usually short and wide (eg 14px tall), so reaching
        a full pill shape needs a radius well past the 60px ceiling that's
        plenty for a normal card/tile; bump it just for this kind rather than
@@ -6947,6 +6992,40 @@ function hideStyleMenu() {
  * .locked so the move handle can dim/disable itself for a locked element
  * (see isLocked()/startMoveDrag()).
  */
+/* how far inside the viewport edge the page's own ring sits (see
+   positionRing()): flush against it, its border and its style button would be
+   half-hidden behind the window edge and the scrollbar. */
+var PAGE_RING_INSET = 2;
+
+/**
+ * Selects the page itself: the ring frames the viewport and its style button
+ * opens onto the page's own color rows (see isPageEl()). This is what an
+ * empty-space click does, since on a page whose own background is editable
+ * there's no longer any such thing as clicking "nothing" - and hiding it
+ * behind a right-click entry instead would leave the one surface a ta most
+ * obviously wants to recolor as the only one they can't just click.
+ *
+ * Falls back to plain deselection wherever the page isn't tagged: the ta
+ * portal's own object canvas wires this same editor onto a body with no
+ * box.page id of its own (see initObjectCanvas()), and an object being drawn
+ * there has no page to recolor.
+ */
+function selectPage() {
+  if (!elId(document.body)) { deselectAll(); return; }
+  RING_EL = document.body;
+  positionRing();
+}
+
+/** Drops the selection entirely - no ring, nothing queued for grouping. */
+function deselectAll() {
+  RING_EL = null;
+  if (RING) RING.style.display = "none";
+  /* with the selection gone, so is any preview that only existed for it, see
+     syncProgressPreview() */
+  syncProgressPreview();
+  if (SELECTED_IDS.length) clearSelection();
+}
+
 function positionRing() {
   /* the selection may have just changed (this runs on every path that changes
      it, including the ones that clear it), and an empty progress bar shows a
@@ -6954,7 +7033,19 @@ function positionRing() {
      syncProgressPreview(), which no-ops unless the selection really moved */
   syncProgressPreview();
   if (!RING || !RING_EL) return;
-  var r = RING_EL.getBoundingClientRect();
+  var page = isPageEl(RING_EL);
+  /* the page is framed by the VIEWPORT, not by its own box: body's rect is
+     the whole scrolling document, so a ring around it would put its corners
+     and its style button thousands of pixels off-screen on a long page, with
+     the ta's own click nowhere near either of them. Held in document
+     coordinates like every other ring (the ring is absolutely positioned) and
+     recomputed on scroll, which positionRing() is already wired to. */
+  var r = page
+    ? { left: PAGE_RING_INSET, top: PAGE_RING_INSET,
+        width: document.documentElement.clientWidth - PAGE_RING_INSET * 2,
+        height: document.documentElement.clientHeight - PAGE_RING_INSET * 2 }
+    : RING_EL.getBoundingClientRect();
+  RING.classList.toggle("page-ring", page);
   RING.style.display = "";
   RING.style.left = (r.left + window.scrollX) + "px";
   RING.style.top = (r.top + window.scrollY) + "px";
@@ -6983,9 +7074,11 @@ function positionRing() {
      button whose tooltip explains it and one a ta clicks and sees nothing
      happen. */
   if (PARENT_BTN && parent) {
-    PARENT_BTN.title = parent.classList.contains("reel")
-      ? "Select the whole reel (drag the tile itself to reorder it)"
-      : "Select the container around this";
+    PARENT_BTN.title = isPageEl(parent)
+      ? "Select the page itself (its background colour)"
+      : parent.classList.contains("reel")
+        ? "Select the whole reel (drag the tile itself to reorder it)"
+        : "Select the container around this";
   }
 }
 
@@ -7005,9 +7098,15 @@ function positionRing() {
  * @return the enclosing tracked element, or null
  */
 function parentSelectableOf(el) {
-  if (!el || isThemeToggleLabel(el)) return null;
+  if (!el || isThemeToggleLabel(el) || isPageEl(el)) return null;
   var p = el.parentElement;
-  while (p && p !== document.body) {
+  /* body is the last stop, not a boundary to stop BEFORE: it's the page, and
+     the page is tracked like anything else now (see isPageEl()). This is the
+     main way to reach it - a full-bleed section/header/footer covers nearly
+     every pixel of these pages, so "click an empty spot" only works where one
+     of them happens not to reach, and stepping up out of the outermost
+     container is exactly the gesture that means "the thing behind all this". */
+  while (p) {
     if (p.matches && p.matches(RESIZABLE_SEL)) return p;
     p = p.parentElement;
   }
@@ -7409,7 +7508,7 @@ function clearSnapGuides() {
  * @param e the handle's mousedown
  */
 function startResizeDrag(e) {
-  if (!RING_EL) return;
+  if (!RING_EL || isPageEl(RING_EL)) return;
   /* a reel tile's handles resize every tile in the reel at once, through the
      reel's own entry rather than through a size override of its own, so it
      takes its own drag entirely - see startReelTileResize() */
@@ -7574,7 +7673,10 @@ function startResizeDrag(e) {
  * @param e the handle's mousedown
  */
 function startMoveDrag(e) {
-  if (!RING_EL) return;
+  /* the page has nothing to move relative to, and its handles are hidden
+     anyway - this is the same defense in depth the resize path gets above,
+     see isPageEl() */
+  if (!RING_EL || isPageEl(RING_EL)) return;
   /* a reel tile CAN be moved, it just moves through the reel's own running
      order rather than to a free position of its own - the handle drags it
      along the strip and drops it between two other tiles, see
@@ -7881,6 +7983,10 @@ function setElementHidden(id, hidden) {
  * @param el the element to delete (always the current RING_EL)
  */
 function deleteElement(el) {
+  /* the page can't be deleted, there'd be nothing left to look at - covers
+     the ring's trash handle and the Delete/Backspace key alike (both land
+     here), though the handle is hidden on it anyway, see isPageEl() */
+  if (isPageEl(el)) return;
   /* a reel tile isn't an independently deletable thing - only the reel
      panel itself is (see buildReelElement()); this guard covers both the
      ring's own trash handle AND the Delete/Backspace keydown handler
@@ -11478,6 +11584,12 @@ function renderCtxMenuRoot() {
        the editor at all */
     '<div class="ctx-title">This page</div>' +
     '<button type="button" data-link-list="1">Links on this page</button>' +
+    /* the page's own background, straight to the colour rows. Clicking an
+       empty spot selects the page too (see selectPage()), and the ring's
+       parent handle steps up to it from any container - but on a page whose
+       sections run full-bleed there may be no empty spot to click, so this is
+       the one entry point that's always there. */
+    '<button type="button" data-page-bg="1">Page background...</button>' +
     /* the editor's own way to look at the other theme. The site's real
        light/dark button can't do this job inside the editor - there every
        click on it is a ta selecting, dragging or retyping it, and flipping the
@@ -11490,6 +11602,18 @@ function renderCtxMenuRoot() {
   CTX_MENU.querySelectorAll("button[data-add]").forEach(function (btn) {
     btn.addEventListener("click", function () { handleCtxAdd(btn.getAttribute("data-add")); });
   });
+  var pageBgBtn = CTX_MENU.querySelector("[data-page-bg]");
+  if (pageBgBtn) {
+    pageBgBtn.addEventListener("click", function () {
+      hideCtxMenu();
+      selectPage();
+      /* toggleStyleMenu() is a toggle, so an already-open popover (left over
+         from whatever was selected before) has to be closed first or this
+         would just close it again and open nothing */
+      hideStyleMenu();
+      if (RING_EL && STYLE_BTN) toggleStyleMenu(STYLE_BTN);
+    });
+  }
   var themePreviewBtn = CTX_MENU.querySelector("[data-theme-preview]");
   if (themePreviewBtn) {
     themePreviewBtn.addEventListener("click", function () {
@@ -12764,11 +12888,22 @@ function wireAddElementMenu() {
   }, true);
   document.addEventListener("keydown", function (e) {
     if (e.key !== "Escape") return;
-    if (CTX_MENU && CTX_MENU.classList.contains("show")) hideCtxMenu();
-    if (LAYER_MENU && LAYER_MENU.classList.contains("show")) hideLayerMenu();
-    if (STYLE_MENU && STYLE_MENU.classList.contains("show")) hideStyleMenu();
-    if (FX_MENU && FX_MENU.classList.contains("show")) closeFormulaMenu();
-    if (SELECTED_IDS.length) clearSelection();
+    var hadMenu = false;
+    if (CTX_MENU && CTX_MENU.classList.contains("show")) { hideCtxMenu(); hadMenu = true; }
+    if (LAYER_MENU && LAYER_MENU.classList.contains("show")) { hideLayerMenu(); hadMenu = true; }
+    if (STYLE_MENU && STYLE_MENU.classList.contains("show")) { hideStyleMenu(); hadMenu = true; }
+    if (FX_MENU && FX_MENU.classList.contains("show")) { closeFormulaMenu(); hadMenu = true; }
+    if (hadMenu) { if (SELECTED_IDS.length) clearSelection(); return; }
+    /* with nothing open to close, Escape drops the selection itself. It has to
+       be able to: an empty-space click now SELECTS something (the page, see
+       selectPage()) rather than deselecting, so without this there'd be no way
+       left to put the ring away at all. Escape mid-edit belongs to the text
+       field, which reverts and blurs on it (see wireClickToEdit()) - one key
+       press, one thing. */
+    var active = document.activeElement;
+    if (active && (active.isContentEditable || active.tagName === "INPUT" ||
+        active.tagName === "TEXTAREA" || active.tagName === "SELECT")) return;
+    deselectAll();
   });
   /* object-editor.js's saveObject() stamps this key after a successful save
      (a plain value, its content doesn't matter, only the change itself
@@ -12828,24 +12963,21 @@ function wireResizable() {
     if (RING.contains(e.target)) return;
     var el = resolveSelectableTarget(e.target);
     if (!el) {
-      /* clicked away from every tracked element: clear the sticky selection,
-         unless the click actually landed in one of the selected element's
-         own floating popovers (layer/style menus, the right-click add-
-         element menu, the rich text toolbar) - those aren't part of the
-         page content but still count as "still using the selection" */
+      /* clicked away from every tracked element: that's a click on the page
+         itself, so the page is what gets selected (see selectPage()) - unless
+         the click actually landed in one of the selected element's own
+         floating popovers (layer/style menus, the right-click add-element
+         menu, the rich text toolbar), which aren't part of the page content
+         at all and still count as "still using the selection" */
       if ((!LAYER_MENU || !LAYER_MENU.contains(e.target)) &&
           (!STYLE_MENU || !STYLE_MENU.contains(e.target)) &&
           (!CTX_MENU || !CTX_MENU.contains(e.target)) &&
           (!TEXT_TOOLBAR || !TEXT_TOOLBAR.contains(e.target)) &&
           (!FX_MENU || !FX_MENU.contains(e.target))) {
-        RING_EL = null;
-        RING.style.display = "none";
-        /* and with the selection gone, so is any preview that only existed
-           for it, see syncProgressPreview() */
-        syncProgressPreview();
-        /* the grouping queue goes with it: it only ever exists relative to a
-           live selection, see toggleSelected() */
+        /* the grouping queue goes either way: it only ever exists relative to
+           a live selection, see toggleSelected() */
         if (SELECTED_IDS.length) clearSelection();
+        selectPage();
       }
       return;
     }
@@ -13022,7 +13154,7 @@ function wireResizable() {
   document.addEventListener("keydown", function (e) {
     var d = ARROW_DELTAS[e.key];
     if (!d) return;
-    if (!RING_EL || isLocked(elId(RING_EL)) || isMoveLockedTileRole(RING_EL)) return;
+    if (!RING_EL || isPageEl(RING_EL) || isLocked(elId(RING_EL)) || isMoveLockedTileRole(RING_EL)) return;
     var active = document.activeElement;
     if (active && (active.isContentEditable || active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT")) return;
     e.preventDefault();
@@ -13133,6 +13265,8 @@ function showEditToast(msg) {
  */
 function isDuplicatable(el) {
   if (!el) return false;
+  /* a second page pasted onto the first one is meaningless, see isPageEl() */
+  if (isPageEl(el)) return false;
   var id = elId(el);
   var targetData = id && customElementById(id);
   var isDatetime = targetData && targetData.kind === "datetime";

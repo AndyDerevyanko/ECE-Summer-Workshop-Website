@@ -2387,6 +2387,31 @@ function hasTrackedDescendants(el) {
 }
 
 /**
+ * Whether el is the root of a pasted copy (see pasteClipAsElement(), and
+ * data-clip-root in buildCustomElementNode()). The single exception to
+ * applyLayerOrder()'s "a container never gets a number" rule, because a paste
+ * is the only container that routinely has to paint against something it
+ * OVERLAPS: it lands 24px off whatever it was copied from, so the original is
+ * directly underneath it. Without a number of its own, a pasted card is a
+ * z-index:auto positioned box, and css paints every positively-ranked leaf
+ * above every one of those whatever the dom order - so the original's own
+ * heading and icons came straight through the copy's panel and the two read as
+ * one garbled card.
+ *
+ * The rule exists to stop a container trapping its contents in a stacking
+ * context, and a paste is the one place that costs nothing: its parts are the
+ * copy's parts, the layer menu already moves a container's subtree as one
+ * block (layerSubtreeIds()), and the whole thing is placed on top of the order
+ * at the moment it's pasted. Every OTHER container stays unranked, so a hero
+ * caption can still go behind a video in a different section.
+ * @param el the element
+ * @return true if el is a pasted copy's root
+ */
+function isClipRoot(el) {
+  return !!(el && el.hasAttribute && el.hasAttribute("data-clip-root"));
+}
+
+/**
  * Applies (or removes) the "deleted" look/behavior for one element, without
  * persisting anything (setElementHidden() below does that on top of this;
  * applyHiddenOverrides() calls this directly on every load, since a real
@@ -3467,9 +3492,11 @@ function applyLayerOrder(layers) {
 
   /* one flat pass over every actual DOM element: a container (has tracked
      descendants of its own) never gets an explicit z-index, see the doc
-     comment above */
+     comment above - the pasted-copy exception included, see isClipRoot() */
   var members = layerMembers();
-  members.forEach(function (m) { m.assignZ = !hasTrackedDescendants(m.el); });
+  members.forEach(function (m) {
+    m.assignZ = !hasTrackedDescendants(m.el) || isClipRoot(m.el);
+  });
   members.sort(byLayerRank(rank));
   var top = members.length + 1;
 
@@ -9819,6 +9846,11 @@ function buildCustomElementNode(d) {
       el = document.createElement("div");
       el.setAttribute("data-resize-id", d.id);
     }
+    /* marks it for isClipRoot(), the one container kind that gets a rank of
+       its own. Stamped here rather than baked into the stored markup so it's
+       reapplied on every load from the descriptor's own kind, and so a copy
+       taken OF a paste can't inherit it without going through this branch */
+    el.setAttribute("data-clip-root", "1");
   } else if (d.kind === "extrasIcon") {
     /* the attachments-tile-exclusive "Attachment icon" element (offered by
        renderCtxMenuRoot() only while the right-click landed on an attachment
@@ -10903,15 +10935,14 @@ function duplicateElement(sourceEl) {
    would silently overwrite their element. This is the editor's own clipboard,
    holding exactly one element, only ever written by Ctrl+C in here.
 
-   What's stored is the element's markup, not a reference to it. Pasting on the
-   page it came from still goes through duplicateElement() (a live clone slots
-   into the source's own flow layout, which is what you want for a second card
-   in a row of cards); pasting anywhere else rebuilds the stored markup as a
-   free-placed custom element, since the page being pasted into has no source
-   element to clone or sit next to. That's also what makes it survive a reload:
-   a duplicate is re-cloned from its source id on every load and would have
-   nothing to clone on a page the source doesn't exist on, whereas a custom
-   element carries everything it needs to rebuild itself.
+   What's stored is the element's markup, not a reference to it, and a paste
+   rebuilds that markup as a free-placed custom element wherever it lands - on
+   the page it was copied from just as much as on any other (see
+   pasteEditorClip(), which places it overlapping whatever it was pasted off).
+   Free-placed is also what makes a paste survive a reload: a duplicate is
+   re-cloned from its source id on every load and would have nothing to clone on
+   a page the source doesn't exist on, whereas a custom element carries
+   everything it needs to rebuild itself.
    --------------------------------------------------------------------------- */
 
 /* one element, shared by every page of the editor. Deliberately its own key
@@ -10919,6 +10950,22 @@ function duplicateElement(sourceEl) {
    content until it's actually pasted, and it must never ride along into an
    Apply, a saved profile, or a preview. */
 var EDITOR_CLIP_KEY = "editor_clipboard";
+
+/* how far a paste lands from whatever it was pasted off, in both axes. Small
+   enough that the copy still overlaps the original (so it reads as "that's a
+   second one of those", not "something new appeared over there"), big enough
+   that the corner sticking out is unmistakable. Same 24px insertDuplicateClone()
+   already nudges an out-of-flow duplicate by, so a Duplicate and a paste of the
+   same element sit in the same place. */
+var PASTE_OFFSET = 24;
+
+/* the last element pasted from the clipboard entry currently held, so a run of
+   pastes cascades down the diagonal instead of dropping every copy on the same
+   spot. Cleared by a fresh Ctrl+C (a new copy anchors to its OWN source) and
+   never persisted - it's a within-session convenience, and the id it holds may
+   not even exist on the next page the ta pastes onto, which pasteAnchorEl()
+   checks for rather than assumes. */
+var LAST_PASTE_ID = null;
 
 /**
  * Strips the bits of a copied subtree that only meant something where it came
@@ -10974,6 +11021,9 @@ function copyElementToClipboard(sourceEl) {
   clone.style.height = h + "px";
   var clip = { page: currentPageKey(), sourceId: sourceId, html: clone.outerHTML };
   try { localStorage.setItem(EDITOR_CLIP_KEY, JSON.stringify(clip)); } catch (e) { return false; }
+  /* a new copy starts its own cascade: the first paste of THIS element belongs
+     next to this element, not next to whatever was pasted last */
+  LAST_PASTE_ID = null;
   return true;
 }
 
@@ -10989,23 +11039,65 @@ function readEditorClip() {
 }
 
 /**
- * Ctrl+V: pastes whatever's on the editor clipboard. On the page it was copied
- * from, and while that source is still there, this is exactly the old
- * behaviour - a plain duplicateElement(), inserted into the source's own flow
- * position. Anywhere else there's nothing to clone or sit beside, so the
- * stored markup gets rebuilt as a free-placed element at (x, y).
- * @param x drop point, document px
- * @param y drop point, document px
+ * What a paste should be measured from: the previous paste of the same clip if
+ * it's still on this page (so a run of Ctrl+V walks down the diagonal rather
+ * than piling every copy on one spot), otherwise the element that was copied,
+ * if the ta is still on the page it came from. Null on any other page, where
+ * there's nothing on screen for the copy to sit near and the drop falls back to
+ * the pointer.
+ * @param clip see readEditorClip()
+ * @return the element to place the next paste relative to, or null
+ */
+function pasteAnchorEl(clip) {
+  var prev = LAST_PASTE_ID && elByAnyId(LAST_PASTE_ID);
+  if (prev) return prev;
+  if (clip.page !== currentPageKey()) return null;
+  return (clip.sourceId && elByAnyId(clip.sourceId)) || null;
+}
+
+/**
+ * Ctrl+V: pastes whatever's on the editor clipboard, landing PASTE_OFFSET px
+ * down-and-right of whatever it was pasted off (see pasteAnchorEl()) so the
+ * copy overlaps the original with one corner clear of it - the "there are two
+ * of these now" read every other design tool gives you.
+ *
+ * That drop point is the whole reason this no longer routes a same-page paste
+ * through duplicateElement(). A duplicate is inserted into the source's own
+ * FLOW position, which is right for the right-click Duplicate button (a second
+ * card slots into the row of cards its original sits in) but is the one thing a
+ * paste must not do: flow decides where the copy goes, so it lands a full
+ * element away - a duplicated hero image appeared 342px down the page - and it
+ * reflows everything below it on the way. A paste is rebuilt as a free-placed
+ * element instead, exactly as a paste onto any OTHER page already was, so it
+ * takes the coordinates it's given and costs the page no layout at all.
+ *
+ * The exception is an element living in the fixed navbar, which stays on
+ * duplicateElement(): the bar doesn't scroll with the document, so a copy
+ * pinned to document coordinates would slide out from under it on the first
+ * scroll. A clone dropped into the bar's own flex row is beside its original
+ * and stays there.
+ * @param x fallback drop point (the pointer), document px, used only when
+ *   there's no anchor on this page
+ * @param y fallback drop point, document px
  * @return the pasted element, or null if the clipboard was empty
  */
 function pasteEditorClip(x, y) {
   var clip = readEditorClip();
   if (!clip) return null;
-  if (clip.page === currentPageKey()) {
-    var src = clip.sourceId && elByAnyId(clip.sourceId);
-    if (src) return duplicateElement(src);
+  var anchor = pasteAnchorEl(clip);
+  var pasted;
+  if (anchor && anchor.closest && anchor.closest("nav")) {
+    pasted = duplicateElement(anchor);
+  } else {
+    if (anchor) {
+      var r = anchor.getBoundingClientRect();
+      x = r.left + window.scrollX + PASTE_OFFSET;
+      y = r.top + window.scrollY + PASTE_OFFSET;
+    }
+    pasted = pasteClipAsElement(clip, x, y);
   }
-  return pasteClipAsElement(clip, x, y);
+  LAST_PASTE_ID = pasted ? elId(pasted) : null;
+  return pasted;
 }
 
 /**
@@ -13712,9 +13804,9 @@ function wireResizable() {
 
      The copy goes to the editor's own localStorage clipboard rather than a
      variable in here, so it can be pasted onto a different page of the
-     editor - see the EDITOR CLIPBOARD section. A paste that isn't going back
-     onto the page it was copied from lands wherever the pointer is, since
-     there's no original to slot in next to. */
+     editor - see the EDITOR CLIPBOARD section. The pointer position handed to
+     pasteEditorClip() below is only the fallback: a paste that has its original
+     (or an earlier paste of it) on screen is placed just off that instead. */
   var pointer = null;
   document.addEventListener("mousemove", function (e) {
     pointer = { x: e.pageX, y: e.pageY };

@@ -84,11 +84,20 @@ img { max-width: 100%; display: block; }
 
 /* faint logo watermark behind the "from circuits to robots" copy, scrolls
    with the page. #about clips it (overflow: hidden) so it can never bleed
-   into the lighter section below. The z-index below is only the no-js
-   default: js/main.js ranks this in the layer order like any other element
-   (see BACKDROP_IDS) and stamps a real one, which is what lets a ta send a
-   photo behind it - at a hardcoded 0 nothing could ever get under it, since
-   applyLayerOrder() hands every tracked element 1 or more */
+   into the lighter section below, and carries no z-index of its own, so it
+   never becomes a stacking context and never walls this off from the rest of
+   the page's layer order (see applyLayerOrder() in js/main.js).
+
+   The z-index here is only the no-js default; js/main.js stamps a real one.
+   NO `pointer-events: none`: this is a tracked, selectable element
+   (data-resize-id="media.about.logo" in templates/index.html), and it has to
+   be clickable to be one. While it was inert, sending a photo behind it gave
+   the photo the lower number correctly and still left the watermark
+   unclickable and unselectable - so the one gesture that would show the photo
+   HAD gone behind (clicking there and getting the watermark) was impossible,
+   and at 5% opacity nothing else showed it either. The opacity is a starting
+   value now rather than a fixed fact: it's editable from the style popover
+   like any other element's. */
 #about { position: relative; overflow: hidden; }
 .bg-logo {
   position: absolute;
@@ -98,7 +107,6 @@ img { max-width: 100%; display: block; }
   max-width: none;
   transform: translate(-50%, -50%);
   opacity: .05;
-  pointer-events: none;
   user-select: none;
   z-index: 0;
 }
@@ -271,29 +279,56 @@ h1, h2, h3 {
   z-index: 50;
   background: var(--surface-2);
 }
-/* a second copy of the bar's own surface, one layer up, so that "send to
-   back" can actually put a nav element BEHIND the bar. A stacking context
-   paints its own background first and everything inside it afterwards,
-   negative z-index children included, so while the surface was ONLY the
-   nav's own background there was no z-index low enough for the theme toggle
-   to hide under it - sending it to the back visibly did nothing. This layer
-   sits at z-index:-1, which leaves room underneath: applyLayerOrder()
-   (js/main.js) hands out -2 and down to anything a ta ranks below the nav
-   itself, and those now slide under the bar the way the layer menu says.
-   `inherit`, not a literal colour, so a ta's own navbar colour (an inline
-   background-color on .nav, see setElementColor()) still shows - the
-   pseudo-element is what's actually seen now, and a hard-coded colour here
-   would quietly paint over every recolour of the bar. The one cost of
-   inheriting rather than moving the colour outright: a navbar a ta has FADED
-   with the opacity slider now composites its colour twice (the nav's own
-   layer, then this one) and reads a little more solid than the slider says.
-   Taking the colour off `.nav` entirely would fix that and break the
-   inheritance this depends on, so the trade goes this way. */
-.nav::before {
-  content: "";
+/* A container's own painted surface, re-painted as a real child layer so the
+   layer menu has something it can rank other elements BELOW. Built and sized
+   by ensureLayerSurfaces() (js/main.js) for every tracked container that
+   paints an opaque surface of its own - the navbar, a day row, an info card, a
+   reel tile, a prizes banner, a whole section - and given an ordinary rank by
+   applyLayerOrder() like any other layer.
+
+   The reason it has to exist at all: a container's `background` is painted
+   before ANY of its descendants, in every stacking context, always. No
+   z-index a child can be given puts it under its own parent's background, so
+   "send to back" on a card's title could never actually put the title behind
+   the card - the one thing it obviously ought to mean. A copy of that surface
+   painted as a real sibling layer can be ranked over, and once the title is
+   ranked under the copy it visibly goes behind the panel.
+
+   Nothing is HOLLOWED to make room for it: the container keeps its own
+   background, and this paints an identical one directly over it. That's why
+   ensureLayerSurfaces() only builds one when the container's background is
+   fully opaque - painting an opaque colour twice is the same as painting it
+   once, so a page with no reordering on it renders byte-identical, while
+   painting a TRANSLUCENT one twice would darken every panel on the site. It
+   also means a ta's own recolour (an inline background-color on the element,
+   see setElementColor()) needs no separate handling: `inherit` follows it,
+   the same way the navbar's old `::before` copy did.
+
+   Sized to the container's BORDER box (js writes the negative insets from the
+   real border widths, and box-sizing keeps the inherited border inside them)
+   rather than to the padding box, so an element sent behind a panel doesn't
+   go on showing through the panel's own border. `pointer-events: none`
+   because it is decoration over paint that is already there and must never
+   take a click off the container underneath it.
+
+   `z-index: -1` is not a rank and is never reordered. It is the ONE number
+   that means "above this element's own background, below everything in it":
+   css paints negative-z descendants immediately after the background of the
+   context they belong to and before every other descendant, positioned or
+   not, ranked or not. A positive number here would have been a rank - and
+   would have put the panel over every UNTRACKED thing in the box as well,
+   since a positive z-index beats plain in-flow content and any z-index:auto
+   positioned descendant (a reel's own drifting track, say) whatever the
+   document order is. That version blanked the entire "what you'll learn" reel
+   out behind the section it sits in. Anything a ta ranks under a surface goes
+   below this instead, at -2 and down - see applyLayerOrder(). */
+.layer-surface {
   position: absolute;
-  inset: 0;
+  box-sizing: border-box;
   background: inherit;
+  border: inherit;
+  border-radius: inherit;
+  pointer-events: none;
   z-index: -1;
 }
 /* the landing page ships two navbars, one per session state (see the two
@@ -457,12 +492,12 @@ h1, h2, h3 {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  /* no z-index here at all: js/main.js's applyLayerOrder() stamps a real
-     one on load (see HERO_MEDIA_IDS), the same flat ranking every other
-     tracked leaf competes in, so a ta's "send to back" on some other
-     element can actually outrank this. Before that runs (or with js off),
-     plain dom order already paints this correctly below .wrap's content:
-     both are z-index:auto at that point, and this comes first in the
+  /* no z-index here at all: js/main.js's applyLayerOrder() stamps a real one
+     on load, ranked flatly against every other element on the page (this is a
+     tracked element, data-resize-id="media.hero.video"), so a ta's "send to
+     back" on some other element can actually outrank it. Before that runs (or
+     with js off), plain dom order already paints this correctly below .wrap's
+     content: both are z-index:auto at that point, and this comes first in the
      markup, so it's already the bottom-most paint by default. */
 }
 .hero.hero-media .hero-scrim {
@@ -599,13 +634,25 @@ h1, h2, h3 {
   border-radius: var(--radius);
   transition: transform .32s cubic-bezier(.2,.8,.2,1), box-shadow .32s ease, border-color .2s ease;
 }
-.reel-tile.popped { transform: scale(1.08); box-shadow: var(--shadow-pop); z-index: 5; }
+/* a popped tile has to ride over the tiles either side of it, or the 1.08
+   scale just slides under its neighbour. !important because every tile
+   carries an INLINE z-index from applyLayerOrder() (js/main.js) - its rank in
+   the page-wide layer order - and an inline value beats any stylesheet rule
+   however specific, so without this the pop was silently a no-op on every
+   tile that had a later sibling. It can't leak out of the reel either, however
+   big the number: .reel-mask above carries a mask-image, which establishes a
+   stacking context of its own, so everything in here is ranked inside that and
+   clipped by its overflow regardless. */
+.reel-tile.popped { transform: scale(1.08); box-shadow: var(--shadow-pop); z-index: 999 !important; }
 /* a tile mid-reorder-drag (see startReelTileDrag() in js/main.js): rides
    above the tiles it's being carried past, and drops the transition that
-   would otherwise make it ease along a third of a second behind the cursor */
+   would otherwise make it ease along a third of a second behind the cursor.
+   !important for the same reason as .popped above - it has to beat the tile's
+   own inline rank - and one higher, so a tile being carried also clears one
+   that is merely popped under the cursor on the way past. */
 .reel-tile.reel-dragging {
   transition: none;
-  z-index: 6;
+  z-index: 1000 !important;
   box-shadow: var(--shadow-pop);
   cursor: grabbing;
 }
@@ -867,7 +914,9 @@ body.edit-mode .reel-tile { cursor: grab; }
   background: var(--surface);
   z-index: 0;
 }
-.gv-year > *:not(.gv-year-rect) { position: relative; z-index: 1; }
+/* positioned but deliberately z-index:auto - see the same rule on .day-card
+   below for why the number that used to be here broke the layer menu */
+.gv-year > *:not(.gv-year-rect) { position: relative; }
 .gv-year:hover { color: var(--text); }
 .gv-year.active { color: #fff; }
 .gv-year.active .gv-year-rect { background: var(--accent); }
@@ -1286,7 +1335,16 @@ body.edit-mode .login-field-ph { pointer-events: auto; }
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
-.day-card > *:not(.day-tile-rect) { position: relative; z-index: 1; }
+/* lifts a card's content off its rect with NO z-index of its own: positioned
+   and z-index:auto both paint in step 8 in tree order, and the rect is the
+   first child, so content lands above it either way. The `z-index: 1` this
+   used to carry did the same job but turned every child into a stacking
+   context of its own - including the untracked wrapper the open tile's daytag
+   and badge live in, which sealed both of them inside it, so "send to back"
+   on either could never reach the rect they were sitting on top of. The layer
+   system's own numbers (js/main.js's applyLayerOrder()) are inline and still
+   beat this either way. */
+.day-card > *:not(.day-tile-rect) { position: relative; }
 .day-card .daytag {
   font-family: var(--font-mono);
   font-size: .75rem;
@@ -1451,7 +1509,6 @@ body.edit-mode .login-field-ph { pointer-events: auto; }
 }
 .extras-tile-icon {
   position: relative;
-  z-index: 1;
   width: 18px;
   height: 18px;
   color: var(--muted);
@@ -1463,7 +1520,6 @@ body.edit-mode .login-field-ph { pointer-events: auto; }
    note on .extras-tile above */
 .extras-tile-text {
   position: relative;
-  z-index: 1;
   font-weight: 600;
   min-width: 0;
   white-space: nowrap;
@@ -1482,7 +1538,6 @@ body.edit-mode .login-field-ph { pointer-events: auto; }
    even if a ta's own width override makes the track wider than the button. */
 .extras-tile .extras-tile-btn {
   position: relative;
-  z-index: 1;
   margin-left: 0;
   justify-self: end;
   white-space: nowrap;
@@ -1513,20 +1568,35 @@ body.edit-mode .login-field-ph { pointer-events: auto; }
    --tile-h  the height one tile wants, applied as a min-height so every tile
              in a row matches whichever is tallest, never as a hard height.
 
-   auto-fill + minmax is what makes the reflow automatic: the number of columns
-   is a pure function of the container's current width, so dragging a container
+   auto-fill is what makes the reflow automatic: the number of columns is a
+   pure function of the container's current width, so dragging a container
    narrower repacks the tiles (fewer per row) and dragging a tile narrower
    packs more of them per row, with no js measuring anything. min(...,100%) is
    the "either the tile becomes thinner" half of the spec rule - a track never
    demands more than the container has, so a tile squeezes rather than bleeding
    out of its box; js/main.js's flowAreaMinWidth() supplies the other half,
    stopping the container's own resize once the tiles cannot squeeze further.
+
+   The `1fr` in that minmax is what stretches however many columns fitted to
+   fill the row, and it's the shipped look for a container nobody has touched.
+   It cannot survive a ta DRAGGING a tile's width though: the column count is a
+   step function of the container's width, so the width a tile actually PAINTED
+   at only changed when a column was gained or lost - the tile sat still,
+   still, still, then jumped, while the cursor moved smoothly. So the moment a
+   tile carries a dragged width (.tile-w-set, set by applyTileFlow() when
+   --tile-w is a real figure rather than the default) the track becomes exactly
+   that width and follows the cursor px for px. A part-full last line then
+   leaves its slack at the end of the row instead of dividing it up, which is
+   already how the .tile-flex path below (`flex: 0 0 auto`) behaves.
    --------------------------------------------------------------------------- */
 .tile-flow {
   display: grid;
   gap: var(--tile-gap, 10px);
   align-content: start;
   grid-template-columns: repeat(auto-fill, minmax(min(var(--tile-w, 100%), 100%), 1fr));
+}
+.tile-flow.tile-w-set {
+  grid-template-columns: repeat(auto-fill, min(var(--tile-w, 100%), 100%));
 }
 /* a non-tile child of a flow container (the "nothing here yet" placeholder)
    spans the whole row instead of taking a tile's column */
@@ -2159,8 +2229,9 @@ body.edit-mode .btn-ghost:hover { background: var(--surface-2); }
 /* an element "promoted to navbar" (right-click > Promote to navbar, see
    toggleFixed()/applyFixedHighlight() in js/main.js): its hitbox goes red
    instead of the usual accent color, so it's obvious at a glance which
-   elements are fixed (always stacked above every non-fixed one, see
-   applyLayerOrder()) and which aren't. same dashed/solid hover behavior,
+   elements are fixed (always stacked above every non-fixed one they share a
+   stacking scope with, see applyLayerOrder()) and which aren't. same
+   dashed/solid hover behavior,
    just a different outline color. */
 body.edit-mode [data-edit-id].edit-fixed,
 body.edit-mode [data-resize-id].edit-fixed {
@@ -3116,6 +3187,21 @@ body.edit-mode .fx-chip { cursor: pointer; border-bottom: 1px dashed currentColo
   text-transform: uppercase;
   letter-spacing: .6px;
   padding: 4px 8px 6px;
+}
+/* the right-click menu's first line: the id of the element it's about (see
+   renderCtxMenuRoot() in js/main.js). Mono and NOT uppercased, unlike the
+   section headings it otherwise matches - this is a literal, case-sensitive
+   key into content.*, and "BOX.SECTION.ABOUT" is a different string that
+   matches nothing. Wraps rather than truncating: a tile role id is long and
+   the tail is the part that says which one it is. */
+.ctx-menu .ctx-what {
+  text-transform: none;
+  font-family: var(--font-mono);
+  letter-spacing: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
 }
 .ctx-menu button {
   display: flex;

@@ -23,10 +23,10 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap"
     rel="stylesheet" />
-  <link rel="stylesheet" href="css/style.css?v=22" />
+  <link rel="stylesheet" href="css/style.css?v=30" />
 </head>
 
-<body class="mono" data-resize-id="box.page">
+<body class="mono" data-page-id="box.page">
 
   <!-- ===== nav =====
        TWO navbars, not one: this page looks different to a signed-out visitor
@@ -128,8 +128,15 @@
     <!-- cover-video.mp4 is robot-moving/-2/-3 + bluetooth-robot trimmed and
          merged into one clip (see git history for the ffmpeg steps), so the
          loop is seamless instead of jumping between separate <video> sources -->
-    <video class="hero-bg" src="assets/cover-video.mp4" autoplay muted loop playsinline></video>
-    <div class="hero-scrim"></div>
+    <!-- the hero's two backdrop layers are tracked elements like anything
+         else (data-resize-id), not untouchable decoration: a backdrop you
+         cannot click is a backdrop the layer menu can only pretend to rank,
+         see the BACKDROP_DEFAULT_BACK_IDS note in js/main.js. The ids are the
+         ones the old synthetic table used, so a saved content.layers still
+         resolves. -->
+    <video class="hero-bg" src="assets/cover-video.mp4" autoplay muted loop playsinline
+      data-resize-id="media.hero.video"></video>
+    <div class="hero-scrim" data-resize-id="media.hero.scrim"></div>
     <div class="wrap">
       <p class="eyebrow" data-edit-id="hero.eyebrow">University of Toronto · ECE</p>
       <h1><span data-edit-id="hero.title">Design, Build and </span><span class="grad" data-edit-id="hero.title.accent">Compete</span></h1>
@@ -153,9 +160,29 @@
   </header>
 
   <!-- ===== about ===== -->
-  <section class="section" id="about" data-resize-id="box.section.about">
-    <!-- faint upscaled logo mark (no text), contained to this section only -->
-    <img class="bg-logo" src="assets/logo-mark.png" alt="" aria-hidden="true" />
+  <!-- deliberately NOT tracked, unlike the four sections below it. As an
+       editable element this was a full-width transparent rectangle sitting
+       behind the heading, the copy and all four photos, with nothing of its
+       own to show for it: no background to recolour (it inherits the page's),
+       no border, no corners - and every click on empty space in here landed on
+       it instead of on the page, so the one surface a ta actually wants at
+       that spot (the page background) was the harder of the two to reach. It
+       was also freely draggable, which for a section in normal flow means
+       shoving the whole About block off its own layout.
+
+       Nothing in js or app/db.py ever referenced box.section.about - it was
+       only ever a handle - so this is purely the handle going away. A saved
+       content.layers that still lists the id resolves to no element and is
+       skipped (applyLayerOrder() in js/main.js). -->
+  <section class="section" id="about">
+    <!-- faint upscaled logo mark (no text), contained to this section only.
+         Tracked (data-resize-id) so it can be selected, restyled - its opacity
+         included - and layered like any other element: it's the surface a ta
+         sends a photo behind, and one that can't be clicked or shown a ring
+         gives no way to tell whether the photo went behind it. aria-hidden
+         stays; it's decoration to a screen reader either way. -->
+    <img class="bg-logo" src="assets/logo-mark.png" alt="" aria-hidden="true"
+      data-resize-id="media.about.logo" />
     <div class="wrap split" id="gallery">
       <div class="reveal">
         <h2 data-edit-id="about.heading">From circuits to robots&hellip;</h2>
@@ -422,7 +449,7 @@
   </footer>
 
   <script src="js/theme.js?v=4"></script>
-  <script src="js/main.js?v=22"></script>
+  <script src="js/main.js?v=30"></script>
   <script src="js/learn-reel.js?v=6"></script>
 </body>
 

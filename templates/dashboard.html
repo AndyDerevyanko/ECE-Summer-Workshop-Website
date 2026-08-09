@@ -17,9 +17,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/style.css?v=22" />
+  <link rel="stylesheet" href="css/style.css?v=30" />
 </head>
-<body class="mono" data-resize-id="box.page">
+<body class="mono" data-page-id="box.page">
 
   <nav class="nav" data-resize-id="box.nav">
     <div class="wrap nav-inner">
@@ -44,7 +44,17 @@
           </span>
           <span class="tic-label" data-edit-id="nav.themeBtn.label">Light mode</span>
         </button>
-        <button class="btn btn-ghost" id="logoutBtn" type="button" data-edit-id="dash.nav.logout">Log out</button>
+        <!-- app-only: there's nothing to log out of on the locked-out page,
+             and offering it there reads as "you ARE logged in, just not
+             allowed", which is the opposite of what happened. Same
+             data-dash-view marker the two halves of the page below use
+             (js/main.js's applyDashView()) - it works per element, so one
+             control can belong to one half while the navbar around it is
+             shared by both. Starts out of the document like the two halves
+             below do, and for the same reason: until the session is read the
+             right answer is "show nothing", and a stray Log out sitting over
+             a blank page is the one thing a visitor would notice. -->
+        <button class="btn btn-ghost dash-view-off" id="logoutBtn" type="button" data-dash-view="app" data-edit-id="dash.nav.logout">Log out</button>
       </div>
     </div>
   </nav>
@@ -64,8 +74,8 @@
        js/main.js's applyDashView()) and edits the text/box in place. -->
   <div class="gate dash-view-off" id="dashGate" data-dash-view="gate" data-resize-id="box.dash.gate">
     <div class="big-emoji" style="font-size:1.5rem;font-family:var(--font-mono)" data-edit-id="dash.gate.badge">[ locked ]</div>
-    <h2 data-edit-id="dash.gate.title">You need to log in</h2>
-    <p class="muted" data-edit-id="dash.gate.subtext">This page is only for approved workshop students.</p>
+    <h2 data-edit-id="dash.gate.title">Only accepted students can open this page</h2>
+    <p class="muted" data-edit-id="dash.gate.subtext">Log in with the account you were accepted with.</p>
     <a class="btn btn-primary" href="login.html" data-edit-id="dash.gate.action">Go to login</a>
   </div>
 
@@ -137,7 +147,7 @@
 
   <script src="js/theme.js?v=4"></script>
   <script src="js/idle.js?v=3"></script>
-  <script src="js/main.js?v=22"></script>
+  <script src="js/main.js?v=30"></script>
   <script src="js/dashboard.js?v=9"></script>
 </body>
 </html>

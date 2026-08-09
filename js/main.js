@@ -944,11 +944,21 @@ function flowAreaMinWidth(area) {
 }
 
 /**
- * The widest/tallest one tile may be dragged to: its container's own inner
- * box, per "resizing the tiles will CAP once one tile reaches the WIDTH or
- * HEIGHT of the container". A container with an expanding axis has no cap on
- * that axis - it grows to fit whatever the tile becomes - so Infinity stands
- * in for "no limit" there.
+ * The widest one tile may be dragged to: its container's own inner box, per
+ * "resizing the tiles will CAP once one tile reaches the WIDTH of the
+ * container". A container with an expanding x axis has no cap - it grows to
+ * fit whatever the tile becomes - so Infinity stands in for "no limit".
+ *
+ * HEIGHT is never capped. It used to be, symmetrically with the width, and
+ * that made a tile in a height-locked container (a day card's own attachments
+ * sub-area, which ships locked on both axes so one day with eight files can't
+ * stretch every card in the row) simply refuse to be dragged taller at all -
+ * the handle moved and the tile didn't. Growing a tile past the bottom of its
+ * container is a request for more room, not an error, so the container takes
+ * the extra height instead: see growFlowAreaForTiles(). Only ever downwards -
+ * dragging the same tile back shorter leaves the container exactly where the
+ * ta put it, since the height it was given is now its own size and not a
+ * measurement of its contents.
  * @param tile a tile box
  * @return {w, h} maximums in css px
  */
@@ -959,11 +969,55 @@ function tileSizeCap(tile) {
   var cs = getComputedStyle(area);
   var r = area.getBoundingClientRect();
   var w = r.width - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0);
-  var h = r.height - (parseFloat(cs.paddingTop) || 0) - (parseFloat(cs.paddingBottom) || 0);
   return {
     w: flow.x === "expand" ? Infinity : Math.max(16, w),
-    h: flow.y === "expand" ? Infinity : Math.max(12, h)
+    h: Infinity
   };
+}
+
+/**
+ * Grows a flow container downwards to hold tiles that have just been dragged
+ * taller than it, and never shrinks it. The other half of tileSizeCap()'s
+ * uncapped height: a tile can always be made taller, and whichever of the
+ * three containers it lives in takes the extra height so nothing ends up
+ * clipped or hidden behind a scrollbar.
+ *
+ * Only a HEIGHT-LOCKED container needs this. An expanding axis is sized by its
+ * own content already (see areaFlowFor()), so both dashboard areas grow to fit
+ * on their own by default and this does nothing to them; it's the day card's
+ * attachments sub-area - locked on both axes - and any container a ta has
+ * locked themselves that would otherwise hold a tile back. The whole id group
+ * is grown together, same as applyTileFlow() does, so every day card in the
+ * row keeps matching.
+ * @param tile the tile that just changed size
+ * @param persist true once the drag has settled, to save the container's new
+ *   height the same way any other resize is saved
+ */
+function growFlowAreaForTiles(tile, persist) {
+  var area = flowAreaOf(tile);
+  var id = area && elId(area);
+  if (!id || areaFlowFor(id).y !== "lock") return;
+  var areas = flowAreasWithId(id);
+  if (!areas.length) return;
+  /* scrollHeight is what the tiles actually need; on a locked container that's
+     exactly the figure the overflow is currently hiding */
+  var need = 0;
+  areas.forEach(function (a) { need = Math.max(need, a.scrollHeight); });
+  var saved = EDIT_SIZES[id] || {};
+  if (!need || need <= (saved.h || 0)) return;
+  /* a width goes with it either way: a size record with no width is ignored
+     wholesale on the next load (see applySizeOverrides()), which would throw
+     the height straight back out - same reasoning as pinFlowAreaHeight() */
+  var box = {
+    w: saved.w === undefined ? Math.round(areas[0].getBoundingClientRect().width) : saved.w,
+    h: need
+  };
+  EDIT_SIZES[id] = box;
+  areas.forEach(function (a) {
+    a.style.height = need + "px";
+    a.dataset.ovH = need;
+  });
+  if (persist) saveEditedSize(id, box);
 }
 
 /**
@@ -987,6 +1041,10 @@ function setTileTrackSize(tile, w, h) {
   var id = elId(tile);
   if (id) EDIT_SIZES[id] = { w: w, h: h };
   applyTileFlow();
+  /* after the layout, not before: the container has to have been given its own
+     locked height back before its scrollHeight says anything about whether the
+     tiles still fit in it */
+  growFlowAreaForTiles(tile);
 }
 
 /**
@@ -1022,6 +1080,11 @@ function applyTileFlow() {
     var defW = areas[0].getAttribute("data-tile-w") || "100%";
     areas.forEach(function (area) {
       area.classList.add("tile-flow");
+      /* a tile whose width a ta has actually dragged sizes its own track
+         exactly, rather than being stretched to fill the row - which is what
+         makes the drag smooth instead of stepping between column counts, see
+         .tile-w-set in css/style.css */
+      area.classList.toggle("tile-w-set", !!tw);
       area.classList.toggle("flow-x-lock", flow.x === "lock");
       area.classList.toggle("flow-x-expand", flow.x === "expand");
       area.classList.toggle("flow-y-lock", flow.y === "lock");
@@ -1361,12 +1424,90 @@ function clampOwnPos(el, tx, ty) {
 }
 
 /**
+ * The largest box an element may be dragged to without leaving whichever
+ * container bounds it (see moveBoundsContainer()): the resize half of
+ * clampOwnPos()'s "stops at the edge and grinds against it" rule.
+ *
+ * Only a MOVE was ever clamped, so a resize handle was the one way left to get
+ * a tile's own pieces out past the tile - the coloured rect being the obvious
+ * one, since it starts out filling its tile exactly and so has nowhere legal
+ * to grow, but the filename and the Download button could be dragged out over
+ * the neighbouring tiles just as easily.
+ *
+ * Measured per HANDLE, because a resize pins the opposite edge: the right
+ * handle grows away from the element's own left edge, so it may grow until it
+ * meets the container's right edge, and mirrored for the other three. An axis
+ * this handle doesn't pull gets no limit at all - its size isn't changing, and
+ * a cap would shrink an element that's already overhanging on an axis nobody
+ * touched.
+ * @param el the element about to be resized
+ * @param dir the handle's [x, y] direction, -1/0/+1 per axis (see RING_DIRS)
+ * @return {w, h} maximums in css px, or null if el isn't inside a container
+ */
+function resizeBoundsCap(el, dir) {
+  var box = moveBoundsContainer(el);
+  /* a tile is its own bounds (moveBoundsContainer() matches it on itself,
+     since a tile can't be moved at all) - it caps against the container
+     holding it instead, see tileSizeCap() */
+  if (!box || box === el) return null;
+  var r = el.getBoundingClientRect();
+  var cr = box.getBoundingClientRect();
+  return {
+    w: !dir[0] ? Infinity :
+      Math.max(16, dir[0] === -1 ? r.right - cr.left : cr.right - r.left),
+    h: !dir[1] ? Infinity :
+      Math.max(12, dir[1] === -1 ? r.bottom - cr.top : cr.bottom - r.top)
+  };
+}
+
+/**
  * Reads the id an element's size/position overrides are keyed by.
+ *
+ * data-page-id is the page's own (see isPageEl()), and it is deliberately NOT
+ * part of RESIZABLE_SEL: the page is styleable but not tracked. Carrying a
+ * plain data-resize-id, `<body>` matched every `querySelectorAll(RESIZABLE_SEL)`
+ * sweep in this file, which handed the whole geometry pipeline an element it
+ * can't survive - one saved position was enough for applyPositionOverrides()
+ * to call detachFromFlow() on the page, wrapping `<body>` in a `.free-wrap`
+ * div. That takes it out of being `document.body` altogether (killing
+ * background propagation, so the page stopped painting the browser canvas and
+ * started painting a floating, separately-scrolling black rectangle instead),
+ * pinned it to a px width, and left every later `document.body` lookup in this
+ * file reading null. A second attribute keeps the id readable everywhere it's
+ * genuinely wanted while leaving body out of every sweep by construction,
+ * rather than by remembering to guard each one.
  * @param el the element
- * @return its data-edit-id or data-resize-id
+ * @return its data-edit-id, data-resize-id or data-page-id
  */
 function elId(el) {
-  return el.getAttribute("data-edit-id") || el.getAttribute("data-resize-id");
+  return el.getAttribute("data-edit-id") || el.getAttribute("data-resize-id") ||
+    el.getAttribute("data-page-id");
+}
+
+/**
+ * Every element the style popover's color/opacity rows can paint: each tracked
+ * element, plus the page itself, which is styleable without being tracked (see
+ * elId()). The colour appliers sweep this instead of RESIZABLE_SEL directly;
+ * everything else - geometry, layering, selection, grouping, delete/duplicate -
+ * keeps sweeping RESIZABLE_SEL, so the page is excluded from all of it by
+ * default rather than by a guard per system.
+ * @return an array of elements
+ */
+function styleableEls() {
+  var els = [].slice.call(document.querySelectorAll(RESIZABLE_SEL));
+  if (document.body && document.body.hasAttribute("data-page-id")) els.push(document.body);
+  return els;
+}
+
+/**
+ * The selector matching every element carrying one id - the page's own
+ * attribute included, so a lookup by id finds it the same way the style
+ * popover and undo/redo find anything else (see elByAnyId()).
+ * @param id a data-edit-id, data-resize-id or data-page-id value
+ * @return a css selector string
+ */
+function idSel(id) {
+  return '[data-edit-id="' + id + '"], [data-resize-id="' + id + '"], [data-page-id="' + id + '"]';
 }
 
 /**
@@ -1509,25 +1650,27 @@ function isGluedChild(el) {
 }
 
 /**
- * True for the page itself: `<body data-resize-id="box.page">`, the surface
+ * True for the page itself: `<body data-page-id="box.page">`, the surface
  * every other element is painted onto rather than one more element painted
  * onto it.
  *
- * The page is tracked like anything else so a ta can recolor it through the
- * exact same machinery every other surface uses - light/dark pair, hover and
- * click colors, opacity, its own undo entries - with no separate "page
- * settings" pane to keep in sync (see selectPage()). What it can't do is
- * everything that only makes sense for something ON the page: it never moves,
- * resizes, is deleted, duplicated or reordered, since there's nothing for any
- * of those to be relative to. This is the one test all those refusals share.
- * Matched on the tag rather than the id so it stays right on a page whose body
- * isn't tagged at all (the ta portal's own object canvas, see
+ * The page is STYLEABLE but not TRACKED (see elId()/styleableEls()), which is
+ * the whole shape of it: a ta recolors it through the exact same machinery
+ * every other surface uses - light/dark pair, hover and click colors, opacity,
+ * its own undo entries - with no separate "page settings" pane to keep in sync
+ * (see selectPage()), while everything that only makes sense for something ON
+ * the page can't reach it at all. It never moves, resizes, is deleted,
+ * duplicated, promoted to navbar or reordered, since there's nothing for any of
+ * those to be relative to; leaving it out of RESIZABLE_SEL is what enforces
+ * that, and this test is only for the few places that then have to recognise it
+ * on purpose. Matched on its own attribute rather than the tag so it's false on
+ * a page whose body isn't tagged at all (the ta portal's own object canvas, see
  * initObjectCanvas(), which wires the same editor).
  * @param el the element
  * @return true if el is the page
  */
 function isPageEl(el) {
-  return !!(el && el.tagName === "BODY");
+  return !!(el && el.hasAttribute && el.hasAttribute("data-page-id"));
 }
 
 /**
@@ -1662,14 +1805,11 @@ function ancestorPos(el) {
 }
 
 /**
- * The id of el's nearest tracked ancestor (its own local stacking-context
- * scope, see applyLayerOrder()), or "" if el is top-level (no tracked
- * ancestor). Same walk as ancestorPos(), just returning the id instead of
- * the offset: z-index only ever compares elements within the SAME
- * stacking context, so two elements only "layer" against each other
- * meaningfully when they share this same nearest tracked ancestor (an icon
- * inside one card can never visually out-layer a button inside a totally
- * different section, no matter what a flat page-wide order says).
+ * The id of el's nearest tracked ancestor - the box it belongs to - or "" if
+ * el is top-level. Same walk as ancestorPos(), just returning the id instead
+ * of the offset. Note this is NOT what decides el's stacking order: a tracked
+ * container is deliberately never given a z-index, so it is never a stacking
+ * context and never confines what it holds (see applyLayerOrder()).
  * @param el the element
  * @return the ancestor's data-edit-id/data-resize-id, or ""
  */
@@ -2303,48 +2443,45 @@ function setHiddenVisual(el, hide) {
    re-deriving everything from content.layers again. */
 var LAYER_ORDER = [];
 
-/* the page's own painted-in backdrops - the hero's background video and its
-   darkening scrim, and the faint logo watermark behind the about copy - are
-   deliberately not data-edit-id/data-resize-id elements (no ring, no move/
-   resize handles, see CLAUDE.md's Media bullets), but a ta still needs "send
-   to back" on some OTHER element to be able to reach all the way behind them,
-   not just behind other tracked content, since visually they're as much a part
-   of "the page" as anything else. Fixed synthetic ids, resolved by a plain
-   selector instead of a data attribute, let them take part in the exact same
-   flat z-index ranking as every real tracked leaf (see applyLayerOrder())
-   without making them independently selectable/resizable, which is still
-   deliberately not offered for any of them.
+/* The page's painted-in backdrops - the hero's background video and its
+   darkening scrim, and the faint logo watermark behind the about copy - used
+   to be handled here, by a BACKDROP_IDS table mapping a synthetic id to a
+   plain css selector, because they deliberately weren't tagged elements: no
+   ring, no handles, `pointer-events: none` on the watermark.
 
-   The watermark is why this isn't just the hero's two: it carries its own
-   `z-index: 0` in css/style.css, and applyLayerOrder() hands out 1 and up, so
-   EVERY tracked element on the page outranked it no matter where the layer
-   menu put it - sending the about photo to the back moved it behind every
-   other element and still left it painted over the logo, with no lower number
-   left to give it. Ranked here instead, "send to back" reaches past it like
-   anything else. */
-var BACKDROP_IDS = {
-  "media.hero.video": ".hero-bg",
-  "media.hero.scrim": ".hero-scrim",
-  "media.about.logo": ".bg-logo"
-};
+   That was the wrong shape and it's gone. A synthetic id gets an element a
+   z-index and NOTHING else, which is not the same thing as being part of the
+   layer system: send a photo behind the watermark and the photo really did
+   get the lower number, but the watermark still couldn't be clicked, couldn't
+   be selected, couldn't be raised out of its hardcoded 5% opacity, and had no
+   ring to show it was now the thing in front - so the one move that would
+   demonstrate the layering had happened was the one move it refused to make,
+   and "it didn't go behind" was the only reading available. A backdrop is an
+   element painted on the page like any other; the fix is to say so. All three
+   carry a real data-resize-id now (templates/index.html), keeping the exact
+   ids the synthetic table used, so any saved content.layers still resolves.
+
+   They therefore need no special case anywhere in this file: they're ranked,
+   selectable, restyleable and layerable through the same one path as
+   everything else. DOM order is what puts them behind by default, which is
+   where they already sit in the markup.
+
+   The one thing left is a migration, not a mechanism: a content.layers saved
+   before these ids were ranked at all doesn't list them, and reconcileLayerOrder()
+   would otherwise append them on TOP of everything that order does list. */
+var BACKDROP_DEFAULT_BACK_IDS = ["media.hero.video", "media.hero.scrim", "media.about.logo"];
 
 /**
  * Every currently-rendered tracked element's id, in DOM (paint) order,
  * deduplicated. Seeds a sane default stack for any id a saved content.layers
  * list doesn't know about yet (a fresh blob, or a template id added since
  * it was saved), so an untouched page's stacking still matches exactly what
- * it looked like before any layer system existed. The hero's background
- * video/scrim and the about watermark (see BACKDROP_IDS) are seeded first,
- * ahead of everything else, matching the backdrop position they've always
- * visually had.
+ * it looked like before any layer system existed.
  * @return array of ids, document order
  */
 function domOrderIds() {
   var seen = {};
   var ids = [];
-  Object.keys(BACKDROP_IDS).forEach(function (id) {
-    if (document.querySelector(BACKDROP_IDS[id])) { seen[id] = true; ids.push(id); }
-  });
   document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
     var id = elId(el);
     if (id && !seen[id]) { seen[id] = true; ids.push(id); }
@@ -2490,7 +2627,24 @@ function applyLockHighlight() {
  * @return true if el both has a fixed id AND actually sits inside <nav>
  */
 function isFixedInstance(el) {
-  return isFixed(elId(el)) && !!(el.closest && el.closest("nav"));
+  return !!el && isFixed(elId(el)) && !!(el.closest && el.closest("nav"));
+}
+
+/**
+ * The nearest tracked ancestor of el that is itself a fixed instance, ie the
+ * navbar el has been promoted into (or, for something nested deeper, whichever
+ * promoted box holds it). Used by applyLayerOrder() to tell the one container
+ * that has to clear the whole page from the ones already inside it.
+ * @param el the element
+ * @return the ancestor element, or null
+ */
+function fixedTrackedAncestor(el) {
+  var box = el && el.parentElement && el.parentElement.closest(RESIZABLE_SEL);
+  while (box) {
+    if (isFixedInstance(box)) return box;
+    box = box.parentElement && box.parentElement.closest(RESIZABLE_SEL);
+  }
+  return null;
 }
 
 /**
@@ -2907,183 +3061,453 @@ function wireInlineLinks() {
 }
 wireInlineLinks();
 
+/* the generated copy of a container's own painted surface (see
+   ensureLayerSurfaces() and .layer-surface in css/style.css), tagged with the
+   id of the container it belongs to. Deliberately NOT in RESIZABLE_SEL: it's
+   a layer, not an element a ta owns - it can't be selected, moved, resized,
+   deleted, styled or reordered, it just gives the things ranked under its
+   container something solid to be behind, and it appears and disappears with
+   that container's own paint. */
+var LAYER_SURFACE_SEL = "[data-layer-surface]";
+
 /**
- * Applies an explicit stacking order to every tracked element: z-index is
- * just an id's rank (bottom = 1), so the layer menu (see moveLayer()/
- * moveLayerExtreme()) is the only thing that ever reorders elements,
- * resizing or moving one no longer silently bumps it above its neighbours.
- * Only ONE flat rank actually matters (split into two bands, fixed always
- * above non-fixed, see below), not one scoped per container: two EARLIER
- * versions of this both tried to scope z-index per container (per nearest
- * tracked ancestor, then per outermost/top-level tracked ancestor) to work
- * around css only ever comparing z-index within the same stacking context,
- * and both were wrong in different ways. Scoping per nearest ancestor made
- * almost every element its own group of one (a card, an icon's own
- * countdown box), so "bring forward" was a no-op for nearly everything
- * already on the page. Scoping per top-level ancestor (a whole section/
- * nav/header) fixed cross-card reordering within one section, but couldn't
- * reach across DIFFERENT sections, or past any container - tracked or not
- * - that happens to carry its own real css stacking context (eg the hero's
- * own `.hero-media > .wrap`, which needed `z-index: 2` to paint above its
- * background video; see css/style.css, now fixed with negative z-index on
- * the video/scrim instead so `.wrap` needs no stacking context of its own
- * at all). The actual fix: a stacking context can ONLY be escaped by an
- * element that doesn't create one in the first place, so instead of
- * hunting down every container that might quietly wall its children off
- * (an unbounded, easy-to-miss list), NO tracked container (has
- * hasTrackedDescendants()) is ever given an explicit z-index anymore, at
- * ANY nesting depth, top-level or not: it's left at `z-index: auto`, which
- * never establishes a stacking context, so a container can't trap its own
- * tracked children no matter how deep they're nested. Only an actual LEAF
- * (icon, image, text, button, box, custom element, ...) ever competes for
- * a real z-index, and every leaf on the entire page shares the exact same
- * flat ranking, letting a leaf anywhere be sent in front of or behind any
- * other leaf anywhere else, section, card, or custom element alike. The
- * unavoidable trade (a real css constraint, not a bug, since this editor
- * deliberately never reparents elements, see the Grouping/detachFromFlow
- * bullets in CLAUDE.md): a CONTAINER can no longer be reordered as a whole
- * unit against unrelated content, only its individual leaf children can,
- * one at a time. `nav`'s own real stacking context (`.nav` in
- * css/style.css also carries a hardcoded `z-index: 50`, kept as a sane
- * default for a page with no js at all) is topped up dynamically by this
- * function too, not left to that hardcoded value alone: nav is a FIXED
- * container (see NAV_FIXED_IDS), so it gets stamped, same as a fixed leaf
- * would, with a z-index one past the entire non-fixed band, guaranteed to
- * clear it regardless of how many ordinary tracked leaves the page has
- * grown to (an earlier version relied on the css `50` alone, which quietly
- * stopped being enough once the page passed 50 tracked leaves, letting
- * plain content start painting over the sticky nav while scrolling).
- * Reconciles the saved order with what's actually on the page first: any id
- * missing from it is appended in DOM order (see domOrderIds()), so a page
- * that's never had anything reordered still stacks exactly as if there
- * were no layer system at all. Fixed elements (FIXED_SET, see
- * setFixedElements()) are always stacked above every non-fixed one: split
- * into two flat bands, non-fixed first then fixed, each keeping its own
- * relative order, so within either band elements are still individually
- * reorderable (see moveLayer()) but no fixed element's z-index can ever
- * fall below a non-fixed one's. Runs on every load, live site included,
- * same as applyTextOverrides(). Forces position:relative on a still-static
- * leaf first, z-index has no effect otherwise.
- * @param layers content.layers, ordered ids bottom to top
- */
-/**
- * Whether an element has been ranked below the navbar it lives in - a ta
- * asking for it to sit behind the bar itself, not merely behind the bar's
- * other contents.
+ * Whether el paints a surface of its own that something could sensibly be put
+ * behind: anything with tracked elements inside it and a FULLY OPAQUE
+ * background of its own.
  *
- * A navbar is the one container on this site worth asking that about: it
- * paints a surface of its own AND walls its children into its own stacking
- * context, so its children can't be ranked against the rest of the page at
- * all (see applyLayerOrder()'s doc comment) and, until `.nav::before` split
- * the surface out into a layer of its own, couldn't get under that surface
- * either. Ranking below the container is the trigger rather than some
- * separate flag because it's already exactly what the layer menu means:
- * domOrderIds() seeds a container ahead of its own children, so everything
- * in a nav starts out above it and only a deliberate "send backward"/"send to
- * back" can put anything under.
- * @param m a member ({el, id}) from applyLayerOrder()
- * @param rank id -> its position in the layer order
- * @return true if el belongs under its own navbar's surface
+ * "Tracked elements inside it" is asked directly rather than through
+ * hasTrackedDescendants(), which answers a different question and says no to
+ * two boxes that matter here. A theme toggle and a login button each hold
+ * their own icon and their own label, and that function calls them leaves on
+ * purpose, so that deleting one takes its pieces with it (see isGluedChild()).
+ * They are still boxes with things painted on them, and "put this label behind
+ * the button" is still a sentence - it just has nothing to do with whether
+ * they delete as a unit.
+ *
+ * Opaque is the whole test, and it's about the copy rather than the original.
+ * A surface layer doesn't hollow the container out - it repaints the same
+ * background over the top of it (see .layer-surface in css/style.css) - so an
+ * opaque colour survives being painted twice unchanged, while a translucent
+ * one would composite with itself and every faded panel on the site would
+ * quietly darken. A container a ta has faded with the opacity slider therefore
+ * has no surface layer and nothing can be put behind it, which is at least
+ * honest: there's nothing solid there to be behind.
+ * @param el the element
+ * @return true if el should carry a surface layer
  */
-function barRankedOver(m, rank) {
-  var bar = m.el.parentElement && m.el.parentElement.closest(".nav");
-  if (!bar) return false;
-  var barId = elId(bar);
-  if (!barId || rank[barId] === undefined || rank[m.id] === undefined) return false;
-  return rank[m.id] < rank[barId];
+function paintsOwnSurface(el) {
+  if (!el || !el.querySelectorAll || !el.querySelectorAll(RESIZABLE_SEL).length) return false;
+  var cs = getComputedStyle(el);
+  if (cs.display === "none" || cs.visibility === "hidden") return false;
+  var nums = (cs.backgroundColor || "").match(/[\d.]+/g);
+  if (!nums || nums.length < 3) return false;
+  return nums.length < 4 || parseFloat(nums[3]) >= 1;
 }
 
-function applyLayerOrder(layers) {
+/**
+ * Whether el establishes a stacking context of its own, ie whether a negative
+ * z-index inside it resolves against EL's background or escapes to paint
+ * against some ancestor's instead. The list is the css one; the last case is
+ * the easily-missed one, since a flex or grid item with a z-index becomes a
+ * context while still position:static.
+ * @param el the element
+ * @return true if el is a stacking context
+ */
+function createsStackingContext(el) {
+  var cs = getComputedStyle(el);
+  if (cs.position === "fixed" || cs.position === "sticky") return true;
+  if (parseFloat(cs.opacity) < 1) return true;
+  if (cs.transform !== "none" || cs.filter !== "none" || cs.perspective !== "none") return true;
+  if (cs.isolation === "isolate" || cs.mixBlendMode !== "normal") return true;
+  if ((cs.contain || "").indexOf("paint") !== -1 || (cs.contain || "").indexOf("layout") !== -1) return true;
+  if ((cs.willChange || "").indexOf("transform") !== -1 ||
+      (cs.willChange || "").indexOf("opacity") !== -1) return true;
+  if (cs.zIndex === "auto") return false;
+  if (cs.position !== "static") return true;
+  var pd = el.parentElement ? getComputedStyle(el.parentElement).display : "";
+  return pd.indexOf("flex") !== -1 || pd.indexOf("grid") !== -1;
+}
+
+/**
+ * Whether el needs a copy of its own surface painted as a child layer.
+ *
+ * Narrower than painting one. A box that is NOT a stacking context doesn't
+ * need the copy: a negative z-index inside it escapes to the nearest ancestor
+ * context, where the box's own background is an ordinary in-flow block
+ * background - and css paints those AFTER negative-z descendants, so the real
+ * background already covers whatever was ranked under it, and a second copy
+ * would only bleed through the antialiasing of its own rounded corners. A
+ * stacking CONTEXT is the case that needs one, because there its background
+ * paints first of all, below even the negative band.
+ *
+ * Anything the layer order gives a number to counts as one whether it looks
+ * like it yet or not: applyLayerOrder() hands every ranked element an explicit
+ * z-index and position:relative, which is the definition. Asking the computed
+ * style alone would be a pass behind, since on the first load the number isn't
+ * written yet.
+ * @param el the element
+ * @return true if el should carry a .layer-surface child
+ */
+function needsLayerSurface(el) {
+  return paintsOwnSurface(el) && (!hasTrackedDescendants(el) || createsStackingContext(el));
+}
+
+/**
+ * Builds, sizes and tears down the surface layers, so that afterwards every
+ * box that needs one has exactly one `.layer-surface` child and nothing else
+ * does.
+ *
+ * Which boxes those are is needsLayerSurface()'s question. Called from
+ * reconcileLayerOrder(), which every entry point into the stacking order
+ * already goes through.
+ *
+ * Rebuilt from the live computed style each pass rather than once at load,
+ * because everything it reads can change under it: a ta recolours a card (so a
+ * container that painted nothing now paints something), fades one (so it stops
+ * qualifying), duplicates one (so a second copy of the original's surface
+ * arrives already in the clone), or a whole section is rendered late by a
+ * fetch. The stale sweep is what makes all four self-correcting.
+ *
+ * Inserted as the FIRST child, which is also its default rank: reconcileLayerOrder()
+ * seeds unknown ids in document order, so a surface starts out under
+ * everything its container holds and an untouched page paints exactly as it
+ * always did. position:relative goes on the container if it's still static -
+ * an absolutely positioned child needs it to have something to fill - and
+ * relative alone never creates a stacking context, so this doesn't wall the
+ * container's contents off from the rest of the page's ranking.
+ */
+function ensureLayerSurfaces() {
+  /* stale sweep first: a surface whose container no longer paints one, whose
+     container lost its id (the reel clones its tiles and strips the tracked
+     attributes off the copies, see initReel()), or that arrived as a second
+     copy inside a duplicated container */
+  document.querySelectorAll(LAYER_SURFACE_SEL).forEach(function (s) {
+    var owner = s.parentElement;
+    if (owner && elId(owner) === s.getAttribute("data-layer-surface") &&
+        s === owner.querySelector(":scope > " + LAYER_SURFACE_SEL) &&
+        needsLayerSurface(owner)) return;
+    s.remove();
+  });
+
+  document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
+    var id = elId(el);
+    if (!id || !needsLayerSurface(el)) return;
+    var s = el.querySelector(":scope > " + LAYER_SURFACE_SEL);
+    if (!s) {
+      s = document.createElement("div");
+      s.className = "layer-surface";
+      s.setAttribute("data-layer-surface", id);
+      s.setAttribute("aria-hidden", "true");
+      el.insertBefore(s, el.firstChild);
+    }
+    var cs = getComputedStyle(el);
+    if (cs.position === "static") el.style.position = "relative";
+    /* out to the container's border box, so the border is part of what an
+       element can be put behind rather than a strip it still shows through */
+    s.style.top = "-" + cs.borderTopWidth;
+    s.style.right = "-" + cs.borderRightWidth;
+    s.style.bottom = "-" + cs.borderBottomWidth;
+    s.style.left = "-" + cs.borderLeftWidth;
+  });
+}
+
+/**
+ * Whether an element has been ranked below a container it lives in that paints
+ * a surface - a ta asking for it to sit behind the panel itself, not merely
+ * behind the panel's other contents.
+ *
+ * Ranking below the container is the trigger rather than some separate flag
+ * because it's already exactly what the layer menu means: domOrderIds() seeds
+ * every container ahead of its own children, so everything in a box starts out
+ * above that box and only a deliberate "send backward"/"send to back" can put
+ * anything under it. Every enclosing box is checked, not just the nearest, so
+ * an element sent to the very back of the page is behind all of them.
+ * @param m a member ({el, id}) from applyLayerOrder()
+ * @param rank id -> its position in the layer order
+ * @return true if el belongs under a surface of one of its own containers
+ */
+function surfaceRankedOver(m, rank) {
+  if (rank[m.id] === undefined) return false;
+  var box = m.el.parentElement;
+  while (box && box !== document.body) {
+    var id = (box.matches && box.matches(RESIZABLE_SEL)) ? elId(box) : null;
+    if (id && rank[id] !== undefined && rank[m.id] < rank[id] && paintsOwnSurface(box)) return true;
+    /* a negative z-index cannot leave a stacking context, so nothing outside
+       the first one on the way up is reachable however the ranks compare. The
+       theme toggle is exactly this: an opaque button that IS one (every ranked
+       element gets an explicit z-index and position:relative, which is what
+       makes one), so its own label going below zero lands above the button's
+       background, not below the navbar's - and read the navbar as the panel it
+       had gone behind, the button stayed lit up, and the whole move looked
+       like the button doing nothing. It has its own surface layer now. */
+    if (createsStackingContext(box)) return false;
+    box = box.parentElement;
+  }
+  return false;
+}
+
+/**
+ * Every element the stacking order covers - each tracked element, the page's
+ * painted-in backdrops (tracked like anything else) and every container's own
+ * surface layer (see ensureLayerSurfaces()) - in document order, each tagged
+ * with the id its rank is looked up by and its position in that document
+ * order.
+ *
+ * Iterated by ELEMENT, not by id: an id can be worn by more than one element
+ * (the brand wordmark, mirrored in the nav and the footer), and each copy gets
+ * its own z-index.
+ * @return array of {el, id, dom, surface, fixed}
+ */
+function layerMembers() {
+  var members = [];
+  document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
+    var id = elId(el);
+    if (id) members.push({ el: el, id: id });
+  });
+  /* document order is the tiebreak that keeps a page nobody has reordered
+     painting exactly as the template laid it out */
+  members.sort(function (a, b) {
+    if (a.el === b.el) return 0;
+    return (a.el.compareDocumentPosition(b.el) & 4) ? -1 : 1;
+  });
+  members.forEach(function (m, i) {
+    m.dom = i;
+    m.fixed = isFixedInstance(m.el);
+  });
+  return members;
+}
+
+/**
+ * Ranks in LAYER_ORDER, id -> index. An id the saved order has never heard of
+ * sorts after every one it has, by document order, so a newly added element
+ * lands on top rather than in some arbitrary spot.
+ * @return object mapping id to rank
+ */
+function layerRanks() {
+  var rank = {};
+  LAYER_ORDER.forEach(function (id, i) { rank[id] = i; });
+  return rank;
+}
+
+/**
+ * Sort comparator for two members of the one flat ranking: the ta's own
+ * order, then document order for anything the saved order has never heard of.
+ * The fixed/non-fixed banding isn't in here - applyLayerOrder() splits the
+ * members into those two bands first and sorts each with this.
+ * @param rank id -> rank, from layerRanks()
+ * @return a comparator for layerMembers() entries
+ */
+function byLayerRank(rank) {
+  return function (a, b) {
+    var ra = rank[a.id], rb = rank[b.id];
+    if (ra === undefined) ra = LAYER_ORDER.length + a.dom;
+    if (rb === undefined) rb = LAYER_ORDER.length + b.dom;
+    if (ra !== rb) return ra - rb;
+    return a.dom - b.dom;
+  };
+}
+
+/**
+ * The ids one layer-menu click actually has to move, in current stacking
+ * order (bottom first).
+ *
+ * For a LEAF that's just its own id. For a CONTAINER it's every ranked id
+ * inside it, because a container carries no z-index of its own (see
+ * applyLayerOrder()) and so has no rank a stacking order could move: what
+ * "send this card to the back" can only honestly mean is "send everything
+ * painted in this card to the back", together and in the order they're
+ * already in. That's also what a ta means by it - a card is its contents -
+ * and it's what makes the layer menu do something on a container instead of
+ * being silently dead on every one of them.
+ *
+ * Nested containers are skipped for the same reason they're skipped when
+ * z-index is handed out: they hold no rank, their leaves do.
+ * @param el the element
+ * @return array of ids, bottom first, deduplicated
+ */
+function layerSubtreeIds(el) {
+  if (!el) return [];
+  if (!hasTrackedDescendants(el)) {
+    var own = elId(el);
+    return own ? [own] : [];
+  }
+  var inside = layerMembers().filter(function (m) {
+    return el.contains(m.el) && !hasTrackedDescendants(m.el);
+  });
+  inside.sort(byLayerRank(layerRanks()));
+  var ids = [], seen = {};
+  inside.forEach(function (m) { if (!seen[m.id]) { seen[m.id] = true; ids.push(m.id); } });
+  return ids;
+}
+
+/**
+ * Reconciles a saved order with what's actually on the page right now, and
+ * installs the result as LAYER_ORDER: every id the saved list doesn't know
+ * about yet is appended in document order (see domOrderIds()), so a page
+ * that's never had anything reordered still stacks exactly as if there were
+ * no layer system at all, and anything added since - a duplicated card, a
+ * gallery tile that only exists once its fetch lands - starts out on top.
+ *
+ * Called before any reorder as well as by applyLayerOrder() itself, not just
+ * by the latter: a layer button acting on an id the saved order had never
+ * heard of used to move that id and then have every OTHER unknown id
+ * appended on top of it a moment later, so "bring to front" on a gallery
+ * tile's own backdrop landed it under the very label it was asked to cover.
+ * @param layers content.layers, ordered ids bottom to top
+ * @return the reconciled order (also stored in LAYER_ORDER)
+ */
+function reconcileLayerOrder(layers) {
+  /* before anything is ranked, since the surfaces are ranked too and a
+     container that has only just started painting one needs its layer to
+     exist before it can be given a place in the order */
+  ensureLayerSurfaces();
   var order = (layers || []).slice();
   var have = {};
   order.forEach(function (id) { have[id] = true; });
-  /* the backdrop ids specifically default to the very back (see
-     BACKDROP_IDS), never merged in via the generic "append to the end"
-     rule below: an already-saved, already-customized order predates them
-     (they didn't used to be part of the ranking at all), so a plain
-     append would land them in FRONT of everything already on the page,
-     exactly backwards for what's meant to be a backdrop. Iterated in
-     REVERSE key order because unshift() prepends, the opposite of
-     domOrderIds()'s own push(): walking the keys forward here would unshift
-     video first and scrim second, landing scrim BEHIND video (scrim would
-     win the last unshift and end up at index 0), invisibly hiding the
-     scrim's own darkening under the opaque video regardless of its opacity.
-     Reversing first fixes the final order to [video, scrim, watermark, ...],
-     video truly backmost, matching domOrderIds()'s own push order. */
-  Object.keys(BACKDROP_IDS).reverse().forEach(function (id) {
-    if (!have[id] && document.querySelector(BACKDROP_IDS[id])) { order.unshift(id); have[id] = true; }
+  /* purely a migration, not a mechanism: the three backdrops (hero video,
+     hero scrim, about watermark) are ordinary tracked elements now and need
+     no special handling, but an order saved back when they weren't ranked at
+     all doesn't mention them, and the generic "append anything unknown to the
+     end" rule below would land them in FRONT of everything already on the
+     page - exactly backwards for something meant to be a backdrop. Walked in
+     REVERSE because unshift() prepends: forwards would put the scrim behind
+     the video and hide its darkening under the opaque clip. */
+  BACKDROP_DEFAULT_BACK_IDS.slice().reverse().forEach(function (id) {
+    if (!have[id] && elByAnyId(id)) { order.unshift(id); have[id] = true; }
   });
   domOrderIds().forEach(function (id) {
     if (!have[id]) { order.push(id); have[id] = true; }
   });
   LAYER_ORDER = order;
-  var rank = {};
-  order.forEach(function (id, i) { rank[id] = i; });
+  return order;
+}
+
+/**
+ * Applies an explicit stacking order to every tracked element and to the
+ * page's own backdrops: z-index is just an id's rank (bottom = 1), so the
+ * layer menu (see moveLayer()/moveLayerExtreme()) is the only thing that ever
+ * reorders anything, and resizing or moving an element no longer silently
+ * bumps it above its neighbours.
+ *
+ * ONE flat rank for the whole page, not one scoped per container. This is the
+ * only arrangement that can answer the question a ta is actually asking. Css
+ * compares z-index inside a stacking context and nowhere else, and any
+ * positioned element given a z-index of its own BECOMES such a context - so
+ * the moment a container carries a number, everything inside it is sealed in
+ * with it and can never be ranked against anything outside. A scoped version
+ * of this function tried exactly that and made "send to back" a half-truth
+ * everywhere below the first section: an about-section photo could be sent
+ * behind its own section's watermark, a day tile's title behind that tile's
+ * own rect, but nothing could ever cross between two boxes, and reaching
+ * across by dragging each element's whole ancestor chain to the end of the
+ * order instead re-stacked entire SECTIONS as a side effect of layering one
+ * photo inside one of them.
+ *
+ * So a stacking context is only ever escaped by not creating one: NO tracked
+ * container (has hasTrackedDescendants()) is given an explicit z-index at any
+ * depth. It stays at `z-index: auto`, which never establishes a context, so it
+ * cannot trap its own contents however deeply they're nested. Only a LEAF -
+ * icon, image, text, button, rect, custom element - competes for a number, and
+ * every leaf on the page shares the exact same ranking. A leaf anywhere can
+ * therefore be put in front of or behind a leaf anywhere else: a hero caption
+ * behind the hero video, an about photo behind the `.bg-logo` watermark, a day
+ * tile's lock icon behind that tile's `.day-tile-rect`, all through the same
+ * one list.
+ *
+ * That a container holds no rank of its own is not the same as a container
+ * being unlayerable: the layer menu moves everything INSIDE it instead, as one
+ * block, keeping their order among themselves - see layerSubtreeIds().
+ *
+ * A surface a ta can get behind is always a real element, never a container's
+ * own `background`, because a background is unrankable: css paints it before
+ * every descendant of that element, in every stacking context, whatever
+ * z-index the descendant is given. Some of those elements are hand-written
+ * (the day/extras/year tiles each paint their own `.day-tile-rect`/
+ * `.extras-tile-rect`/`.gv-year-rect`, the hero its video and scrim, the about
+ * section its watermark). The hand-written ones are ordinary ranked leaves and
+ * getting under one is plain z-index.
+ *
+ * The rest are generated by ensureLayerSurfaces(), one per container that
+ * paints an opaque surface of its own - a navbar, a day row, an info card, a
+ * reel tile, a banner, a whole section. Those are NOT ranked: they're pinned
+ * at z-index:-1, the one number that means "over this box's own background,
+ * under everything in it" (see .layer-surface in css/style.css for why a rank
+ * can't do that job). What gets ranked is the elements underneath them, at -2
+ * and down, in the band above.
+ *
+ * That does mean "send to back" on an element sitting directly on a section
+ * takes it under that section's own panel and out of sight. That's the honest
+ * reading of the button - the section's backdrop is one of the things painted
+ * on the page, and behind all of them is behind that too - and it's undoable
+ * like every other layer move.
+ *
+ * Fixed elements (FIXED_SET, see setFixedElements()) get no band of their own
+ * and need none. "Promote to navbar" MOVES an element into the bar (which is
+ * why isFixedInstance() can insist on one being inside a <nav> to count), and
+ * the bar is stamped clear of the whole page below - so everything in it is
+ * already above everything that isn't, and what's left to decide is only the
+ * order the bar's own contents paint in, which is just their rank. There used
+ * to be a second band that lifted every fixed element above every non-fixed
+ * one, and once the bar's surface became a rankable layer that band was
+ * actively wrong: the surface belongs to a fixed container, so it sorted into
+ * the fixed band, above every un-promoted nav link - and the dashboard's "My
+ * days"/"Extra attachments" links vanished under the bar's own backdrop.
+ * A fixed CONTAINER - nav itself - gets stamped one past every rank on the
+ * page even though ordinary containers get nothing, which is what keeps a
+ * sticky bar over scrolling content regardless of how many leaves the page has
+ * grown to; `.nav`'s hardcoded `z-index: 50` in css/style.css stays as the
+ * no-js default. Runs on every load, live site included, same as
+ * applyTextOverrides(). Forces position:relative on a still-static leaf first,
+ * z-index has no effect otherwise.
+ * @param layers content.layers, ordered ids bottom to top
+ */
+function applyLayerOrder(layers) {
+  reconcileLayerOrder(layers);
+  var rank = layerRanks();
 
   /* one flat pass over every actual DOM element: a container (has tracked
      descendants of its own) never gets an explicit z-index, see the doc
-     comment above. Iterated by DOM element, not just id, since a mirrored
-     id (eg the brand wordmark, shared by the nav and footer) can be two
-     different elements at once. */
-  var members = [];
-  document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
-    var id = elId(el);
-    if (!id) return;
-    members.push({ el: el, id: id, assignZ: !hasTrackedDescendants(el) });
-  });
-  /* the page's painted-in backdrops (see BACKDROP_IDS) join the same
-     flat ranking as any other leaf, always assignZ (none of them ever wraps
-     tracked content), so "send to back" on some other element can outrank
-     them same as it would any other leaf. */
-  Object.keys(BACKDROP_IDS).forEach(function (id) {
-    var el = document.querySelector(BACKDROP_IDS[id]);
-    if (el) members.push({ el: el, id: id, assignZ: true });
-  });
-  var nonFixed = members.filter(function (m) { return !isFixedInstance(m.el); });
-  var fixed = members.filter(function (m) { return isFixedInstance(m.el); });
-  var byRank = function (a, b) { return (rank[a.id] || 0) - (rank[b.id] || 0); };
-  nonFixed.sort(byRank);
-  fixed.sort(byRank);
+     comment above */
+  var members = layerMembers();
+  members.forEach(function (m) { m.assignZ = !hasTrackedDescendants(m.el); });
+  members.sort(byLayerRank(rank));
+  var top = members.length + 1;
 
-  /* leaves a ta has ranked below their own navbar, which is the one case
-     where "send to back" has to reach past a container's own surface rather
-     than just past its other children. Everything inside a nav shares the
-     nav's stacking context, and a stacking context always paints its own
-     background before ANY of its children - so while the bar's surface was
-     the nav's own `background` there was simply no z-index low enough to hide
-     under it, and sending the theme toggle to the back visibly did nothing.
-     The surface is a child layer of its own now (`.nav::before`, z-index:-1),
-     which leaves room underneath: these get -2 and down, most-negative to the
-     lowest-ranked, so they slide under the bar in the order the layer menu
-     shows. Ranking below the container is the trigger because that's exactly
-     what the layer menu already means by it - domOrderIds() lists a container
-     before its own children, so nothing is behind its bar until a ta puts it
-     there. */
-  var behind = members.filter(function (m) { return m.assignZ && barRankedOver(m, rank); });
-  behind.sort(byRank);
+  /* everything a ta has ranked below one of its own containers' surfaces (see
+     surfaceRankedOver()). Those go BELOW zero, and are the only things that
+     ever do: -1 is the surface layer itself, and css paints a negative-z
+     descendant right after the background of whichever context it resolves
+     in, so -2 and down is under the panel and under nothing else. Most
+     negative to the lowest-ranked, so they keep the order the layer menu
+     shows. This is the one place the old "an element can be hidden and still
+     be there" complaint could come back, and what stops it is that the test
+     is paintsOwnSurface(): a member only ever gets a negative number when
+     there is a real opaque panel over it to be behind. */
+  var behind = members.filter(function (m) { return m.assignZ && surfaceRankedOver(m, rank); });
   behind.forEach(function (m, i) { m.behindZ = -(behind.length - i + 1); });
 
   var z = 1;
-  nonFixed.concat(fixed).forEach(function (m) {
+  members.forEach(function (m) {
     if (!m.assignZ) {
-      /* a container never gets a numbered rank the way a leaf does (see the
-         doc comment above), but a FIXED one (nav itself, or any other
-         element right-click "Promote to navbar" was used on that happens
-         to wrap tracked children) still has to visually clear the whole
-         non-fixed band while scrolling, same guarantee a fixed LEAF already
-         gets. nav used to rely on css/style.css's own hardcoded
-         `.nav { z-index: 50 }` for this instead, which quietly stopped
-         being enough once the page's actual tracked-leaf count grew past
-         50 (each new section/custom element/duplicated card pushes
-         ordinary leaves' own js-assigned z-index higher), letting plain
-         page content start painting over the sticky nav on scroll. Stamping
-         it here instead, one past the highest z-index any non-fixed leaf
-         can have, makes it correct regardless of how large that count ever
-         grows, no magic number to outgrow again later. Nav's own children
-         (the fixed-band leaves) don't need this, they already sit inside
-         nav's own stacking context, safely confined there regardless of
-         nav's absolute z-index value. */
-      m.el.style.zIndex = isFixed(m.id) ? String(nonFixed.length + 1) : "";
+      /* a container never gets a numbered rank the way a leaf does, but a
+         FIXED one (nav itself, or anything "Promote to navbar" was used on
+         that happens to wrap tracked children) still has to visually clear
+         the whole non-fixed band while scrolling, same guarantee a fixed leaf
+         already gets. One past the highest number anything on the page can
+         have, so it stays correct however large the page grows - nav used to
+         lean on css/style.css's own `z-index: 50`, which quietly stopped
+         being enough once the page passed 50 tracked leaves.
+
+         Only the OUTERMOST fixed container gets it - the bar itself - and
+         never one nested inside another. A number on a nested one buys
+         nothing (it's already inside the bar's own context, which is what
+         clears the page) and costs the thing this whole mechanism is for: a
+         flex or grid ITEM with a z-index becomes a stacking context even
+         while it's still position:static, which is exactly what `.brand` is
+         inside `.nav-inner`. That sealed the wordmark and the logo in with
+         it above the bar's own surface layer, so "send to back" on either
+         moved their rank and changed nothing on screen. */
+      m.el.style.zIndex = (m.fixed && !fixedTrackedAncestor(m.el)) ? String(top) : "";
       return;
     }
     if (getComputedStyle(m.el).position === "static") m.el.style.position = "relative";
@@ -3098,7 +3522,8 @@ function applyLayerOrder(layers) {
        as its image is enough, not a higher one: for two elements sharing
        one z-index, plain dom order decides, and the overlay is already
        the later sibling. */
-    if (m.el.parentNode && m.el.parentNode.classList && m.el.parentNode.classList.contains("free-wrap")) {
+    if (m.el.parentNode && m.el.parentNode.classList &&
+        m.el.parentNode.classList.contains("free-wrap")) {
       var tintOv = m.el.parentNode.querySelector(".tint-ov");
       if (tintOv) tintOv.style.zIndex = String(z);
       /* same reasoning, same fix, for a shade overlay (setElementShade()) */
@@ -3110,28 +3535,68 @@ function applyLayerOrder(layers) {
 }
 
 /**
- * Shifts one element one step up or down the stacking order (a plain
- * adjacent swap with its neighbour, so repeated clicks walk it further each
- * time, see the layer menu's Up/Down buttons), repaints every element's z-index,
- * and persists the whole order. A no-op at either end of the stack. Only
- * ever swaps with the nearest neighbour in the SAME fixed/non-fixed band
- * (see applyLayerOrder()'s own doc comment for why that's the only
- * grouping that still matters now), skipping over any others in between.
+ * Shifts one element one step up or down the stacking order (the layer
+ * menu's "Bring forward"/"Send backward"), repaints every z-index and
+ * persists the whole order.
+ *
+ * The step is over the one flat page-wide order (see applyLayerOrder()),
+ * skipping anything the element could never paint against anyway, so a single
+ * click really does move it past exactly one thing it could be painting over
+ * or under. A CONTAINER steps as a block - every leaf inside it at once,
+ * keeping their order among themselves (see layerSubtreeIds()) - which is the
+ * only thing stepping a container can mean, since a container holds no rank of
+ * its own.
  * @param id the element's data-edit-id or data-resize-id
  * @param dir +1 to bring forward one step, -1 to send backward one step
- * @return true if it actually moved, false at either end of its group (so
+ * @return true if it actually moved, false at either end of its band (so
  *   pushLayerUndo() knows not to record a no-op step)
  */
 function moveLayer(id, dir) {
-  var i = LAYER_ORDER.indexOf(id);
-  if (i === -1) { LAYER_ORDER.push(id); i = LAYER_ORDER.length - 1; }
-  var group = isFixed(id);
-  var j = i + dir;
-  while (j >= 0 && j < LAYER_ORDER.length && isFixed(LAYER_ORDER[j]) !== group) j += dir;
+  /* reconciled first so every id involved is certain to be IN the order
+     before anything is moved - see reconcileLayerOrder() */
+  reconcileLayerOrder(LAYER_ORDER);
+  var block = layerSubtreeIds(elByAnyId(id));
+  if (!block.length) block = [id];
+  var inBlock = {};
+  block.forEach(function (b) { inBlock[b] = true; });
+
+  /* one step lands past something that can actually paint against the element
+     being moved. Two ids never can if one is inside a navbar and the other
+     isn't: the bar is a stacking context of its own (see applyLayerOrder()),
+     so how their ranks compare decides nothing, and a click that stepped the
+     brand past a hero button just looked like the button doing nothing. An id
+     with nothing rendered for it at all - a saved order still listing an
+     element a template has since dropped - is skipped for the same reason. */
+  var byId = {};
+  layerMembers().forEach(function (m) { if (!byId[m.id]) byId[m.id] = m.el; });
+  function stepNavOf(lid) {
+    var el = byId[lid];
+    return (el && el.closest && el.closest("nav")) || null;
+  }
+  var myNav = stepNavOf(id);
+
+  /* the nearest id on the far side of the block that shares its band: what
+     one step has to end up past */
+  var edge = -1;
+  block.forEach(function (b) {
+    var i = LAYER_ORDER.indexOf(b);
+    if (i === -1) return;
+    if (edge === -1 || (dir > 0 ? i > edge : i < edge)) edge = i;
+  });
+  if (edge === -1) return false;
+  var j = edge + dir;
+  while (j >= 0 && j < LAYER_ORDER.length &&
+         (inBlock[LAYER_ORDER[j]] || !byId[LAYER_ORDER[j]] ||
+          stepNavOf(LAYER_ORDER[j]) !== myNav)) j += dir;
   if (j < 0 || j >= LAYER_ORDER.length) return false;
-  var tmp = LAYER_ORDER[i];
-  LAYER_ORDER[i] = LAYER_ORDER[j];
-  LAYER_ORDER[j] = tmp;
+
+  /* lift the whole block out and drop it back on the far side of that id */
+  var target = LAYER_ORDER[j];
+  var rest = LAYER_ORDER.filter(function (x) { return !inBlock[x]; });
+  var at = rest.indexOf(target);
+  if (at === -1) return false;
+  Array.prototype.splice.apply(rest, [dir > 0 ? at + 1 : at, 0].concat(block));
+  LAYER_ORDER = rest;
   applyLayerOrder(LAYER_ORDER);
   saveLayerOrder(LAYER_ORDER);
   return true;
@@ -3151,24 +3616,32 @@ function pushLayerUndo(id, dir) {
 }
 
 /**
- * Moves id all the way to the front or back of its own scope+fixed group
- * (the layer menu's "To top"/"To bottom" buttons): unlike moveLayer()'s
- * single-step swap, this just pulls id out of LAYER_ORDER and drops it back
- * in at the extreme end of the WHOLE array, no scope search needed. Only
- * relative order among the same-scope, same-fixed-band members matters for
- * the z-index applyLayerOrder() ends up assigning (see its doc comment), so
- * an absolute end of the full array is always ALSO an extreme end of
- * whichever scope/group id actually belongs to, since nothing can be more
- * extreme than the literal ends of the whole list.
+ * Moves id all the way to the front or back of the PAGE (the layer menu's
+ * "Bring to front"/"Send to back"), by dropping it at the extreme end of
+ * LAYER_ORDER. Since the order is flat and page-wide (see applyLayerOrder()),
+ * an end of the array is genuinely the front or back of everything painted on
+ * the page - the section it happens to live in, the card, the tile and the
+ * page's own backdrops included - which is what the button says.
+ *
+ * A CONTAINER moves as a block: every leaf inside it, keeping their order
+ * among themselves (see layerSubtreeIds()), since a container holds no rank
+ * of its own to move.
  * @param id the element's data-edit-id or data-resize-id
  * @param toTop true for "to top" (front), false for "to bottom" (back)
  * @return true if the order actually changed
  */
 function moveLayerExtreme(id, toTop) {
+  reconcileLayerOrder(LAYER_ORDER);
   var before = LAYER_ORDER.slice();
-  var i = LAYER_ORDER.indexOf(id);
-  if (i !== -1) LAYER_ORDER.splice(i, 1);
-  if (toTop) LAYER_ORDER.push(id); else LAYER_ORDER.unshift(id);
+  var block = layerSubtreeIds(elByAnyId(id));
+  if (!block.length) block = [id];
+  /* pushed bottom-first for the front, unshifted top-first for the back, so
+     either way the block lands with its own order intact */
+  (toTop ? block : block.slice().reverse()).forEach(function (cid) {
+    var i = LAYER_ORDER.indexOf(cid);
+    if (i !== -1) LAYER_ORDER.splice(i, 1);
+    if (toTop) LAYER_ORDER.push(cid); else LAYER_ORDER.unshift(cid);
+  });
   if (LAYER_ORDER.join("") === before.join("")) { LAYER_ORDER = before; return false; }
   applyLayerOrder(LAYER_ORDER);
   saveLayerOrder(LAYER_ORDER);
@@ -3775,7 +4248,9 @@ function applyColorOverrides(colors, darkColors) {
   colors = colors || {};
   THEMED_OVERRIDE_MAPS.colors = colors;
   THEMED_OVERRIDE_MAPS.darkColors = darkColors || {};
-  document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
+  /* styleableEls(), not RESIZABLE_SEL: the page takes a color of its own
+     without being a tracked element, see elId() */
+  styleableEls().forEach(function (el) {
     if (fadesOwnBackground(el) && el.dataset.baseColor === undefined) {
       el.dataset.baseColor = rgbToHex(getComputedStyle(el).backgroundColor) || "#000000";
     }
@@ -3802,7 +4277,8 @@ function applyColorOverrides(colors, darkColors) {
  */
 function applyOpacityOverrides(opacity) {
   opacity = opacity || {};
-  document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
+  /* styleableEls(), same reasoning as applyColorOverrides() */
+  styleableEls().forEach(function (el) {
     var v = opacity[elId(el)];
     if (v === undefined || v === null) return;
     applyElementOpacity(el, v);
@@ -3896,7 +4372,8 @@ function applyStateColorOverrides(hoverColor, darkHoverColor, activeColor, darkA
   THEMED_OVERRIDE_MAPS.darkHoverColor = darkHoverColor || {};
   THEMED_OVERRIDE_MAPS.activeColor = activeColor || {};
   THEMED_OVERRIDE_MAPS.darkActiveColor = darkActiveColor || {};
-  document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
+  /* styleableEls(), same reasoning as applyColorOverrides() */
+  styleableEls().forEach(function (el) {
     paintElementStateColor(el, "hover");
     paintElementStateColor(el, "press");
   });
@@ -3988,6 +4465,14 @@ function stateColorTargets(node) {
     var id = elId(el);
     if (id && !seen[id]) { seen[id] = true; ids.push(id); out.push(el); }
     el = el.parentElement ? el.parentElement.closest(RESIZABLE_SEL) : null;
+  }
+  /* the page is the last ancestor of everything, so the pointer being anywhere
+     over the document hovers it - exactly what `body:hover` means natively.
+     Walked to explicitly because the page deliberately isn't a RESIZABLE_SEL
+     match (see elId()), so the loop above can never land on it. */
+  if (node && document.body && isPageEl(document.body)) {
+    var pageId = elId(document.body);
+    if (pageId && !seen[pageId]) { seen[pageId] = true; ids.push(pageId); out.push(document.body); }
   }
   ids.forEach(function (id) {
     var g = groupOf(id);
@@ -6243,13 +6728,14 @@ function styleMenuEl() {
 }
 
 /**
- * Looks up any tracked element by its data-edit-id/data-resize-id, same
- * query every override in this file uses to find its target.
+ * Looks up the element the popover is styling by its id, the page included
+ * (see idSel()) - every row in the popover paints through this, so the page
+ * has to resolve here or its own color rows would change nothing.
  * @param id the element's id
  * @return the element, or null if it's no longer in the document
  */
 function styleMenuElById(id) {
-  return document.querySelector('[data-edit-id="' + id + '"], [data-resize-id="' + id + '"]');
+  return document.querySelector(idSel(id));
 }
 
 /**
@@ -7100,16 +7586,18 @@ function positionRing() {
 function parentSelectableOf(el) {
   if (!el || isThemeToggleLabel(el) || isPageEl(el)) return null;
   var p = el.parentElement;
-  /* body is the last stop, not a boundary to stop BEFORE: it's the page, and
-     the page is tracked like anything else now (see isPageEl()). This is the
-     main way to reach it - a full-bleed section/header/footer covers nearly
-     every pixel of these pages, so "click an empty spot" only works where one
-     of them happens not to reach, and stepping up out of the outermost
-     container is exactly the gesture that means "the thing behind all this". */
   while (p) {
     if (p.matches && p.matches(RESIZABLE_SEL)) return p;
     p = p.parentElement;
   }
+  /* the page is the last stop, past the outermost tracked container. Named
+     here rather than found by the walk above because it deliberately isn't a
+     RESIZABLE_SEL match (see elId()). This is the main way to reach it: a
+     full-bleed section/header/footer covers nearly every pixel of these pages,
+     so "click an empty spot" only works where one of them happens not to
+     reach, and stepping up out of the outermost container is exactly the
+     gesture that means "the thing behind all this". */
+  if (document.body && isPageEl(document.body)) return document.body;
   return null;
 }
 
@@ -7538,6 +8026,11 @@ function startResizeDrag(e) {
     freezeDescendants(el);
     /* measured once, here, not per mousemove - it's a forced reflow */
     if (isFlowAreaEl(el)) minW = flowAreaMinWidth(el);
+    /* a tile's own pieces stop at that tile's edge on a resize exactly as they
+       do on a move, see resizeBoundsCap(). A flow container is deliberately
+       exempt: making one bigger IS how a ta makes room for more tiles, and the
+       box it grows inside is content-sized and grows with it. */
+    else cap = resizeBoundsCap(el, dir);
   }
   var startX = e.clientX, startY = e.clientY;
   var start = getSize(el);
@@ -7649,6 +8142,10 @@ function startResizeDrag(e) {
       if (dragged) lockDraggedFlowAxes(el, start, dragged);
       applyTileFlow();
     }
+    /* a tile dragged taller than its container took the container down with it
+       (see growFlowAreaForTiles()); that height is the container's own saved
+       size now, so it gets persisted alongside the tile's */
+    if (tileBox) growFlowAreaForTiles(el, true);
     pushResizeUndo(elId(el),
       { w: start.w, h: start.h, tx: base.tx, ty: base.ty },
       { w: s.w, h: s.h, tx: p.tx, ty: p.ty });
@@ -10147,8 +10644,8 @@ function saveDays(list) {
 }
 
 /**
- * Looks up any tracked element by its data-edit-id/data-resize-id, same
- * query every override in this file uses to find its target. First match
+ * Looks up any element by its id, the page's own included (see idSel()),
+ * same query every override in this file uses to find its target. First match
  * only: an id shared by mirrored elements (eg nav.brand in the nav and
  * footer) resolves to whichever one happens to come first in the DOM,
  * which is fine here since mirrored elements are always kept identical by
@@ -10157,7 +10654,7 @@ function saveDays(list) {
  * @return the element, or null if none match
  */
 function elByAnyId(id) {
-  return document.querySelector('[data-edit-id="' + id + '"], [data-resize-id="' + id + '"]');
+  return document.querySelector(idSel(id));
 }
 
 /**
@@ -11529,6 +12026,16 @@ function renderCtxMenuRoot() {
      in this list. */
   var extrasIconTile = ctxTileFor("extras");
   CTX_MENU.innerHTML =
+    /* which element this menu is actually about. Everything else in the editor
+       identifies an element by pointing at it - the ring, the dashed outlines,
+       the handles - which is fine until two of them overlap, or one is
+       transparent, or a container's ring sits exactly where its content's ring
+       does: then there's no way to say WHICH thing is selected, to yourself or
+       to anyone else. The id is the same string content.* is keyed by, so it's
+       also the one name that means anything outside the page. */
+    (CTX_TARGET_ID
+      ? '<div class="ctx-title ctx-what">' + escapeHtml(CTX_TARGET_ID) + '</div>'
+      : "") +
     toggleHtml +
     '<div class="ctx-title">Add element</div>' +
     (extrasIconTile ? '<button type="button" data-add="extrasIcon">Attachment icon (this tile only)</button>' : "") +
@@ -11617,7 +12124,14 @@ function renderCtxMenuRoot() {
   var themePreviewBtn = CTX_MENU.querySelector("[data-theme-preview]");
   if (themePreviewBtn) {
     themePreviewBtn.addEventListener("click", function () {
-      if (window.setSiteTheme) window.setSiteTheme(isDarkThemeActive() ? "light" : "dark");
+      var next = isDarkThemeActive() ? "light" : "dark";
+      if (window.setSiteTheme) window.setSiteTheme(next);
+      /* the portal's Theme switch is the same control by another route, and
+         nothing else tells it a flip happened in here - same reason
+         setSnapping() calls back out to syncSnapSwitch() */
+      try {
+        if (window.parent !== window && window.parent.noteEditorTheme) window.parent.noteEditorTheme(next);
+      } catch (e) {}
       hideCtxMenu();
     });
   }
@@ -14493,6 +15007,41 @@ function commitTextFieldChange(el, before, after) {
   mirrorEditedField(el.getAttribute("data-edit-id"), after, el);
 }
 
+/* the <input type> values that carry a real native undo stack of their own -
+   ie the ones a ta types free text into. Everything else the editor puts in an
+   <input> (the style popover's colour swatches, its radius/opacity/rotate
+   sliders, its checkboxes) has no per-control history for ctrl+z to reach,
+   which is the whole point of ownsNativeUndo() below. */
+var NATIVE_UNDO_INPUT_TYPES = {
+  text: 1, search: 1, url: 1, tel: 1, email: 1, password: 1, number: 1, date: 1, time: 1
+};
+
+/**
+ * Whether ctrl+z/ctrl+y belongs to the focused control rather than to the
+ * editor's own history. True only where the browser really has something to
+ * undo - a field being typed into (eg the "Add element" menu's link input) -
+ * because taking the shortcut off it would eat a ta's own keystrokes.
+ *
+ * The blanket "any INPUT, TEXTAREA or SELECT" this used to be swallowed the
+ * shortcut on controls that have no native history at all, and the style
+ * popover is built almost entirely out of those: change a background colour
+ * and focus stays on the <input type="color"> that just committed the edit, so
+ * every ctrl+z after it hit this guard and returned, silently. The edit WAS on
+ * the stack (see the colour rows' own "change" handlers), and the portal's
+ * Undo button - which calls straight through ClickEditHistory, no guard in the
+ * way - would have replayed it; from the keyboard it just looked like colours
+ * weren't undoable. Nothing reaches the parent frame's copy of the shortcut
+ * either (js/ta.js), since a keydown inside this iframe never leaves it.
+ * @param el the focused element (document.activeElement)
+ * @return true if the control should keep the shortcut for itself
+ */
+function ownsNativeUndo(el) {
+  if (!el) return false;
+  if (el.tagName === "TEXTAREA") return true;
+  if (el.tagName !== "INPUT") return false;
+  return !!NATIVE_UNDO_INPUT_TYPES[(el.getAttribute("type") || "text").toLowerCase()];
+}
+
 /**
  * Turns every data-edit-id element into a click-to-edit field, only called
  * in the ta portal's Visual editor tab (instructor.html/js/ta.js) with
@@ -14508,10 +15057,7 @@ function wireClickToEdit() {
 
   document.addEventListener("keydown", function (e) {
     if (!(e.ctrlKey || e.metaKey)) return;
-    /* a real form control (eg the "Add element" menu's link input) should
-       get its own native undo, not hijack the click-to-edit stack */
-    var active = document.activeElement;
-    if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT")) return;
+    if (ownsNativeUndo(document.activeElement)) return;
     var key = e.key.toLowerCase();
     if (key === "z" && !e.shiftKey) { e.preventDefault(); undoEdit(); }
     else if (key === "y" || (key === "z" && e.shiftKey)) { e.preventDefault(); redoEdit(); }
@@ -16098,6 +16644,18 @@ function applySharedOverridePasses(data, textMap) {
      is on, and what the two page variables therefore read - and only this pass
      knows when those elements actually exist in the dom */
   if (window.renderGallery) window.renderGallery();
+  /* the day/extras/gallery tiles only exist once the hooks above have run, so
+     the applyLayerOrder() a few lines up swept a dom that didn't contain a
+     single one of them and every piece of every tile came out of this pass
+     carrying no rank at all - just the stylesheet's own no-js defaults (the
+     rect at z-index 0, everything else above it, see .day-tile-rect/
+     .extras-tile-rect in css/style.css). Sending a tile's lock icon or title
+     behind its rect therefore held only until the next override pass rebuilt
+     the tiles and threw the js-assigned z-index away with them, which on the
+     ta portal is the very next edit. Re-run over the finished dom: it's
+     idempotent, and the order it applies is the one already reconciled above. */
+  applyLayerOrder(LAYER_ORDER);
+  applyFixedHighlight();
   /* same cross-script hook, for the login page's own four placed elements
      (see buildCustomElementNode()'s "loginField"/"loginButton"/"loginError"
      kinds): js/login.js owns their live behaviour - placeholder visibility,

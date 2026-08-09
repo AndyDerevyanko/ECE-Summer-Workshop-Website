@@ -1556,6 +1556,85 @@ function toggleEditorSnapping() {
   syncSnapSwitch();
 }
 
+/* ---------------------------------------------------------------------------
+   THE EDITOR'S THEME SWITCH
+
+   Which theme the page in the frame is being edited in. The site's real
+   light/dark button can't do this job from inside the editor - in there every
+   click on it is a ta selecting, dragging or retyping it, so js/theme.js makes
+   it inert under .edit-mode - and the frame's right-click menu entry that
+   covered the gap is two clicks and a guess away from something you flip
+   constantly while picking colours (every colour row in the style popover has
+   a separate dark-mode swatch, and the only way to judge one is to look at it).
+
+   A view of the page, not a saved setting, so it behaves like the navbar and
+   dashboard switches rather than like Snap: the state lives out here in the
+   parent so it survives the iframe reloads Apply/Save trigger, and nothing
+   about it is ever written to content. It can't live in the frame's own
+   localStorage either - the editor loads its pages with ?preview=1, which is
+   exactly the flag telling setTheme() not to persist (js/theme.js), so that a
+   ta previewing light mode doesn't flip the real site out from under itself.
+   --------------------------------------------------------------------------- */
+
+/* "light"/"dark" once a ta has actually used the switch, "" while the frame is
+   still showing whatever theme it loaded with (the portal's own, off the shared
+   localStorage key) - so a fresh editor reads the frame instead of asserting a
+   theme nobody asked for. */
+var editorTheme = "";
+
+/** @return the theme the frame is currently rendering, "" if it isn't reachable */
+function editorFrameTheme() {
+  var win = editorFrameWindow();
+  try {
+    return (win && win.document.documentElement.getAttribute("data-theme")) || "";
+  } catch (e) { return ""; }
+}
+
+/** Redraws the Theme switch. Called by the frame too, after its right-click light/dark entry. */
+function syncThemeSwitch() {
+  var sw = document.getElementById("edTheme");
+  if (!sw) return;
+  var on = (editorTheme || editorFrameTheme() || "dark") === "light";
+  sw.setAttribute("aria-checked", on ? "true" : "false");
+  document.getElementById("edThemeText").textContent = on ? "Light" : "Dark";
+  sw.title = on
+    ? "Editing in light mode. Switch off for dark. This only changes what you're looking at - visitors still get whatever their own toggle says."
+    : "Editing in dark mode. Switch on for light. This only changes what you're looking at - visitors still get whatever their own toggle says.";
+}
+
+/** Flips the theme the frame is being edited in (the switch next to the page tabs). */
+function toggleEditorTheme() {
+  editorTheme = (editorTheme || editorFrameTheme() || "dark") === "dark" ? "light" : "dark";
+  pushThemeToFrame();
+  syncThemeSwitch();
+}
+
+/**
+ * Adopts a flip the frame made on its own - its right-click "Preview in
+ * light/dark mode" entry, which is still there and still works. Without this
+ * the switch would sit there reading the old theme, and the next frame reload
+ * would drop the ta's choice on the floor.
+ * @param t "light" or "dark"
+ */
+function noteEditorTheme(t) {
+  if (t !== "light" && t !== "dark") return;
+  editorTheme = t;
+  syncThemeSwitch();
+}
+
+/**
+ * Re-asserts the switch onto the frame - on a flip, and on every (re)load,
+ * which always comes back on the portal's own theme. Goes through the frame's
+ * own setTheme() (js/theme.js) rather than stamping data-theme from out here,
+ * so the sun/moon icons, every ta-picked dark colour and the style popover's
+ * light/dark swatch swap all re-resolve exactly as they do for a visitor.
+ */
+function pushThemeToFrame() {
+  if (!editorTheme) return;
+  var win = editorFrameWindow();
+  try { if (win && win.setSiteTheme) win.setSiteTheme(editorTheme); } catch (e) {}
+}
+
 /**
  * Toggles the Visual editor's frame section between its normal spot in the
  * page and a fixed overlay that covers the whole viewport, so a ta editing
@@ -2337,6 +2416,16 @@ document.addEventListener("DOMContentLoaded", function () {
   document.getElementById("edDashView").addEventListener("click", toggleEditorDashView);
   document.getElementById("edFrame").addEventListener("load", pushDashViewToFrame);
   syncDashViewSwitch();
+
+  /* the light/dark switch. Re-asserted on every frame load like the two above
+     it, and re-read on load as well: with no ta choice of its own yet the
+     switch shows whatever theme the frame came up in. */
+  document.getElementById("edTheme").addEventListener("click", toggleEditorTheme);
+  document.getElementById("edFrame").addEventListener("load", function () {
+    pushThemeToFrame();
+    syncThemeSwitch();
+  });
+  syncThemeSwitch();
 
   /* snapping: the switch, plus Shift+R for when focus is out here in the
      portal rather than in the frame (the frame has its own handler for the

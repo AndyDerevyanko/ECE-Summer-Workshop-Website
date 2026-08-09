@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/style.css?v=22" />
+  <link rel="stylesheet" href="css/style.css?v=30" />
 </head>
 <body class="mono">
 
@@ -313,6 +313,22 @@
                   <span class="ed-switch-text" id="edSnapText">Off</span>
                 </button>
               </div>
+              <!-- which theme the page in the frame is being edited in. Every
+                   page, like Snap: the site's own light/dark button sits out
+                   the editor (every click on it in there is a ta selecting or
+                   dragging it, see js/theme.js's edit-mode guard), so without
+                   this the other theme was only reachable through a right-click
+                   entry - which is a poor home for something you flip as often
+                   as you check how a colour you just picked looks in the other
+                   mode. A view of the page, never saved: what a visitor gets is
+                   decided by their own toggle. -->
+              <div class="ed-switch-row" id="edThemeRow">
+                <span class="ed-switch-cap">Theme</span>
+                <button class="ed-switch" id="edTheme" type="button" role="switch" aria-checked="false">
+                  <span class="ed-switch-track"><span class="ed-switch-knob"></span></span>
+                  <span class="ed-switch-text" id="edThemeText">Dark</span>
+                </button>
+              </div>
             </div>
             <div class="ed-undo-row">
               <button class="btn btn-ghost" id="edUndo" type="button" disabled>Undo</button>
@@ -336,6 +352,6 @@
 
   <script src="js/theme.js?v=4"></script>
   <script src="js/idle.js?v=3"></script>
-  <script src="js/ta.js?v=12"></script>
+  <script src="js/ta.js?v=13"></script>
 </body>
 </html>

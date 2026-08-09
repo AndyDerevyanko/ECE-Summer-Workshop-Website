@@ -15747,11 +15747,50 @@ function saveEditedField(id, html, defaultHtml) {
     snapshot.logistics[idx][field] = tmp.textContent;
   } else {
     if (!snapshot.text || typeof snapshot.text !== "object") snapshot.text = {};
-    if (html.trim() === (defaultHtml || "").trim()) delete snapshot.text[id];
+    var isOverride = html.trim() !== (defaultHtml || "").trim();
+    if (!isOverride) delete snapshot.text[id];
     else snapshot.text[id] = html;
+    markTextOverridden(id, isOverride);
   }
 
   try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
+ * Keeps a field's data-overridden flag in step with whether it actually has a
+ * saved override right now. applyTextOverrides() stamps that flag once per
+ * load; this is the same stamp applied the moment an edit changes the answer,
+ * and it's what makes a ta's own wording survive on the two elements that
+ * would otherwise rewrite their own text underneath them:
+ *
+ * - a theme toggle's ".tic-label", rewritten to "Light mode"/"Dark mode" on
+ *   every single flip (updateIcon() in js/theme.js)
+ * - the navbar's Dashboard/Staff Portal link, rewritten per signed-in role
+ *   (applyNavSessionState())
+ *
+ * Both already ask the flag first and leave an overridden field alone. What
+ * they were asking was a flag last computed at page load, so a wording typed
+ * DURING this session still read as "no override" - type your own words onto
+ * the toggle, flip the theme, and they were gone, replaced by the default,
+ * with nothing on screen to say the text you saved was still saved. It came
+ * back on the next reload, and vanished again on the next flip.
+ *
+ * Stale the other way too: clear a field back to the template's own wording
+ * and its override is dropped from the snapshot, but the flag stayed at "1"
+ * and the label never went back to tracking the theme.
+ *
+ * Applied to every element sharing the id, not just the edited node, for the
+ * same reason mirrorEditedField() syncs their text: a mirrored field is the
+ * same field, and the copy in the footer has to answer the question the same
+ * way as the copy in the nav.
+ * @param id the field's data-edit-id
+ * @param on whether a saved override now exists for it
+ */
+function markTextOverridden(id, on) {
+  document.querySelectorAll('[data-edit-id="' + id + '"]').forEach(function (el) {
+    if (on) el.dataset.overridden = "1";
+    else delete el.dataset.overridden;
+  });
 }
 
 /**

@@ -81,7 +81,10 @@ function initReel(wrap) {
   }
 
   var originalCount = track.children.length;
-  var REPEATS = 4; /* enough spare track that a fast hover-home never runs it dry */
+  /* enough spare track that a fast hover-home never runs it dry at EITHER end:
+     three sets ahead of the resting position, and the one behind it that
+     onEnter()'s wind-back borrows from (see trackTransform()) */
+  var REPEATS = 5;
   for (var r = 1; r < REPEATS; r++) {
     for (var i = 0; i < originalCount; i++) {
       var clone = track.children[i].cloneNode(true);
@@ -121,6 +124,22 @@ function initReel(wrap) {
   }
 
   /**
+   * The track's transform for a given drift position. It rests one whole tile
+   * set further along than the position alone implies, which parks it on the
+   * second copy rather than the first - invisible, since every copy is
+   * identical, and what it buys is a full set of track BEHIND the drift for
+   * onEnter()'s wind-back to borrow from. Without that spare set the wind-back
+   * had to stop at the loop's origin (nothing but blank track lies before it),
+   * so a tile hovered while the drift sat near that origin came only part of
+   * the way back into view - or, with nothing left to give, never moved.
+   * @param pos px scrolled into the loop
+   * @return the translate() for this reel's own axis
+   */
+  function trackTransform(pos) {
+    return "translate" + axis + "(" + (-(pos + setSpan)) + "px)";
+  }
+
+  /**
    * (Re)starts the idle drift as a fresh looping Web Animation, picking up
    * from `fromPos` instead of restarting at 0 - so handing back off from a
    * hover doesn't visibly jump.
@@ -131,7 +150,7 @@ function initReel(wrap) {
     if (setSpan <= 0) return;
     var dur = (setSpan / baseSpeed) * 1000;
     anim = track.animate(
-      [{ transform: "translate" + axis + "(0px)" }, { transform: "translate" + axis + "(" + (-setSpan) + "px)" }],
+      [{ transform: trackTransform(0) }, { transform: trackTransform(setSpan) }],
       { duration: dur, iterations: Infinity, easing: "linear" }
     );
     anim.currentTime = ((fromPos % setSpan) + setSpan) % setSpan / setSpan * dur;
@@ -160,29 +179,51 @@ function initReel(wrap) {
    * @param el the hovered tile
    */
   function onEnter(el) {
-    hoverPos = driftPos();
+    /* driftPos() only means anything while the Web Animation owns the track -
+       mid-hover hoverPos is already the live figure, and reading it from a
+       cancelled anim would snap the position back to 0 */
+    if (anim) hoverPos = driftPos();
+    /* pin the track to where the drift has actually reached BEFORE handing
+       over. cancel() drops the animation's transform out of the computed style
+       at once, so without this the measurements below read the tile at
+       whatever stale inline transform the LAST hover left behind (or at the
+       loop's origin, on the first hover of all) rather than where it visibly
+       is. That gap - however far the drift had travelled since - was being
+       subtracted from the wind-back, which is why it landed short by a varying
+       amount, and skipped entirely once the gap exceeded the overhang itself.
+       It flattered the forward homing for the same reason: there the same gap
+       is ADDED, and overshooting still leaves the tile fully on screen. */
+    track.style.transform = trackTransform(hoverPos);
     if (anim) { anim.cancel(); anim = null; }
     if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
 
     var maskRect = mask.getBoundingClientRect();
-    var elRect = el.getBoundingClientRect();
-    var margin = 24;
+    /* the tile is placed from layout offsets against the track's own rect
+       rather than read off its bounding rect, because a tile still easing out
+       of a previous hover's scale(1.08) (.reel-tile.popped, a .32s transition,
+       css/style.css) measures up to 4% of its width too big on each side
+       mid-flight. The track only ever carries a translate, so its rect is
+       safe to anchor to. */
+    var trackRect = track.getBoundingClientRect();
+    var tileStart = vertical ?
+      trackRect.top + (el.offsetTop - track.offsetTop) :
+      trackRect.left + (el.offsetLeft - track.offsetLeft);
+    var tileEnd = tileStart + (vertical ? el.offsetHeight : el.offsetWidth);
+    /* matches the mask-image stop on .reel-mask (css/style.css): a tile parked
+       inside that band is on screen but still visibly faded out by the mask,
+       which reads as "not all the way back" to anyone looking at it. The mask
+       has no padding along its scroll axis, so its border box is the edge the
+       fade is measured from either way round. */
+    var margin = 64;
     /* how far past the edge the tile hangs, on the side the drift is carrying
        tiles TOWARD (bottom/right) and on the side it's carrying them AWAY
        from (top/left). Only one can be positive unless the tile is bigger
        than the mask itself, in which case the near edge wins below: reading
        one starts at its beginning. */
-    var overflow = vertical ?
-      elRect.bottom - (maskRect.bottom - margin) :
-      elRect.right - (maskRect.right - margin);
-    var underflow = vertical ?
-      (maskRect.top + margin) - elRect.top :
-      (maskRect.left + margin) - elRect.left;
+    var overflow = tileEnd - ((vertical ? maskRect.bottom : maskRect.right) - margin);
+    var underflow = ((vertical ? maskRect.top : maskRect.left) + margin) - tileStart;
     var targetPos = hoverPos;
-    /* clamped at the loop's own origin: the track only carries copies of the
-       tile set AHEAD of the current position (see the REPEATS loop above), so
-       winding further back than 0 would drag blank track into view */
-    if (underflow > 0) targetPos = Math.max(hoverPos - underflow, 0);
+    if (underflow > 0) targetPos = hoverPos - underflow;
     else if (overflow > 0) targetPos = hoverPos + overflow;
     el.classList.add("popped");
 
@@ -196,7 +237,7 @@ function initReel(wrap) {
       if (Math.abs(dist) < 0.4) hoverPos = targetPos;
       else hoverPos += dist * Math.min(1, HOMING_RATE * dt);
 
-      track.style.transform = "translate" + axis + "(" + (-hoverPos) + "px)";
+      track.style.transform = trackTransform(hoverPos);
       rafId = requestAnimationFrame(tick);
     }
     rafId = requestAnimationFrame(tick);

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, UploadFile
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -418,6 +418,18 @@ def api_delete_object(object_id: int, ta=Depends(require_ta)):
 def root():
     """redirects the bare root url to the landing page."""
     return RedirectResponse(url="/index.html")
+
+
+@app.get("/favicon.ico")
+def favicon():
+    """serves the brand logo as the site icon. every template also carries a
+    <link rel="icon">, but browsers still probe this fixed root path on their
+    own (bookmarks, history entries, the very first hit before any html is
+    parsed), so without this route those show up as 404s in the log.
+    @return the logo png, content-typed as a png despite the .ico url - which
+    every current browser accepts, the extension in the path means nothing
+    """
+    return FileResponse(BASE_DIR / "assets" / "logo.png", media_type="image/png")
 
 
 @app.get("/index.html")

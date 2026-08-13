@@ -578,6 +578,31 @@ h1, h2, h3 {
   font-size: 1.45rem;
   margin-top: 2px;
 }
+/* the countdown sits on the hero's video, and the scrim between the two is a
+   fixed dark rgba(8,11,16,.85) in BOTH themes (see .hero.hero-media
+   .hero-scrim above) - so the card is pinned to the dark palette here rather
+   than following the theme, exactly like the hero's own eyebrow/h1/lead are
+   pinned to #f2f4f8 alongside it.
+
+   Following the theme made the card near-white in light mode while the "To be
+   announced" text stayed light: an inline foreColor span carries its own
+   light/dark pair and a ta had set both to white, so repaintInlineTextColors()
+   (js/main.js) correctly kept painting it white over a background that had
+   gone white underneath it - which reads as the text changing on every flip.
+
+   Redefining the variables rather than hard-coding each rule means every
+   descendant that already reads them (the clock variant's .cd-unit b/span
+   included) follows without repeating itself. `color` has to be restated
+   though: it inherits from body as an already-resolved value, so a local
+   --text alone would never reach it. A ta recoloring the card in the visual
+   editor still wins over all of this - those overrides land inline. */
+.hero.hero-media .countdown {
+  --surface: #181c25;
+  --text:    #e3e6ec;
+  --muted:   #888e9b;
+  --accent:  #5b86c4;
+  color: var(--text);
+}
 
 /* ---------- generic cards / grids ---------- */
 .grid { display: grid; gap: 22px; }

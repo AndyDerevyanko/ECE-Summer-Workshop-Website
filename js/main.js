@@ -2215,6 +2215,12 @@ function applyTextStyleOverrides(styles) {
     }
     if (s.align) applyTextAlignStyle(el, s.align);
     if (s.letterSpacing) el.style.letterSpacing = s.letterSpacing;
+    /* "none" is a real, meaningful override (turning OFF a template's own
+       forced caps, eg a badge/tag label) just as much as "uppercase" is
+       turning it on - both are non-empty strings, so this only ever skips
+       an actually-cleared "" override, same convention as align/fontFamily
+       above. See applyTextTransformStyle()/the toolbar's .tt-caps button. */
+    if (s.textTransform) applyTextTransformStyle(el, s.textTransform);
   });
 }
 
@@ -2247,6 +2253,21 @@ function applyTextAlignStyle(el, align) {
   if (/flex/.test(getComputedStyle(el).display)) {
     el.style.justifyContent = align ? (ALIGN_JUSTIFY[align] || "") : "";
   }
+}
+
+/**
+ * Sets one element's forced text case - the single place that decision is
+ * made, so the toolbar's caps toggle, undo/redo and the load-time apply
+ * pass can't drift apart, same reasoning as applyTextAlignStyle() just
+ * above. Several templates already force ALL CAPS on specific labels
+ * through their own css class (a day tag, the hero heading, ...) rather
+ * than through this override at all - this is only ever what a ta explicitly
+ * picked for one instance on top of (or instead of) that.
+ * @param el the element
+ * @param value "uppercase", "none", or "" for the template's own default
+ */
+function applyTextTransformStyle(el, value) {
+  el.style.textTransform = value || "";
 }
 
 /**
@@ -8752,13 +8773,18 @@ var VARIABLES = [];
  * @return the variable {key, name, type, value, ...}, or null if unknown
  */
 function variableByKey(key) {
-  /* the gallery's per-pane variables are not content.variables at all -
-     they're derived from whichever image panes are placed right now, see
-     galleryVariableFor() - but they resolve through this same lookup, so
-     everything downstream (formula chips, progress bars) can be built on
-     one without knowing the difference */
+  /* the gallery's per-pane variables and every day/attachment tile's own
+     locals are not content.variables at all - they're derived from whatever
+     is placed on the page right now (see galleryVariableFor(),
+     dayTileVariableFor(), extrasTileVariableFor()) - but they all resolve
+     through this same lookup, so everything downstream (formula chips,
+     progress bars) can be built on one without knowing the difference */
   var gv = galleryVariableFor(key);
   if (gv) return gv;
+  var dv = dayTileVariableFor(key);
+  if (dv) return dv;
+  var ev = extrasTileVariableFor(key);
+  if (ev) return ev;
   for (var i = 0; i < VARIABLES.length; i++) {
     if (VARIABLES[i].key === key) return VARIABLES[i];
   }
@@ -8795,16 +8821,63 @@ function pickableVariables(keepKey) {
 /**
  * This page's own private variables - the local half of pickableVariables().
  *
- * Only the gallery has any so far: two per placed image pane (which image
- * it's on, how many it has, see galleryVariableInventory()), so the list
- * grows and shrinks as panes are added and removed. The object canvas has no
- * page of its own to read, and currentPageKey() reads it as the landing page,
- * which has none either - so an object binds public variables only, which is
- * what an object built to be dropped onto ANY page can honestly use.
+ * Every day tile's five locals and every attachment tile's filename are
+ * offered on whatever page they're actually placed on (see
+ * dayTileVariableInventory()/extrasTileVariableInventory()) - unlike the
+ * gallery's own pair, they're not exclusive to one named page, so they're
+ * not gated by currentPageKey() the way the gallery's own two-per-pane
+ * variables are: those only exist there because gallery panes only exist
+ * there. The list grows and shrinks live as tiles/panes are added and
+ * removed. The object canvas has no page of its own to read, and
+ * currentPageKey() reads it as the landing page - so an object binds
+ * whatever tiles happen to be on the landing page plus public variables,
+ * which is what an object built to be dropped onto ANY page can honestly use.
  * @return an array of variable records, empty on a page with none
  */
 function pageLocalVariables() {
-  return currentPageKey() === "gallery" ? galleryVariableInventory() : [];
+  var out = dayTileVariableInventory().concat(extrasTileVariableInventory());
+  if (currentPageKey() === "gallery") out = out.concat(galleryVariableInventory());
+  return out;
+}
+
+/**
+ * The identifier a ta actually types inside {...} to reference one variable
+ * - not always the same as .key, which for a derived variable (see
+ * galleryVariableFor()/dayTileVariableFor()/extrasTileVariableFor(), all
+ * marked .derived) can hold characters the notation itself uses as
+ * delimiters (a gallery variable's own key has colons in it). A real
+ * content.variables entry has no such split: its own ta-typed "name" IS
+ * this identifier, which is exactly why that field can't contain "{", "}",
+ * ":" or whitespace either - see app/db.py's _sanitize_variable_name()/js/
+ * ta.js's sanitizeVariableName(). Used both by parseVariableTokens() (typed
+ * text -> chip) and formulaChipEditText() (chip -> its own re-typable
+ * notation while mid-edit).
+ * @param v a variable record (see variableByKey()), or null
+ * @return the token, or "" if v is falsy or has no token to offer
+ */
+function variableNotationToken(v) {
+  if (!v) return "";
+  return v.derived ? (v.token || "") : (v.name || "");
+}
+
+/**
+ * Finds the variable a typed {token} identifier names - the reverse of
+ * variableNotationToken(), searching everything pickableVariables() would
+ * offer (content.variables by name, every derived local by its own bare
+ * token). A plain linear scan: this list is always small (a handful of
+ * content variables plus whatever's placed on the page right now), and it
+ * only ever runs at the end of an edit session (see parseVariableTokens()),
+ * never per-keystroke.
+ * @param token the identifier text between "{" and the "}"/":" that follows
+ * @return the matching variable record, or null if token names nothing
+ */
+function variableByToken(token) {
+  if (!token) return null;
+  var pool = pickableVariables();
+  for (var i = 0; i < pool.length; i++) {
+    if (variableNotationToken(pool[i]) === token) return pool[i];
+  }
+  return null;
 }
 
 /**
@@ -8906,15 +8979,19 @@ function escapeHtml(str) {
  * @param aKey variable A's key
  * @param bKey variable B's key, ignored for "value"
  * @param decimals decimal places for any numeric result
+ * @param comma true to group thousands (python's "," format flag)
  * @return the text to show inside the chip
  */
-function formulaChipText(op, aKey, bKey, decimals) {
+function formulaChipText(op, aKey, bKey, decimals, comma) {
   var dp = parseInt(decimals, 10);
   if (isNaN(dp) || dp < 0) dp = 0;
+  var fmtNum = function (n) {
+    return comma ? n.toLocaleString(undefined, { minimumFractionDigits: dp, maximumFractionDigits: dp }) : n.toFixed(dp);
+  };
   if (op === "value") {
     var a = variableByKey(aKey);
     if (!a) return "";
-    if (a.type === "number") return variableNumericValue(aKey).toFixed(dp);
+    if (a.type === "number") return fmtNum(variableNumericValue(aKey));
     if (a.type === "boolean") return a.value ? "Yes" : "No";
     if (a.type === "datetime") {
       var d = a.value ? new Date(a.value) : null;
@@ -8925,12 +9002,12 @@ function formulaChipText(op, aKey, bKey, decimals) {
   var av = variableNumericValue(aKey);
   var bv = variableNumericValue(bKey);
   switch (op) {
-    case "sum": return (av + bv).toFixed(dp);
-    case "difference": return (av - bv).toFixed(dp);
-    case "product": return (av * bv).toFixed(dp);
-    case "quotient": return bv === 0 ? "—" : (av / bv).toFixed(dp);
-    case "percent": return bv === 0 ? "—" : (av / bv * 100).toFixed(dp) + "%";
-    case "fraction": return av.toFixed(dp) + " of " + bv.toFixed(dp);
+    case "sum": return fmtNum(av + bv);
+    case "difference": return fmtNum(av - bv);
+    case "product": return fmtNum(av * bv);
+    case "quotient": return bv === 0 ? "—" : fmtNum(av / bv);
+    case "percent": return bv === 0 ? "—" : fmtNum(av / bv * 100) + "%";
+    case "fraction": return fmtNum(av) + " of " + fmtNum(bv);
     default: return "";
   }
 }
@@ -8948,14 +9025,60 @@ function formulaChipText(op, aKey, bKey, decimals) {
  * @param aKey variable A's key
  * @param bKey variable B's key, omitted from the markup for "value"
  * @param decimals decimal places for any numeric result
+ * @param comma true to group thousands (python's "," format flag)
  * @return an HTML string for a single <span class="fx-chip">
  */
-function buildFormulaChipHtml(op, aKey, bKey, decimals) {
-  var text = formulaChipText(op, aKey, bKey, decimals);
+function buildFormulaChipHtml(op, aKey, bKey, decimals, comma) {
+  var text = formulaChipText(op, aKey, bKey, decimals, comma);
   var attrs = ' data-fx-op="' + escapeHtml(op) + '" data-fx-a="' + escapeHtml(aKey) + '"' +
     (bKey ? ' data-fx-b="' + escapeHtml(bKey) + '"' : '') +
-    ' data-fx-decimals="' + escapeHtml(String(decimals)) + '"';
+    ' data-fx-decimals="' + escapeHtml(String(decimals)) + '"' +
+    (comma ? ' data-fx-comma="1"' : '');
   return '<span class="fx-chip" contenteditable="false"' + attrs + '>' + escapeHtml(text) + '</span>';
+}
+
+/**
+ * The python-style format-flag suffix (everything after the ":" in
+ * "{Name:flags}") a formula chip's own decimals/comma settings spell out -
+ * the exact inverse of parseFormatFlags(), used by formulaChipEditText() to
+ * show a chip's real, re-typable notation while its field is mid-edit.
+ * Decimals of 0 (the default, same as typing "{Name}" with no flags at all)
+ * omits the ".0f" clause entirely, so the common case stays as clean as
+ * what a ta would actually type by hand.
+ * @param decimals decimal places, as stored in a chip's data-fx-decimals
+ * @param comma true to include the "," thousands-separator flag
+ * @return "" (no flags), or ":" plus the flag characters
+ */
+function formulaFlagString(decimals, comma) {
+  var dp = parseInt(decimals, 10);
+  var flags = (comma ? "," : "") + (!isNaN(dp) && dp > 0 ? "." + dp + "f" : "");
+  return flags ? ":" + flags : "";
+}
+
+/**
+ * A formula chip's notation while mid-edit - the formula-chip counterpart of
+ * localChipVarToken(), and the fix for repaintFormulaChips() previously
+ * showing every chip's live resolved VALUE even while a ta was actively
+ * editing the field it sits in, indistinguishable from ordinary typed text.
+ *
+ * A "value" chip (the only op the typed {Name:flags} notation itself can
+ * express, see parseVariableTokens()) shows its own real, re-typable token:
+ * backspacing it out and retyping the exact same text rebuilds an identical
+ * chip. Every other op (sum/difference/...) has no textual form the parser
+ * understands - typing what's shown would NOT regenerate it - so those show
+ * a plainly-labeled but intentionally non-reinterpretable summary instead,
+ * still always bracketed so a chip never reads as ordinary resolved text
+ * while its field is being edited.
+ * @param chip a .fx-chip[data-fx-op] element
+ * @return the "{...}" text to show
+ */
+function formulaChipEditText(chip) {
+  var op = chip.dataset.fxOp || "value";
+  var aTok = variableNotationToken(variableByKey(chip.dataset.fxA)) || chip.dataset.fxA || "?";
+  if (op === "value") return "{" + aTok + formulaFlagString(chip.dataset.fxDecimals, chip.dataset.fxComma === "1") + "}";
+  var bTok = variableNotationToken(variableByKey(chip.dataset.fxB)) || chip.dataset.fxB || "?";
+  var symbols = { sum: "+", difference: "−", product: "×", quotient: "÷", percent: "% of", fraction: "of" };
+  return "{" + aTok + " " + (symbols[op] || op) + " " + bTok + "}";
 }
 
 /**
@@ -8969,6 +9092,12 @@ function buildFormulaChipHtml(op, aKey, bKey, decimals) {
  * again whenever a gallery pane moves (a chip can be built on a pane
  * variable, see galleryVariableFor()).
  *
+ * While the chip's own field is mid-edit (wireTextField() stamps ".editing"
+ * for exactly that window), it shows its {Name:flags} notation instead of
+ * its resolved value - see formulaChipEditText() - same "you see the
+ * variable while editing, the real page's own value otherwise" rule a local
+ * chip's ${Name} already followed, just extended to formula chips too.
+ *
  * Local chips (data-fx-local: a day tile's ${Day3Number}, an attachment's
  * filename, a gallery pane's own two numbers) share the .fx-chip class but
  * carry no formula at all, and resolve through repaintLocalTileContent()
@@ -8976,8 +9105,120 @@ function buildFormulaChipHtml(op, aKey, bKey, decimals) {
  */
 function repaintFormulaChips() {
   document.querySelectorAll(".fx-chip:not([data-fx-local])").forEach(function (chip) {
-    chip.textContent = formulaChipText(chip.dataset.fxOp, chip.dataset.fxA, chip.dataset.fxB, chip.dataset.fxDecimals);
+    chip.textContent = chip.closest(".editing") ? formulaChipEditText(chip) :
+      formulaChipText(chip.dataset.fxOp, chip.dataset.fxA, chip.dataset.fxB, chip.dataset.fxDecimals, chip.dataset.fxComma === "1");
   });
+}
+
+/* ---------------------------------------------------------------------------
+   TYPING {Name}/{Name:flags} BY HAND
+
+   A "value" formula chip's own notation (see formulaChipEditText()) isn't
+   only for display: a ta can type it directly into a field - {TotalDays},
+   {TotalDays:,}, {TotalDays:.2f} - and have it become a real live chip the
+   moment they're done editing, same as pasting one in. \{ and \} escape a
+   literal brace that was never meant to be read as notation at all.
+   --------------------------------------------------------------------------- */
+
+/* matches either an escaped brace (\{ or \}, captured in group 1 with the
+   backslash) or a {Identifier} / {Identifier:flags} token (Identifier in
+   group 2, flags - everything after the ":" - in group 3, present only when
+   a ":" separates it from the identifier). Identifier and flags both
+   exclude "{"/"}" so a malformed/nested run of braces can never make this
+   greedily swallow more than one token's worth of text. */
+var VARIABLE_TOKEN_RE = /\\([{}])|\{([^{}:]+)(?::([^{}]*))?\}/g;
+
+/**
+ * Parses the flags after a {Name:flags} token's ":" - the same python-style
+ * subset formulaFlagString() produces on the way out: an optional ","
+ * (thousands separator) followed by an optional ".Nf" (N decimal places, 0-9),
+ * in that order, same as python's own "[,][.precision][type]" mini-language.
+ * A bare "{Name}" (no ":" at all) means the same defaults formulaChipText()
+ * already uses with nothing passed - 0 decimals, no grouping.
+ * @param flags the raw text between ":" and the closing "}", or undefined
+ *   for a token with no ":" at all
+ * @return {decimals, comma}, or null if flags doesn't match this grammar
+ *   (an unrecognized flag string, eg a typo - left as plain text rather than
+ *   guessed at)
+ */
+function parseFormatFlags(flags) {
+  if (flags === undefined) return { decimals: 0, comma: false };
+  var m = /^(,)?(?:\.([0-9])f)?$/.exec(flags);
+  if (!m) return null;
+  return { comma: !!m[1], decimals: m[2] !== undefined ? parseInt(m[2], 10) : 0 };
+}
+
+/**
+ * Scans one text node for {Name}/{Name:flags} tokens and \{ \} escapes,
+ * replacing it in place with a mix of plain text and new formula chips
+ * wherever a token both parses as valid flags AND names a real variable
+ * (see variableByToken()) - anything else (a typo'd flag, a "{" that just
+ * isn't naming anything pickableVariables() offers) is left completely
+ * alone as ordinary text, so a stray "{" typed for any other reason is
+ * never assumed to be a mistake.
+ * @param textNode a Text node currently attached to the document
+ * @return true if this node was rewritten
+ */
+function parseVariableTokensInNode(textNode) {
+  var text = textNode.nodeValue;
+  if (text.indexOf("{") === -1 && text.indexOf("\\") === -1) return false;
+  var frag = document.createDocumentFragment();
+  var last = 0;
+  var changed = false;
+  var m;
+  VARIABLE_TOKEN_RE.lastIndex = 0;
+  while ((m = VARIABLE_TOKEN_RE.exec(text))) {
+    if (m[1]) {
+      /* \{ or \} - literal brace, backslash dropped */
+      frag.appendChild(document.createTextNode(text.slice(last, m.index) + m[1]));
+      last = VARIABLE_TOKEN_RE.lastIndex;
+      changed = true;
+      continue;
+    }
+    var flags = parseFormatFlags(m[3]);
+    var v = flags ? variableByToken(m[2]) : null;
+    if (!v) continue; /* doesn't parse or doesn't name anything - leave as text */
+    frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+    var holder = document.createElement("span");
+    holder.innerHTML = buildFormulaChipHtml("value", v.key, "", flags.decimals, flags.comma);
+    frag.appendChild(holder.firstChild);
+    last = VARIABLE_TOKEN_RE.lastIndex;
+    changed = true;
+  }
+  if (!changed) return false;
+  frag.appendChild(document.createTextNode(text.slice(last)));
+  textNode.parentNode.replaceChild(frag, textNode);
+  return true;
+}
+
+/**
+ * Converts every hand-typed {Name}/{Name:flags} token in a field into a
+ * live formula chip - the typing-direction counterpart to
+ * formulaChipEditText() (chip -> notation). Run once, right before a
+ * field's edit session commits (see wireTextField()'s blur handler) rather
+ * than per-keystroke: rewriting the DOM under a still-focused caret is
+ * exactly the kind of thing that makes a cursor jump mid-sentence, and this
+ * only ever needs to happen once the ta is done typing anyway - the same
+ * moment a local chip's own ${Name} already swaps back to its resolved
+ * value.
+ *
+ * Walks every text node in the field except ones already inside a .fx-chip
+ * (its contenteditable="false" label is never a ta's own typing, see
+ * buildFormulaChipHtml()) - collected up front via a TreeWalker snapshot so
+ * rewriting one node mid-walk can't disturb the walk itself.
+ * @param field the data-edit-id field whose edit session just ended
+ * @return true if anything in the field was rewritten
+ */
+function parseVariableTokens(field) {
+  var texts = [];
+  var walker = document.createTreeWalker(field, NodeFilter.SHOW_TEXT, null, false);
+  var n;
+  while ((n = walker.nextNode())) {
+    if (!n.parentElement || !n.parentElement.closest(".fx-chip")) texts.push(n);
+  }
+  var changed = false;
+  texts.forEach(function (t) { if (parseVariableTokensInNode(t)) changed = true; });
+  return changed;
 }
 
 /**
@@ -9032,6 +9273,21 @@ var DAYS_CHIP_VAR_SUFFIX = {
   "day-blurb": "Body"
 };
 
+/* what each local resolves to off its own tile's dataset, in one table so
+   adding a sixth local is one line rather than a fourth near-identical query
+   loop - shared by repaintDaysChips() (repainting an existing chip sitting
+   inside its own tile) and dayTileVariableFor() (reading the same value as
+   an ordinary variable record from anywhere on the page, see below).
+   day-title/day-blurb are the day's real content-manager title/description
+   (see buildDayOpenTileHtml() in js/dashboard.js). */
+var DAYS_CHIP_RESOLVERS = {
+  "day-number": function (t) { return t.dataset.daysNumber ? "Day " + t.dataset.daysNumber : ""; },
+  "day-date": function (t) { return t.dataset.daysDate || ""; },
+  "day-locked": function (t) { return t.dataset.daysLocked === "1" ? "Yes" : "No"; },
+  "day-title": function (t) { return t.dataset.daysTitle || ""; },
+  "day-blurb": function (t) { return t.dataset.daysBlurb || ""; }
+};
+
 /**
  * The `${...}` variable name a local chip stands for, but ONLY while the
  * field it sits in is actually being edited (wireTextField() stamps
@@ -9077,17 +9333,32 @@ function localChipVarToken(chip) {
 }
 
 /**
- * Repaints every local chip and every per-tile attachment icon at once - the
- * whole "this piece of the shared template resolves differently on each
- * tile" set. Called whenever a text field enters or leaves edit mode (chips
- * swap between their resolved value and their ${variable} name, see
- * localChipVarToken()) and after any render/mirror that could have copied
- * one tile's resolved text onto another's.
+ * Repaints every local chip, every FORMULA chip, and every per-tile
+ * attachment icon at once - the whole "this piece of content resolves
+ * differently depending on live state, or swaps to its own notation while
+ * mid-edit" set. Called whenever a text field enters or leaves edit mode
+ * (chips swap between their resolved value and their notation - a local
+ * chip's ${Name}, see localChipVarToken(), or a formula chip's {Name:flags},
+ * see formulaChipEditText()) and after any render/mirror that could have
+ * copied one tile's resolved text onto another's.
+ *
+ * repaintFormulaChips() belongs here rather than only inside
+ * repaintGalleryChips() (which used to be its one and only caller): that
+ * function returns early on any page that hasn't loaded js/gallery.js (see
+ * its own comment), which used to silently skip formula-chip repainting
+ * everywhere except the gallery page. Harmless back when a formula chip's
+ * displayed text never changed after being placed (baked in once and left
+ * alone), but the moment it needed to swap to notation and back (see
+ * formulaChipEditText()) that gate meant a chip inserted from the ƒx menu on
+ * any OTHER page would edit-blur back to its own leftover "{Name:flags}"
+ * text forever instead of its real resolved value. Called unconditionally
+ * here instead, same as every other repaint in this function.
  */
 function repaintLocalTileContent() {
   repaintExtrasFilenameChips();
   repaintDaysChips();
   repaintGalleryChips();
+  repaintFormulaChips();
   repaintExtrasTypeIcons();
 }
 
@@ -9155,21 +9426,10 @@ function buildDaysChipHtml(local, label) {
  * raw ISO string, so no date formatting is duplicated here.
  */
 function repaintDaysChips() {
-  /* what each local resolves to off its own tile's dataset, in one table so
-     adding a sixth local is one line rather than a fourth near-identical
-     query loop. day-title/day-blurb are the day's real content-manager
-     title/description (see buildDayOpenTileHtml() in js/dashboard.js). */
-  var resolvers = {
-    "day-number": function (t) { return t.dataset.daysNumber ? "Day " + t.dataset.daysNumber : ""; },
-    "day-date": function (t) { return t.dataset.daysDate || ""; },
-    "day-locked": function (t) { return t.dataset.daysLocked === "1" ? "Yes" : "No"; },
-    "day-title": function (t) { return t.dataset.daysTitle || ""; },
-    "day-blurb": function (t) { return t.dataset.daysBlurb || ""; }
-  };
-  Object.keys(resolvers).forEach(function (local) {
+  Object.keys(DAYS_CHIP_RESOLVERS).forEach(function (local) {
     document.querySelectorAll('.fx-chip[data-fx-local="' + local + '"]').forEach(function (chip) {
       var tile = chip.closest("[data-days-tile]");
-      chip.textContent = localChipVarToken(chip) || (tile ? resolvers[local](tile) : "");
+      chip.textContent = localChipVarToken(chip) || (tile ? DAYS_CHIP_RESOLVERS[local](tile) : "");
     });
   });
 }
@@ -9211,6 +9471,139 @@ function insertDaysChip(tile, local) {
   var before = field.innerHTML;
   field.innerHTML = before + (before ? " " : "") + buildDaysChipHtml(local, labels[local] || local);
   commitTextFieldChange(field, before, field.innerHTML);
+}
+
+/* ---------------------------------------------------------------------------
+   DAY TILE / ATTACHMENT TILE LOCALS, READ AS ORDINARY VARIABLE RECORDS
+
+   A day tile's five locals and an attachment tile's filename (both just
+   above) only ever resolve for a chip physically sitting inside their own
+   tile - exactly right for the tile's own template, but it means nothing
+   anywhere else on the page can read, say, Day 1's own title. This section
+   makes the same live values reachable from anywhere, the same way the
+   gallery page's own two variables just below are: a derived record rather
+   than something stored (see galleryVariableFor()), keyed with
+   TILE_VAR_PREFIX so it can never collide with a real content.variables key.
+   That's what lets a "value" formula chip (or the typed {Day1Header}
+   notation, see parseVariableTokens()) reference any tile's own data from
+   anywhere on the page - offered on every page, not gated by
+   currentPageKey() the way the gallery's own pair is, since day/extras tiles
+   aren't exclusive to one page the way gallery panes are.
+   --------------------------------------------------------------------------- */
+
+/* the key prefix every tile-local variable record uses, so variableByKey()
+   can recognize one before falling through to the VARIABLES array - same
+   "disjoint prefix" idea as GALLERY_ACTION_PREFIX/galleryVarKey(). */
+var TILE_VAR_PREFIX = "tile:";
+
+/**
+ * Every day tile currently on the page, one entry per distinct scope
+ * (dataset.daysVar, eg "Day1") - a day can render as more than one tile
+ * (locked vs open template) but they share the same scope and so collapse
+ * to a single set of variables, same dedupe idea as galleryPaneBindings().
+ * @return an array of {scope, tile}, tile being the first one seen for that scope
+ */
+function dayTileScopes() {
+  var seen = {};
+  var out = [];
+  document.querySelectorAll("[data-days-tile]").forEach(function (tile) {
+    var scope = tile.dataset.daysVar;
+    if (!scope || seen[scope]) return;
+    seen[scope] = true;
+    out.push({ scope: scope, tile: tile });
+  });
+  return out;
+}
+
+/**
+ * Builds the variable-shaped record one day tile local resolves to, read
+ * live off whichever tile currently carries that scope. Resolves to ""
+ * rather than null when no tile currently carries the scope (a day that's
+ * since been deleted), so a reference to it just reads blank instead of
+ * vanishing outright - same "never crash over a stale reference" stance
+ * variableNumericValue() already takes.
+ * @param key a key built as TILE_VAR_PREFIX + "day:" + scope + ":" + local
+ * @return a {key, name, type, value} record, or null if key isn't one
+ */
+function dayTileVariableFor(key) {
+  var prefix = TILE_VAR_PREFIX + "day:";
+  if (typeof key !== "string" || key.indexOf(prefix) !== 0) return null;
+  var rest = key.slice(prefix.length);
+  var cut = rest.indexOf(":");
+  if (cut === -1) return null;
+  var scope = rest.slice(0, cut);
+  var local = rest.slice(cut + 1);
+  var suffix = DAYS_CHIP_VAR_SUFFIX[local];
+  var resolver = DAYS_CHIP_RESOLVERS[local];
+  if (!suffix || !resolver) return null;
+  var found = dayTileScopes().filter(function (s) { return s.scope === scope; })[0];
+  /* derived - see variableNotationToken(). .key here is the internal
+     TILE_VAR_PREFIX form (unique, disambiguated), but the token a ta
+     actually types is the same bare "Day1Header" a local chip already shows
+     while mid-edit, see localChipVarToken() */
+  return { key: key, name: scope + suffix, type: "string", value: found ? resolver(found.tile) : "",
+    derived: true, token: scope + suffix };
+}
+
+/**
+ * Every day tile's own five local variables, in tile order - the day-tile
+ * half of pageLocalVariables()'s extension. See dayTileVariableFor().
+ * @return an array of variable records
+ */
+function dayTileVariableInventory() {
+  var out = [];
+  dayTileScopes().forEach(function (s) {
+    Object.keys(DAYS_CHIP_VAR_SUFFIX).forEach(function (local) {
+      out.push(dayTileVariableFor(TILE_VAR_PREFIX + "day:" + s.scope + ":" + local));
+    });
+  });
+  return out;
+}
+
+/**
+ * Every attachment tile currently on the page, one entry per distinct scope
+ * (dataset.extrasVar, eg "Day1Attachment2") - same dedupe idea as
+ * dayTileScopes().
+ * @return an array of {scope, tile}
+ */
+function extrasTileScopes() {
+  var seen = {};
+  var out = [];
+  document.querySelectorAll("[data-extras-tile]").forEach(function (tile) {
+    var scope = tile.dataset.extrasVar;
+    if (!scope || seen[scope]) return;
+    seen[scope] = true;
+    out.push({ scope: scope, tile: tile });
+  });
+  return out;
+}
+
+/**
+ * Builds the variable-shaped record one attachment tile's filename resolves
+ * to, read live off whichever tile currently carries that scope - the
+ * extras-tile counterpart of dayTileVariableFor().
+ * @param key a key built as TILE_VAR_PREFIX + "extras:" + scope
+ * @return a {key, name, type, value} record, or null if key isn't one
+ */
+function extrasTileVariableFor(key) {
+  var prefix = TILE_VAR_PREFIX + "extras:";
+  if (typeof key !== "string" || key.indexOf(prefix) !== 0) return null;
+  var scope = key.slice(prefix.length);
+  if (!scope) return null;
+  var found = extrasTileScopes().filter(function (s) { return s.scope === scope; })[0];
+  /* derived - see variableNotationToken() */
+  return { key: key, name: scope + "Name", type: "string", value: found ? (found.tile.dataset.extrasFilename || "") : "",
+    derived: true, token: scope + "Name" };
+}
+
+/**
+ * Every attachment tile's own filename variable, in tile order - the
+ * extras-tile half of pageLocalVariables()'s extension. See
+ * extrasTileVariableFor().
+ * @return an array of variable records
+ */
+function extrasTileVariableInventory() {
+  return extrasTileScopes().map(function (s) { return extrasTileVariableFor(TILE_VAR_PREFIX + "extras:" + s.scope); });
 }
 
 /* ---------------------------------------------------------------------------
@@ -9331,7 +9724,12 @@ function repaintGalleryChips() {
   });
   /* a formula chip can be built on a pane variable too (see
      galleryVariableFor()), and those read live off the pane, so stepping an
-     image has to repaint them alongside the local chips above */
+     image has to repaint them alongside the local chips above. Kept here
+     (not just in repaintLocalTileContent(), which now also calls this
+     unconditionally) because js/gallery.js calls this function directly on
+     every image step, independent of any text field entering/leaving edit
+     mode - a harmless redundant call whenever repaintLocalTileContent() IS
+     the caller instead, repaintFormulaChips() is cheap and idempotent. */
   repaintFormulaChips();
 }
 
@@ -9399,7 +9797,14 @@ function galleryVariableFor(key) {
     key: key,
     name: galleryBindingLabel(g.dir) + (g.local === "gallery-total" ? " — total images" : " — current image"),
     type: "number",
-    value: isNaN(raw) ? 0 : raw
+    value: isNaN(raw) ? 0 : raw,
+    /* derived (not a real content.variables entry) - see variableNotationToken().
+       .key itself can't double as the typed {...} identifier (it has colons
+       in it, the notation's own flag delimiter), so this is the same bare
+       token a gallery local chip already shows while mid-edit, see
+       localChipVarToken() */
+    derived: true,
+    token: galleryVarScope(g.dir) + (g.local === "gallery-total" ? "Total" : "Current")
   };
 }
 
@@ -14213,6 +14618,7 @@ function buildTextToolbar() {
     '<button type="button" class="tt-bold" title="Bold"><b>B</b></button>' +
     '<button type="button" class="tt-italic" title="Italic"><i>I</i></button>' +
     '<button type="button" class="tt-underline" title="Underline"><u>U</u></button>' +
+    '<button type="button" class="tt-caps" title="Force ALL CAPS">Aa</button>' +
     '<button type="button" class="tt-link" title="Link the selected text">' + LINK_ICONS.link + '</button>' +
     '<input type="color" class="tt-color" title="Text color (selection)">' +
     '<button type="button" class="tt-color-dark-toggle" title="Edit other mode\'s text color">🌙</button>' +
@@ -14363,6 +14769,27 @@ function buildTextToolbar() {
       EDIT_REDO.length = 0;
       updateTextToolbarState();
     });
+  });
+
+  TEXT_TOOLBAR.querySelector(".tt-caps").addEventListener("click", function () {
+    if (!TEXT_TOOLBAR_EL) return;
+    var el = TEXT_TOOLBAR_EL;
+    var id = el.getAttribute("data-edit-id");
+    var before = el.style.textTransform || "";
+    var want = getComputedStyle(el).textTransform === "uppercase" ? "none" : "uppercase";
+    /* if forcing the opposite case actually matches what the template would
+       already show with no override at all, clear the override outright
+       rather than writing a redundant explicit one - same "never store more
+       than the real difference" restraint every other saveTextStyle() call
+       already takes */
+    el.style.textTransform = "";
+    var templateDefault = getComputedStyle(el).textTransform;
+    var next = want === templateDefault ? "" : want;
+    applyTextTransformStyle(el, next);
+    saveTextStyle(id, "textTransform", next);
+    EDIT_UNDO.push({ type: "texttransform", id: id, before: before, after: next });
+    EDIT_REDO.length = 0;
+    updateTextToolbarState();
   });
 
   ["ls-dn", "ls-up"].forEach(function (cls) {
@@ -14544,6 +14971,7 @@ function buildTextToolbar() {
     EDIT_UNDO.push({ type: "fontfamily", id: id, before: before, after: { family: val, url: custom ? custom.url : "" } });
     EDIT_REDO.length = 0;
     updateFontDeleteButton();
+    updateCapsToggleLock(el);
     el.focus();
   });
 
@@ -14579,6 +15007,7 @@ function buildTextToolbar() {
         EDIT_UNDO.push({ type: "fontfamily", id: id, before: before, after: { family: family, url: asset.url } });
         EDIT_REDO.length = 0;
         updateFontDeleteButton();
+        updateCapsToggleLock(el);
         el.focus();
       })
       .catch(function () {})
@@ -14600,6 +15029,7 @@ function buildTextToolbar() {
         saveFontFamily(fieldId, "", "");
         EDIT_UNDO.push({ type: "fontfamily", id: fieldId, before: before, after: { family: "", url: "" } });
         EDIT_REDO.length = 0;
+        updateCapsToggleLock(el);
       }
       updateFontDeleteButton();
     });
@@ -14676,6 +15106,8 @@ function updateTextToolbarState() {
   TEXT_TOOLBAR.querySelectorAll(".tt-align").forEach(function (btn) {
     btn.classList.toggle("active", TEXT_TOOLBAR_EL.style.textAlign === btn.getAttribute("data-align"));
   });
+  TEXT_TOOLBAR.querySelector(".tt-caps").classList.toggle("active",
+    getComputedStyle(TEXT_TOOLBAR_EL).textTransform === "uppercase");
   var curColor = "";
   try { curColor = document.queryCommandValue("foreColor"); } catch (e) {}
   var primaryHex = rgbToHex(curColor) || "#000000";
@@ -14718,6 +15150,81 @@ function updateTextToolbarState() {
 }
 
 /**
+ * Best-effort check for whether a font has real glyphs of its own for a
+ * given run of text, rather than the browser silently substituting some
+ * other font's letterforms for it - the same "measure against a neutral
+ * sentinel" trick font-load detectors (eg FontFaceObserver) already use to
+ * notice a webfont has swapped in, aimed here at glyph coverage instead of
+ * load state: if a font-family stack (with a plain "monospace" fallback
+ * behind it) measures a string at exactly the width plain "monospace" alone
+ * measures the SAME string, the family never contributed its own glyphs for
+ * it - the fallback did all the work. Every built-in choice in TEXT_FONTS
+ * (the site's own three, Georgia/Times/Courier/Arial) is a normal
+ * general-purpose typeface that measures differently from the neutral
+ * baseline either way, so this only ever has real work to do on a
+ * ta-uploaded display font that turns out to be missing a whole case - see
+ * updateCapsToggleLock().
+ * @param family a css font-family value, as currently applied to a field
+ * @return a Promise resolving {hasUpper, hasLower}
+ */
+function fontCaseCoverage(family) {
+  var upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  var lower = "abcdefghijklmnopqrstuvwxyz";
+  if (!fontCaseCoverage._ctx) fontCaseCoverage._ctx = document.createElement("canvas").getContext("2d");
+  var ctx = fontCaseCoverage._ctx;
+  var probe = function () {
+    ctx.font = "48px " + family + ", monospace";
+    var famUpper = ctx.measureText(upper).width;
+    var famLower = ctx.measureText(lower).width;
+    ctx.font = "48px monospace";
+    return {
+      hasUpper: Math.abs(famUpper - ctx.measureText(upper).width) > 0.5,
+      hasLower: Math.abs(famLower - ctx.measureText(lower).width) > 0.5
+    };
+  };
+  var loaded;
+  try { loaded = document.fonts.load("48px " + family); } catch (e) { loaded = Promise.resolve(); }
+  /* document.fonts.ready as a second wait: .load() resolving only means the
+     request settled, not that every font in the stack is necessarily usable
+     yet in every browser - same double-wait belt-and-suspenders a couple of
+     other font-swap spots in this file already use */
+  return Promise.resolve(loaded).then(function () { return document.fonts.ready; }).then(probe, probe);
+}
+
+/**
+ * Locks/unlocks the toolbar's caps toggle for the field currently being
+ * edited, off a live glyph-coverage check of whatever font is actually
+ * applied to it right now (see fontCaseCoverage()). A font missing an
+ * entire case can't honestly render the other state: turning caps off on an
+ * uppercase-only display font wouldn't reveal real lowercase letters, it
+ * would just show whatever the browser silently substitutes instead - so
+ * the toggle disables itself rather than offering a control that can't do
+ * anything but show broken text. A font with full coverage (every built-in
+ * choice, and most uploaded ones) leaves the toggle exactly as freely
+ * clickable as bold/italic/underline already are.
+ *
+ * Runs async (glyph measurement needs the font to have actually loaded, see
+ * fontCaseCoverage()) - by the time it resolves the ta may have blurred the
+ * field or picked a different font already, so it re-checks TEXT_TOOLBAR_EL
+ * is still this exact field before touching the button.
+ * @param el the field currently being edited
+ */
+function updateCapsToggleLock(el) {
+  if (!TEXT_TOOLBAR) return;
+  var btn = TEXT_TOOLBAR.querySelector(".tt-caps");
+  btn.disabled = false;
+  btn.title = "Force ALL CAPS";
+  var family = getComputedStyle(el).fontFamily;
+  fontCaseCoverage(family).then(function (cov) {
+    if (TEXT_TOOLBAR_EL !== el || (cov.hasUpper && cov.hasLower)) return;
+    btn.disabled = true;
+    btn.title = cov.hasLower ?
+      "This font has no uppercase letterforms of its own - caps unavailable" :
+      "This font has no lowercase letterforms of its own - always shown in caps";
+  });
+}
+
+/**
  * Shows the floating text toolbar above a text field being edited, and
  * points its font dropdown at whatever this field's already set to.
  * @param el the text field being edited
@@ -14727,6 +15234,7 @@ function showTextToolbar(el) {
   TEXT_TOOLBAR_EL = el;
   TEXT_TOOLBAR.querySelector(".tt-font").value = el.style.fontFamily || "";
   updateFontDeleteButton();
+  updateCapsToggleLock(el);
   updateTextToolbarState();
   /* fetched fresh every time, so a teammate's just-uploaded font shows up
      in the picker without a reload */
@@ -14905,6 +15413,7 @@ function buildFormulaMenu() {
     '<label class="fxm-row fxm-a-row">Variable<select class="fxm-a"></select></label>' +
     '<label class="fxm-row fxm-b-row">Of<select class="fxm-b"></select></label>' +
     '<label class="fxm-row fxm-dec-row">Decimals<input type="number" class="fxm-decimals" min="0" max="6" value="0"></label>' +
+    '<label class="fxm-row fxm-comma-row"><input type="checkbox" class="fxm-comma"> Thousands separator (1,000)</label>' +
     '<div class="fxm-actions">' +
       '<button type="button" class="fxm-remove" style="display:none">Remove</button>' +
       '<span class="fxm-sep"></span>' +
@@ -14979,6 +15488,7 @@ function refreshFormulaMenuRows() {
   var aVar = variableByKey(aSelect.value);
   var showDecimals = op !== "fraction" && (meta.needsB || (aVar && aVar.type === "number"));
   FX_MENU.querySelector(".fxm-dec-row").style.display = showDecimals ? "" : "none";
+  FX_MENU.querySelector(".fxm-comma-row").style.display = showDecimals ? "" : "none";
 }
 
 /**
@@ -15003,6 +15513,7 @@ function openFormulaMenu(fieldEl, chip) {
   if (chip && chip.dataset.fxA) FX_MENU.querySelector(".fxm-a").value = chip.dataset.fxA;
   if (chip && chip.dataset.fxB) FX_MENU.querySelector(".fxm-b").value = chip.dataset.fxB;
   FX_MENU.querySelector(".fxm-decimals").value = chip ? (chip.dataset.fxDecimals || "0") : "0";
+  FX_MENU.querySelector(".fxm-comma").checked = !!(chip && chip.dataset.fxComma === "1");
   FX_MENU.querySelector(".fxm-ok").textContent = chip ? "Update" : "Insert";
   FX_MENU.querySelector(".fxm-remove").style.display = chip ? "" : "none";
 
@@ -15041,6 +15552,7 @@ function commitFormulaMenu() {
   var bKey = meta.needsB ? FX_MENU.querySelector(".fxm-b").value : "";
   var decimals = parseInt(FX_MENU.querySelector(".fxm-decimals").value, 10);
   if (isNaN(decimals) || decimals < 0) decimals = 0;
+  var comma = FX_MENU.querySelector(".fxm-comma").checked;
   var field = FX_MENU_FIELD;
   var before = field.innerHTML;
 
@@ -15050,7 +15562,12 @@ function commitFormulaMenu() {
     chip.dataset.fxA = aKey;
     if (bKey) chip.dataset.fxB = bKey; else delete chip.dataset.fxB;
     chip.dataset.fxDecimals = String(decimals);
-    chip.textContent = formulaChipText(op, aKey, bKey, decimals);
+    if (comma) chip.dataset.fxComma = "1"; else delete chip.dataset.fxComma;
+    /* still mid-edit (the menu only ever opens on a chip already inside a
+       field that's .editing), so this shows the chip's own {Name:flags}
+       notation, same as every other chip in the field right now - not the
+       resolved value repaintFormulaChips() will swap it back to on blur */
+    chip.textContent = formulaChipEditText(chip);
   } else {
     field.focus();
     var sel = window.getSelection();
@@ -15063,7 +15580,12 @@ function commitFormulaMenu() {
       r.collapse(false);
       sel.addRange(r);
     }
-    document.execCommand("insertHTML", false, buildFormulaChipHtml(op, aKey, bKey, decimals));
+    document.execCommand("insertHTML", false, buildFormulaChipHtml(op, aKey, bKey, decimals, comma));
+    /* buildFormulaChipHtml() baked in the RESOLVED text (its default, for
+       every other caller, eg a freshly loaded page); flip it back to its
+       edit-mode notation immediately since the field is still mid-edit
+       right now, same repaint every other chip in an editing field gets */
+    repaintFormulaChips();
   }
 
   var after = field.innerHTML;
@@ -15082,6 +15604,35 @@ function removeFormulaMenuChip() {
   closeFormulaMenu();
   commitTextFieldChange(field, before, after);
   field.focus();
+}
+
+/**
+ * Makes sure every .fx-chip in a field about to become editable has a real
+ * text node on both sides of it, inserting an invisible one where one's
+ * missing. Without this, a field whose entire content is a single chip (the
+ * common case for a day tile's title before a ta has typed anything around
+ * it, see buildDaysChipHtml()) gives the browser nowhere to put the caret at
+ * all: EVERY click lands on the chip itself (contenteditable="false"), and
+ * the only available action becomes reconfiguring/deleting it wholesale -
+ * there's no way to click beside it and add surrounding text. A chip that
+ * already has real text next to it is left untouched.
+ *
+ * Uses a zero-width space ("​") rather than a genuinely empty text
+ * node: an empty text node is exactly the kind of thing a browser is free
+ * to normalize/collapse back out before a click ever reaches it, which
+ * would silently undo this. Being zero-width, it never changes what the
+ * field visibly shows, and (being real, non-empty text) never gets
+ * normalized away itself.
+ * @param field the field about to become contentEditable
+ */
+function ensureChipCaretSentinels(field) {
+  var ZWSP = "​";
+  field.querySelectorAll(".fx-chip").forEach(function (chip) {
+    var prev = chip.previousSibling;
+    if (!prev || prev.nodeType !== 3 || !prev.nodeValue) chip.parentNode.insertBefore(document.createTextNode(ZWSP), chip);
+    var next = chip.nextSibling;
+    if (!next || next.nodeType !== 3 || !next.nodeValue) chip.parentNode.insertBefore(document.createTextNode(ZWSP), chip.nextSibling);
+  });
 }
 
 /**
@@ -15105,12 +15656,21 @@ function wireTextField(el) {
   var beforeEdit = "";
   el.addEventListener("click", function (e) {
     if (el.isContentEditable) {
-      /* a click on a chip while the field is already mid-edit reconfigures
-         it instead of just placing the caret next to it
+      /* a click on a FORMULA chip (data-fx-op: op/operand(s) a ta can
+         actually reconfigure) while the field is already mid-edit opens the
+         menu to do that, instead of just placing the caret next to it
          (contenteditable="false" makes chips atomic for caret navigation,
-         but they still receive normal click events) */
+         but they still receive normal click events). A LOCAL chip
+         (data-fx-local: a day tile's own ${Day1Header}, a filename, a
+         gallery pane's numbers) has nothing to reconfigure - openFormulaMenu()
+         is built entirely around FX_OPS/data-fx-a and doesn't know what a
+         local chip even is, so routing one there used to open a menu that
+         couldn't represent it and would silently turn it into a broken
+         formula chip on "Update". Falling through here instead lets the
+         click place a caret beside it like any other atomic node - the only
+         way, previously, to add text next to one without deleting it. */
       var chip = e.target.closest && e.target.closest(".fx-chip");
-      if (chip) { e.preventDefault(); e.stopPropagation(); openFormulaMenu(el, chip); }
+      if (chip && chip.dataset.fxOp) { e.preventDefault(); e.stopPropagation(); openFormulaMenu(el, chip); }
       return; /* already editing, let the caret land normally otherwise */
     }
     /* shift-click already toggled group-selection in the mousedown handler
@@ -15121,6 +15681,12 @@ function wireTextField(el) {
     if (e.shiftKey) { e.preventDefault(); e.stopPropagation(); return; }
     e.preventDefault();
     e.stopPropagation();
+    /* guarantees a real caret position on both sides of every chip, even
+       when a chip is the field's ENTIRE content (no other text to click
+       into at all) - see ensureChipCaretSentinels(). Runs before beforeEdit
+       is captured so a click-in/click-out with no actual typing still
+       diffs as no change - the sentinels themselves are never "the edit". */
+    ensureChipCaretSentinels(el);
     beforeEdit = el.innerHTML;
     el.contentEditable = "true";
     el.classList.add("editing");
@@ -15160,6 +15726,12 @@ function wireTextField(el) {
     el.contentEditable = "false";
     el.classList.remove("editing");
     hideTextToolbar();
+    /* converts any {Name}/{Name:flags} the ta typed by hand into a real
+       chip - after ".editing" comes off, so a freshly-made chip bakes in
+       its resolved value (buildFormulaChipHtml()'s default) rather than
+       edit-mode notation it would otherwise immediately have to un-repaint,
+       see parseVariableTokens() */
+    parseVariableTokens(el);
     /* the edit may have changed el's own rendered size (more/less text),
        so the ring needs to catch up if it's sitting on this field */
     positionRing();
@@ -15299,7 +15871,8 @@ function redoEdit() {
  *  - "resize": {w, h, tx, ty} (a resize can also shift position, see
  *    startResizeDrag())
  *  - "fontsize": css font-size, or "" for the template default
- *  - "align"/"letterspacing": the css value, or "" for the template default
+ *  - "align"/"letterspacing"/"texttransform": the css value, or "" for the
+ *    template default
  *  - "fontfamily": {family, url} (url only set for a ta-uploaded font)
  *  - "add": existed (after) vs hidden (before), same shape as "delete", just
  *    the two sides swapped (see addCustomElement())
@@ -15460,6 +16033,14 @@ function applyHistoryAction(action, side) {
     }
     return;
   }
+  if (action.type === "texttransform") {
+    var ttEl = elByAnyId(action.id);
+    if (!ttEl) return;
+    applyTextTransformStyle(ttEl, val);
+    saveTextStyle(action.id, "textTransform", val);
+    if (TEXT_TOOLBAR_EL === ttEl) updateTextToolbarState();
+    return;
+  }
   if (action.type === "fontfamily") {
     var fontEl = elByAnyId(action.id);
     if (!fontEl) return;
@@ -15469,6 +16050,7 @@ function applyHistoryAction(action, side) {
     if (TEXT_TOOLBAR_EL === fontEl) {
       TEXT_TOOLBAR.querySelector(".tt-font").value = val.family;
       updateFontDeleteButton();
+      updateCapsToggleLock(fontEl);
     }
     if (STYLE_MENU_ID === action.id && STYLE_MENU && STYLE_MENU.classList.contains("show")) {
       STYLE_MENU.querySelector(".sm-dt-font").value = val.family;

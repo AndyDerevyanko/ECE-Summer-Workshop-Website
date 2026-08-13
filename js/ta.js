@@ -56,12 +56,12 @@ function seed() {
        visual editor offers to bind. */
     variables: [
       {
-        key: "total_days", name: "Total days", type: "number", value: 10,
+        key: "total_days", name: "TotalDays", type: "number", value: 10,
         description: "\"__ of TOTAL days unlocked\" progress bar on student dashboard",
         builtin: true, computed: false
       },
       {
-        key: "days_progressed", name: "Days progressed", type: "number", value: 0,
+        key: "days_progressed", name: "DaysProgressed", type: "number", value: 0,
         description: "The day number the workshop is currently on (count of unlocked days), calculated automatically",
         builtin: true, computed: true
       }
@@ -313,6 +313,13 @@ function normalizeState() {
       if (!STATE.variables.some(function (v) { return v.key === sv.key; })) STATE.variables.push(sv);
     });
   }
+  /* self-heals a name saved before the {}/:/whitespace rule existed (see
+     sanitizeVariableName()) - the server already enforces this on every
+     read/write (app/db.py's _sanitize_variable_name()), but a profile
+     loaded straight from localStorage's own draft/import path can reach
+     here without going through that, same "never trust an old save" stance
+     as everything else in this function. */
+  STATE.variables.forEach(function (v) { v.name = sanitizeVariableName(v.name); });
   if (STATE.hero_video_url === undefined) STATE.hero_video_url = "assets/cover-video.mp4";
   if (!STATE.home_images || typeof STATE.home_images !== "object") STATE.home_images = {};
   STATE.home_images = Object.assign({}, HOME_IMAGE_DEFAULTS, STATE.home_images);
@@ -704,6 +711,23 @@ var VARIABLE_PAGE_LABELS = {
 };
 
 /**
+ * Strips the characters a variable's "name" isn't allowed to contain: "{"
+ * and "}" are the visual editor's own {Name}/{Name:flags} inline notation
+ * delimiters (see parseVariableTokens() in js/main.js, which matches a typed
+ * token against this exact field), ":" separates the identifier from its
+ * format flags there, and whitespace would make a bare identifier ambiguous
+ * right up against a trailing :flag. Same rule app/db.py's
+ * _sanitize_variable_name() enforces server-side on every read/write - this
+ * copy just keeps a ta's typing clean live instead of only self-correcting
+ * on the next save.
+ * @param name a variable's typed "name", any type (coerced to string)
+ * @return name with every "{", "}", ":" and whitespace character removed
+ */
+function sanitizeVariableName(name) {
+  return String(name === undefined || name === null ? "" : name).replace(/[{}:\s]/g, "");
+}
+
+/**
  * Renders every named variable into #variablesList and wires up its
  * controls - name/description/type/value all write straight back into the
  * matching STATE.variables[i] entry, same "the input already IS the state"
@@ -760,7 +784,9 @@ function renderVariables() {
       '<div class="ta-card ta-card-hl" data-i="' + i + '" style="margin-bottom:14px">' +
         '<div class="ta-row">' +
           '<div class="field"><label>Name</label>' +
-            '<input type="text" class="v-name" value="' + v.name + '"></div>' +
+            '<input type="text" class="v-name" value="' + v.name + '" ' +
+            'title="Also what you type inline as {' + (v.name || "Name") + '} - no braces, colons, or spaces">' +
+            '</div>' +
           '<div class="field"><label>Type</label>' +
             '<select class="v-type"' + (v.builtin ? " disabled" : "") + '>' + typeOptions + '</select></div>' +
         '</div>' +
@@ -781,7 +807,17 @@ function renderVariables() {
   list.querySelectorAll(".ta-card").forEach(function (card) {
     var v = STATE.variables[+card.getAttribute("data-i")];
 
-    card.querySelector(".v-name").addEventListener("input", function () { v.name = this.value; });
+    card.querySelector(".v-name").addEventListener("input", function () {
+      /* strips live rather than validating on save/blur, so a name can never
+         even briefly exist with a character that would break {Name:flags}
+         (see sanitizeVariableName()) - same immediate-strip feel as
+         mostly-any "no spaces allowed" username field. Only writes the input
+         back when something was actually stripped, so a keystroke that
+         needed no correction never fights the caret. */
+      var clean = sanitizeVariableName(this.value);
+      if (clean !== this.value) this.value = clean;
+      v.name = clean;
+    });
     card.querySelector(".v-desc").addEventListener("input", function () { v.description = this.value; });
 
     if (!v.builtin) {

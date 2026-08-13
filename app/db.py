@@ -2,6 +2,7 @@
 content table holds the TA-editable site content (day panels, extras, timer)."""
 
 import json
+import re
 import sqlite3
 import time
 import uuid
@@ -197,18 +198,23 @@ DEFAULT_CONTENT = {
     # the Variables section UI); "computed" ones have no ta-editable value at
     # all - "value" is overwritten on every read with a live-derived number,
     # see get_content()'s _refresh_computed_variables() call. "key" is the
-    # stable, human-typeable identifier a formula/binding refers to - unlike
-    # "name" (freely renameable, shown on the tile) it never changes once a
-    # variable exists.
+    # stable internal id a formula chip's data-fx-a stores - unlike "name" it
+    # never changes once a variable exists. "name" is what a ta actually
+    # types: shown on the tile, freely renameable, AND (since it's what the
+    # visual editor's {Name} inline notation - see parseVariableTokens() in
+    # js/main.js - matches against) the one a ta types directly into a text
+    # field to reference this variable live. That dual role is why it can't
+    # hold "{", "}", ":" or whitespace (those are the notation's own
+    # delimiters) - enforced on every read/write, see _sanitize_variable_names().
     "variables": [
         {
-            "key": "total_days", "name": "Total days", "type": "number",
+            "key": "total_days", "name": "TotalDays", "type": "number",
             "value": 10,
             "description": "\"__ of TOTAL days unlocked\" progress bar on student dashboard",
             "builtin": True, "computed": False,
         },
         {
-            "key": "days_progressed", "name": "Days progressed", "type": "number",
+            "key": "days_progressed", "name": "DaysProgressed", "type": "number",
             "value": 0,
             "description": "The day number the workshop is currently on (count of unlocked days), calculated automatically",
             "builtin": True, "computed": True,
@@ -1924,6 +1930,42 @@ def _migrate_drop_variable_page_scope(conn):
     conn.commit()
 
 
+# characters that would break the visual editor's {Name}/{Name:flags} inline
+# notation if they turned up in a variable's own "name": "{"/"}" are the
+# notation's own delimiters, ":" separates the identifier from its format
+# flags, and whitespace would make a bare identifier ambiguous right next to
+# a trailing :flag. See parseVariableTokens() in js/main.js.
+_VAR_NAME_INVALID_CHARS = re.compile(r"[{}:\s]")
+
+
+def _sanitize_variable_name(name):
+    """Strips characters a variable's "name" isn't allowed to contain (see
+    _VAR_NAME_INVALID_CHARS) rather than rejecting the save outright - same
+    "never let bad input take the whole save down" stance as everything else
+    in this file, and it keeps a ta's typing moving instead of bouncing them
+    with a validation error mid-rename.
+    @param name a variable's ta-typed "name", any type (coerced to str)
+    @return name with every "{", "}", ":" and whitespace character removed
+    """
+    return _VAR_NAME_INVALID_CHARS.sub("", str(name if name is not None else ""))
+
+
+def _sanitize_variable_names(data):
+    """Applies _sanitize_variable_name() to every variable in `data`, in
+    place. Run on every read AND write (get_content()/save_content()) rather
+    than as a one-time migration: a ta's own browser already strips these
+    live as they type (see js/ta.js's renderVariables()), but this is the
+    actual source of truth a formula/typed {Name} reference resolves
+    against, so it self-heals here too - a hand-edited profile, an old save
+    from before this rule existed, or any other way a bad character could
+    reach this table without going through that input.
+    @param data a content dict (mutated in place)
+    """
+    for v in data.get("variables", []):
+        if "name" in v:
+            v["name"] = _sanitize_variable_name(v["name"])
+
+
 def _refresh_computed_variables(data):
     """recalculates every "computed" variable's value in place off the rest
     of `data`, so it's always derived fresh rather than trusting whatever a
@@ -1962,6 +2004,7 @@ def get_content():
     _backfill_extras_ids(data)
     _backfill_days_ids(data)
     _backfill_gallery_video(data)
+    _sanitize_variable_names(data)
     _refresh_computed_variables(data)
     return data
 
@@ -2031,6 +2074,7 @@ def save_content(data):
     # who toggles a day's unlock state and immediately hits Apply in the same
     # session would otherwise save whatever stale days_progressed value their
     # browser last fetched, only self-correcting on the next GET.
+    _sanitize_variable_names(data)
     _refresh_computed_variables(data)
     conn = get_db()
     conn.execute(

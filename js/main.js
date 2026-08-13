@@ -11925,6 +11925,53 @@ function buildCtxMenu() {
 }
 
 /**
+ * The right-click menu's second line, for an element that only exists in one
+ * of the landing page's two navbar states - "" for everything else, which on
+ * every page but the landing page is everything.
+ *
+ * The landing page ships two navbars and shows exactly one (applyNavState()),
+ * and "one" means display:none on the whole <nav> - so an element belongs to a
+ * state either by carrying data-nav-state itself (a placed Access portal /
+ * Dashboard / Log out button gets one stamped on it from its kind, see
+ * buildCustomElementNode()) or by sitting inside a navbar that does.
+ *
+ * The editor has always rendered this faithfully - flip the Navbar switch and
+ * the element goes - but faithfully is not the same as legibly, and the gap
+ * bit hard in exactly the case you'd predict. Both halves of it need an
+ * element to have LEFT the navbar visually: drag the "Schedule" link down into
+ * the hero and it is still a child of the signed-out <nav>, drop an Access
+ * portal button in the middle of the page and it still carries
+ * data-nav-state="out". Either one then looks like ordinary hero content in
+ * the editor, sitting hundreds of pixels from any navbar, while remaining
+ * invisible to every signed-in visitor - and since a ta works with the switch
+ * on whichever state they're building, the only way to find that out was to
+ * publish and then be told by someone who was logged in.
+ *
+ * So: say it, on the element, at the moment a ta is looking at it. Not a
+ * warning - this is correct and often deliberate behaviour, an "Access portal"
+ * button genuinely has no business on a page its reader is already signed in
+ * to - just the fact, plus where the other state is (the portal's Navbar
+ * switch), since seeing it is the only way to check the other half of the
+ * page.
+ * @return the note's html, or "" if the element isn't state-bound
+ */
+function ctxNavStateNoteHtml() {
+  if (!CTX_TARGET_EL) return "";
+  var holder = CTX_TARGET_EL.closest("[data-nav-state]");
+  if (!holder) return "";
+  var state = holder.getAttribute("data-nav-state");
+  if (state !== "in" && state !== "out") return "";
+  var own = holder === CTX_TARGET_EL;
+  return '<div class="ctx-note">' +
+    (state === "out"
+      ? "Signed-out navbar only – a signed-in visitor never sees this."
+      : "Signed-in navbar only – a signed-out visitor never sees this.") +
+    (own ? "" : " It's inside that navbar, wherever it's been dragged to.") +
+    " Use the Navbar switch to look at the other state." +
+    '</div>';
+}
+
+/**
  * Renders the menu's root list: an optional "This element" section first
  * (only when the menu was opened by right-clicking an existing tagged
  * element, see CTX_TARGET_ID) with Duplicate, Lock/Unlock, and Promote/
@@ -12128,6 +12175,7 @@ function renderCtxMenuRoot() {
     (CTX_TARGET_ID
       ? '<div class="ctx-title ctx-what">' + escapeHtml(CTX_TARGET_ID) + '</div>'
       : "") +
+    ctxNavStateNoteHtml() +
     toggleHtml +
     '<div class="ctx-title">Add element</div>' +
     (extrasIconTile ? '<button type="button" data-add="extrasIcon">Attachment icon (this tile only)</button>' : "") +

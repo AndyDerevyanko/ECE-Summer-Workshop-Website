@@ -1380,6 +1380,12 @@ function showEditorSubTab(name) {
   });
   syncNavStateSwitch();
   syncDashViewSwitch();
+  /* the pane has a measurable size from here on (this is the first thing that
+     runs once the editor tab is actually on show, see showMode()), so this is
+     where the frame first gets fitted to it - syncFrameViewport() no-ops
+     against a display:none pane and would otherwise never be called with real
+     numbers on a portal that opens straight onto ?tab=editor */
+  syncFrameViewport();
 }
 
 /* ---------------------------------------------------------------------------
@@ -1635,6 +1641,118 @@ function pushThemeToFrame() {
   try { if (win && win.setSiteTheme) win.setSiteTheme(editorTheme); } catch (e) {}
 }
 
+/* ---------------------------------------------------------------------------
+   THE EDITOR FRAME'S VIEWPORT WIDTH
+
+   An iframe lays its page out at the iframe's OWN width, and this one used to
+   be `width: 100%` of a pane that is nowhere near as wide as the browser
+   window it sits in: the portal's column is capped at --maxw (1120px, less 22
+   of padding either side), so on a 1294px window the editor was rendering the
+   landing page into a ~1076px viewport. Every responsive thing on the page
+   then resolved to the wrong answer - and the site has plenty of them: the
+   hero title is `clamp(2.4rem, 6vw, 4.4rem)`, section headings are
+   `clamp(1.8rem, 4vw, 2.6rem)`, .wrap columns cap out at --maxw, .hero-row and
+   .hero-btns wrap on available width, and the media queries switch layouts
+   outright.
+
+   That is not a cosmetic difference, because everything a ta places is stored
+   in absolute pixels (content.positions/content.sizes). Take the real case
+   this was written for: hero.title.accent was dragged into place and sized to
+   a 279px box while the editor's 1076px viewport put 6vw at 63px, so
+   "Gubernatorial" wrapped onto two lines and cleared the buttons under it.
+   The same 279px box on a real 1294px window puts 6vw past the 4.4rem cap at
+   70px - six characters a line instead of seven, three lines instead of two -
+   and the third line lands on top of "Apply Now". Nothing was saved wrong and
+   nothing was lost; the ta was simply shown the page at a width no visitor was
+   ever going to see it at, and laid their pixels out against that.
+
+   So: lay the frame out at the width a visitor actually gets, and scale the
+   result down to fit whatever room the pane has. The page inside reflows
+   exactly as it will for real, and the ta sees a true (if slightly reduced)
+   miniature of it rather than a full-size render of a narrower window. In
+   practice the reduction is small - ~81% in the normal 72vh pane, ~96% in
+   fullscreen - because the pane was never far off the window's width to begin
+   with; what it buys is that the reflow is right, which is the whole point.
+
+   The width is taken from THIS window, so the editor matches what the ta gets
+   when they open the site in the same browser. It can't match every visitor at
+   once: absolute-pixel geometry over a responsive page has one correct width
+   and this is the only one the ta can check their work against.
+   --------------------------------------------------------------------------- */
+
+/* the vertical scrollbar the frame's own document is taking, measured off the
+   live frame rather than assumed (0 on overlay-scrollbar platforms, ~15px on
+   classic ones). It comes out of the frame's content width, so the target
+   below has to add it back or the page inside lays out one scrollbar narrower
+   than the real window does - not much on its own, but enough to flip a line
+   that was already sitting on its wrap threshold. */
+var frameScrollbarW = 0;
+
+/** @return the viewport width to lay the frame's page out at */
+function editorTargetWidth() {
+  /* clientWidth, not innerWidth: the portal has a scrollbar of its own and it
+     is already out of this number, exactly as a visitor's own scrollbar is
+     already out of the width their page lays out in */
+  return document.documentElement.clientWidth + frameScrollbarW;
+}
+
+/**
+ * Re-measures frameScrollbarW off the loaded frame.
+ * @return true if it changed, ie if the caller needs to re-sync
+ */
+function measureFrameScrollbar() {
+  var win = editorFrameWindow();
+  var sb;
+  try {
+    if (!win || !win.document || !win.document.documentElement) return false;
+    sb = win.innerWidth - win.document.documentElement.clientWidth;
+  } catch (e) { return false; }
+  /* a sane scrollbar only; anything else means the frame was measured
+     mid-layout and the old value is the better guess */
+  if (!(sb >= 0 && sb < 40)) return false;
+  if (sb === frameScrollbarW) return false;
+  frameScrollbarW = sb;
+  return true;
+}
+
+/**
+ * Sizes the Visual editor's iframe to a real visitor's viewport and scales it
+ * to fit the pane (see the section comment above). Cheap and idempotent, so
+ * every event that could have changed either measurement just calls it:
+ * window resize, the fullscreen toggle, switching into the editor, each frame
+ * load.
+ */
+function syncFrameViewport() {
+  var frame = document.getElementById("edFrame");
+  if (!frame) return;
+  var pane = frame.parentNode;
+  var availW = pane.clientWidth;
+  var availH = pane.clientHeight;
+  /* the editor tab isn't on show yet - nothing has a size to fit to, and
+     writing zeros in would just have to be undone. showMode() calls back
+     round here once it is. */
+  if (!availW || !availH) return;
+  var target = editorTargetWidth();
+  /* only ever down: a pane WIDER than the window would otherwise blow the page
+     up past 100% and show a ta a view no visitor gets, which is the exact
+     thing this function exists to stop */
+  var scale = Math.min(1, availW / target);
+  frame.style.transformOrigin = "top left";
+  frame.style.width = target + "px";
+  /* the frame is scaled as a whole, so its layout height has to be divided
+     back out for the visible result to still fill the pane's height */
+  frame.style.height = Math.round(availH / scale) + "px";
+  frame.style.transform = scale === 1 ? "" : "scale(" + scale + ")";
+  var cap = document.getElementById("edViewport");
+  if (cap) {
+    cap.textContent = target + "px · " + Math.round(scale * 100) + "%";
+    cap.title = "The editor is showing the page laid out at " + target +
+      "px wide - the width this browser window gives a visitor - scaled to " +
+      Math.round(scale * 100) + "% to fit the pane. Resize the window (or go " +
+      "fullscreen) to work at a different width.";
+  }
+}
+
 /**
  * Toggles the Visual editor's frame section between its normal spot in the
  * page and a fixed overlay that covers the whole viewport, so a ta editing
@@ -1647,6 +1765,9 @@ function toggleEditorFullscreen() {
   var btn = document.getElementById("edFullscreen");
   var on = section.classList.toggle("ed-fullscreen");
   btn.textContent = on ? "Exit fullscreen" : "Fullscreen";
+  /* the pane just changed size, so the scale that fits the frame into it did
+     too - and in fullscreen there's enough room to get much closer to 1:1 */
+  syncFrameViewport();
 }
 
 /** Reloads the Visual editor's iframe on its current sub-tab, so it picks up whatever's newest in the shared snapshot. */
@@ -2426,6 +2547,17 @@ document.addEventListener("DOMContentLoaded", function () {
     syncThemeSwitch();
   });
   syncThemeSwitch();
+
+  /* the frame's emulated viewport width. Re-fitted whenever either of the two
+     measurements it's built from can have moved: the window (resize) or the
+     pane (fullscreen, handled in toggleEditorFullscreen(), and first reveal,
+     handled in showEditorSubTab()). The load handler is the one that isn't
+     about size at all - it's the frame's own scrollbar, which can only be
+     measured once there's a document in there to measure. */
+  window.addEventListener("resize", syncFrameViewport);
+  document.getElementById("edFrame").addEventListener("load", function () {
+    if (measureFrameScrollbar()) syncFrameViewport();
+  });
 
   /* snapping: the switch, plus Shift+R for when focus is out here in the
      portal rather than in the frame (the frame has its own handler for the

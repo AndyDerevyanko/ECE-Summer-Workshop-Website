@@ -1942,9 +1942,21 @@ body.edit-mode .extras-empty.has-attachments {
 }
 .pv-tab:hover { border-color: color-mix(in srgb, var(--text) 32%, transparent); }
 .pv-tab.active { background: var(--accent); color: #fff; border-color: transparent; }
-.ed-undo-row { display: flex; gap: 8px; }
+.ed-undo-row { display: flex; gap: 8px; align-items: center; }
 .ed-undo-row .btn {
   border: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
+}
+/* the frame's emulated viewport readout, eg "1294px · 81%" (js/ta.js's
+   syncFrameViewport()). Mono and muted: it's a measurement sitting in a row of
+   buttons, and it should read as a status line rather than as another thing to
+   click. Its own tooltip carries the explanation. */
+.ed-vp-cap {
+  font-family: var(--font-mono);
+  font-size: .78rem;
+  color: var(--muted);
+  white-space: nowrap;
+  margin-right: 4px;
+  cursor: help;
 }
 
 /* a sliding on/off switch for the editor's own chrome: a rounded track with a
@@ -2012,7 +2024,19 @@ body.edit-mode .extras-empty.has-attachments {
   overflow: hidden;
   background: var(--surface);
 }
-.pv-frame { width: 100%; height: 100%; border: none; display: block; }
+/* width/height/transform are all written inline by js/ta.js's
+   syncFrameViewport(), which lays the frame out at a real visitor's viewport
+   width and scales it into the pane; these are only the pre-fit fallback (and
+   what the frame falls back to if that never runs). transform-origin is set
+   here as well as there so the very first painted frame can't flash off-centre
+   before the inline style lands. */
+.pv-frame {
+  width: 100%;
+  height: 100%;
+  border: none;
+  display: block;
+  transform-origin: top left;
+}
 /* visual editor fullscreen mode: the frame section pops out to cover the
    whole viewport instead of sharing the page with the content manager's
    other sections, "Exit fullscreen" is the only way back */
@@ -3200,6 +3224,22 @@ body.edit-mode .fx-chip { cursor: pointer; border-bottom: 1px dashed currentColo
   letter-spacing: 0;
   color: var(--text);
   overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+/* the line under the id, for an element that only exists in one of the landing
+   page's two navbar states (see ctxNavStateNoteHtml() in js/main.js). Sentence
+   case and wrapped, not a heading and not a button: it's the one thing in this
+   menu that's telling a ta something rather than offering to do something. In
+   the same violet those elements' own outlines use (see the
+   [data-nav-el]/[data-login-el] rules), so the note and the ring round the
+   element read as the same fact stated twice. */
+.ctx-menu .ctx-note {
+  max-width: 260px;
+  padding: 0 8px 6px;
+  font-size: .74rem;
+  line-height: 1.35;
+  color: #a06bff;
   border-bottom: 1px solid var(--border);
   margin-bottom: 4px;
 }

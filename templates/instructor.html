@@ -331,6 +331,15 @@
               </div>
             </div>
             <div class="ed-undo-row">
+              <!-- what viewport the frame is laying the page out at, and how
+                   far it's been scaled down to fit the pane (js/ta.js's
+                   syncFrameViewport()). Worth showing rather than leaving
+                   implicit: everything a ta places is stored in absolute
+                   pixels over a page whose type and columns are sized in vw,
+                   so the width they're looking at is the width their work is
+                   correct at, and that used to be the pane's width - a number
+                   no visitor ever sees. -->
+              <span class="ed-vp-cap" id="edViewport"></span>
               <button class="btn btn-ghost" id="edUndo" type="button" disabled>Undo</button>
               <button class="btn btn-ghost" id="edRedo" type="button" disabled>Redo</button>
               <button class="btn btn-ghost" id="edFullscreen" type="button">Fullscreen</button>
@@ -352,6 +361,6 @@
 
   <script src="js/theme.js?v=4"></script>
   <script src="js/idle.js?v=3"></script>
-  <script src="js/ta.js?v=13"></script>
+  <script src="js/ta.js?v=14"></script>
 </body>
 </html>

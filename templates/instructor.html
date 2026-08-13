@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/style.css?v=32" />
+  <link rel="stylesheet" href="css/style.css?v=34" />
 </head>
 <body class="mono">
 
@@ -25,7 +25,10 @@
     <div class="wrap nav-inner">
       <a href="index.html" class="brand"><img src="assets/logo.png" class="brand-logo" alt="ECE Workshops" /> ECE Workshops</a>
       <div class="nav-links nav-links-dense" id="taSectionNav">
-        <a href="#panels">Day panels</a>
+        <!-- the heading, not the section: #panels starts with the variables
+             list now (see below), and a link labelled "Day panels" that lands
+             on "Variables" is the same mismatch this move was fixing -->
+        <a href="#dayPanels">Day panels</a>
         <a href="#extras">Extra attachments</a>
         <a href="#gallery">Gallery</a>
         <a href="#objects">Objects</a>
@@ -115,14 +118,17 @@
         <div id="managerView">
       <section class="section-sm" id="panels">
         <div class="wrap">
-          <h2 style="font-size:1.4rem;margin-bottom:6px">Day panels</h2>
-
-          <h3 style="font-size:1.1rem;margin:18px 0 6px">Variables</h3>
+          <!-- Variables and Day panels are two siblings sharing one section,
+               not a section and a sub-part of it: the variables list binds to
+               progress bars on every page, and has nothing to do with the day
+               panels below it. It used to read as though it did, because the
+               "Day panels" heading sat up here above the variables blurb and
+               the only heading between them was a smaller h3. Same level for
+               both now, each directly above the list it names. -->
+          <h2 style="font-size:1.4rem;margin-bottom:6px">Variables</h2>
           <p class="muted" style="margin-top:0;margin-bottom:14px">
-            Named values other elements can bind to. Every number below can be picked as a progress bar's
-            Current or Total from the Visual editor (right-click the bar &rsaquo; "Bind variables"), on any page.
-            "Total days" and "Days progressed" always exist and can't be removed - rename them however reads
-            best, or add your own below.
+            Named values other elements can bind to. "Total days" and "Days progressed" can be renamed
+            but NOT removed.
           </p>
           <div id="variablesList" style="margin-bottom:18px">
             <!-- filled in by ta.js -->
@@ -133,6 +139,7 @@
             New variable
           </button>
 
+          <h2 id="dayPanels" style="font-size:1.4rem;margin-bottom:6px">Day panels</h2>
           <div id="panelList">
             <!-- filled in by ta.js -->
           </div>
@@ -181,31 +188,13 @@
             here at any time. Each one gets its own tile in the gallery page's directory rail,
             and can be shown by its own image pane in the Visual editor.
           </p>
-          <!-- how a clip plays once it comes up in an image pane. One choice
-               for the whole gallery rather than one per pane: several panes
-               can be placed, but "how our videos play" is a single decision
-               about the gallery. The equivalent switches for a video placed
-               anywhere else live on that video's own right-click menu in the
-               Visual editor. -->
-          <div class="ta-card" style="margin-bottom:18px">
-            <div class="field">
-              <label>Video clips</label>
-              <label class="ta-radio">
-                <input type="checkbox" id="galleryVideoAutoplay"> Start playing on their own
-              </label>
-              <label class="ta-radio">
-                <input type="checkbox" id="galleryVideoControls"> Show the player controls
-              </label>
-              <label class="ta-radio">
-                <input type="checkbox" id="galleryVideoPausable"> Click the clip to play/pause it
-              </label>
-              <p class="muted" style="margin:6px 0 0">
-                Clips are always muted and looping. With any of the last two on, clicking a clip
-                works its player instead of moving to the next image — the arrows and the rest of
-                the pane still flip through the directory as usual.
-              </p>
-            </div>
-          </div>
+          <!-- how a clip plays once it comes up in an image pane used to be one
+               choice for the whole gallery, and lived here as a card above the
+               directory list. It's per clip now (renderGallery() in js/ta.js
+               draws the same three switches under whichever clip a directory is
+               showing), so there's nothing gallery-wide left to put here. The
+               equivalent switches for a video placed anywhere else still live
+               on that video's own right-click menu in the Visual editor. -->
           <div id="galleryList">
             <!-- filled in by ta.js -->
           </div>
@@ -361,6 +350,6 @@
 
   <script src="js/theme.js?v=4"></script>
   <script src="js/idle.js?v=3"></script>
-  <script src="js/ta.js?v=14"></script>
+  <script src="js/ta.js?v=16"></script>
 </body>
 </html>

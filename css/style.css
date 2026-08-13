@@ -1881,6 +1881,12 @@ body.edit-mode .extras-empty.has-attachments {
 /* photo vs video tag so a still frame isn't mistaken for a photo */
 .gy-kind { display: inline-flex; align-items: center; gap: 5px; font-size: .82rem; color: var(--muted); }
 .gy-bar .gy-rm { margin-left: auto; }
+/* the current clip's own playback switches, sitting under its viewer (see
+   galleryVideoSwitchesHtml() in js/ta.js). These used to be one card above the
+   whole directory list, back when the setting was gallery-wide; per clip they
+   have to read as part of the clip above them, so the top margin is tight and
+   the bottom one keeps the "Add image" row clear. */
+.gy-vopts { margin: -4px 0 16px; }
 /* reorder mode: filenames only, no <img>/<video>, so dragging a year's
    photos around never has to render all of them (some are huge phone
    shots) just to show a thumbnail grid */

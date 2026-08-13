@@ -78,10 +78,11 @@ function seed() {
       { big: "", lbl: "Certificate of completion", icon: true }
     ],
     gallery: {
-      /* how a clip plays inside a gallery image pane, one choice for the whole
-         gallery (see the Gallery section's "Video clips" card in
-         instructor.html and paintPanes() in js/gallery.js) */
+      /* how a clip plays inside a gallery image pane: "video" is the baseline,
+         "video_opts" the per-clip choices on top of it keyed by media url (see
+         galleryVideoOptsFor() below and paintPanes() in js/gallery.js) */
       video: { autoplay: true, controls: false, pausable: false },
+      video_opts: {},
       years: ["2026", "2025"],
       images: {
         "2026": ["assets/gallery/group-main-2026.png"],
@@ -153,8 +154,8 @@ function seed() {
        menu, flat lists of ids in the same shape as shadow above - a placed
        video autoplays muted on a loop with no player chrome, so each list
        only names the clips that deviate. See VIDEO_PLAYBACK_KEYS in
-       js/main.js; the gallery's panes have their own equivalent setting in
-       the Gallery section (STATE.gallery.video). */
+       js/main.js; a clip shown in a gallery pane has its own equivalent
+       setting, per clip, in the Gallery section (STATE.gallery.video_opts). */
     video_no_autoplay: [],
     video_controls: [],
     video_pausable: [],
@@ -326,6 +327,14 @@ function normalizeState() {
     controls: !!galleryVideo.controls,
     pausable: !!galleryVideo.pausable
   };
+  /* the per-clip overrides on top of that baseline. Left EMPTY for an old
+     blob rather than filled in per clip: with no entry every clip resolves to
+     the baseline above, which is exactly how it was playing before, so an old
+     save carries over untouched and only the clips a ta actually opens get an
+     entry of their own. */
+  if (!STATE.gallery.video_opts || typeof STATE.gallery.video_opts !== "object") {
+    STATE.gallery.video_opts = {};
+  }
 
   if (!STATE.text || typeof STATE.text !== "object") STATE.text = {};
   if (!STATE.sizes || typeof STATE.sizes !== "object") STATE.sizes = {};
@@ -592,6 +601,14 @@ var SHARE_SVG_CHIP =
   'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
   '<circle cx="6" cy="12" r="2.4"/><circle cx="18" cy="6" r="2.4"/><circle cx="18" cy="18" r="2.4"/>' +
   '<path d="M8.2 10.8l7.6-3.6M8.2 13.2l7.6 3.6"/></svg>';
+
+/* padlock glyph, next to "auto-updated, only you" on a Most recently applied
+   profile row - the visual opposite of SHARE_SVG_CHIP above, since that row is
+   the one profile nobody else can ever see */
+var PRIVATE_SVG_CHIP =
+  '<svg class="tf-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>';
 
 /* attachments are a plain filename string (legacy), a {type:"link", value}
    object, or a {type:"file", name, url} object for an uploaded file */
@@ -1079,24 +1096,90 @@ function renameGalleryDir(from, to) {
   });
 }
 
-/* the Gallery section's "Video clips" card: each checkbox paired with the
-   content.gallery.video flag it drives (see paintPanes() in js/gallery.js) */
-var GALLERY_VIDEO_INPUTS = [
-  ["galleryVideoAutoplay", "autoplay"],
-  ["galleryVideoControls", "controls"],
-  ["galleryVideoPausable", "pausable"]
+/* the three playback switches shown under a clip, paired with the label they
+   get. Same three a placed video gets from its own right-click menu in the
+   visual editor (VIDEO_PLAYBACK_KEYS in js/main.js), worded the same way. */
+var GALLERY_VIDEO_SWITCHES = [
+  ["autoplay", "Start playing on its own"],
+  ["controls", "Show the player controls"],
+  ["pausable", "Click the clip to play/pause it"]
 ];
 
 /**
- * Pushes STATE into the Gallery section's "Video clips" checkboxes - split
- * from renderGallery() below because these three are static markup in
- * instructor.html rather than part of the directory list it rebuilds.
+ * How one particular clip plays, for the editor's own copy of the content:
+ * its own saved settings if a ta has set any, otherwise the gallery-wide
+ * baseline. Mirrors galleryVideoOptsFor() in js/gallery.js, which is what the
+ * public page paints from - they have to agree, so keep them in step.
+ * @param url the clip's media url
+ * @return {autoplay, controls, pausable}
  */
-function syncGalleryVideo() {
-  GALLERY_VIDEO_INPUTS.forEach(function (pair) {
-    var box = document.getElementById(pair[0]);
-    if (box) box.checked = !!STATE.gallery.video[pair[1]];
+function galleryVideoOptsFor(url) {
+  var own = (STATE.gallery.video_opts || {})[url];
+  var src = own || STATE.gallery.video;
+  return {
+    autoplay: src.autoplay !== false,
+    controls: !!src.controls,
+    pausable: !!src.pausable
+  };
+}
+
+/**
+ * Writes one of a clip's three playback switches.
+ *
+ * Materializes the whole entry on first touch (from whatever the clip was
+ * already resolving to, so flipping one switch can't silently move the other
+ * two), which is what makes galleryVideoOptsFor()'s all-or-nothing lookup
+ * safe on the reading side.
+ * @param url the clip's media url
+ * @param key "autoplay", "controls" or "pausable"
+ * @param on the new value
+ */
+function setGalleryVideoOpt(url, key, on) {
+  var opts = STATE.gallery.video_opts;
+  if (!opts[url]) opts[url] = galleryVideoOptsFor(url);
+  opts[url][key] = !!on;
+}
+
+/**
+ * Drops a clip's saved playback settings once nothing in the gallery points at
+ * that url any more - otherwise removing an image would leave an entry behind
+ * that no ui can ever reach again, and re-adding the same file later would
+ * silently come back with the old settings. Only when the url is gone from
+ * EVERY directory: the same clip can be filed under two of them.
+ * @param url the media url that was just removed from somewhere
+ */
+function pruneGalleryVideoOpt(url) {
+  if (!STATE.gallery.video_opts[url]) return;
+  var stillUsed = STATE.gallery.years.some(function (y) {
+    return (STATE.gallery.images[y] || []).indexOf(url) !== -1;
   });
+  if (!stillUsed) delete STATE.gallery.video_opts[url];
+}
+
+/**
+ * Builds the three playback checkboxes shown under one clip in the directory
+ * viewer, already ticked to how that clip currently plays.
+ * @param url the clip's media url
+ * @return the card's html
+ */
+function galleryVideoSwitchesHtml(url) {
+  var opts = galleryVideoOptsFor(url);
+  return '<div class="ta-card gy-vopts">' +
+    '<div class="field">' +
+      '<label>This clip</label>' +
+      GALLERY_VIDEO_SWITCHES.map(function (pair) {
+        return '<label class="ta-radio">' +
+          '<input type="checkbox" data-vopt="' + pair[0] + '"' +
+          (opts[pair[0]] ? " checked" : "") + '> ' + pair[1] +
+        '</label>';
+      }).join("") +
+      '<p class="muted" style="margin:6px 0 0">' +
+        'Clips are always muted and looping. With either of the last two on, clicking this clip ' +
+        'works its player instead of moving to the next image — the arrows and the rest of the ' +
+        'pane still flip through the directory as usual.' +
+      '</p>' +
+    '</div>' +
+  '</div>';
 }
 
 /**
@@ -1146,8 +1229,15 @@ function renderGallery() {
       '</ul>';
     } else {
       var cur = imgs[i];
+      /* the preview plays the clip the way the switches below it say it will,
+         so "show the player controls" is something a ta can see rather than
+         only read - the one switch with nothing to show here is pausable,
+         which is about clicking a pane on the public page, not this viewer */
+      var curOpts = isVidUrl(cur) ? galleryVideoOptsFor(cur) : null;
       var media = isVidUrl(cur) ?
-        '<video class="gy-media" src="' + cur + '" autoplay muted loop playsinline></video>' :
+        '<video class="gy-media" src="' + cur + '" muted loop playsinline' +
+          (curOpts.autoplay ? " autoplay" : "") +
+          (curOpts.controls ? " controls" : "") + '></video>' :
         '<img class="gy-media" src="' + cur + '" alt="">';
       viewer =
         '<div class="gy-stage">' +
@@ -1159,7 +1249,13 @@ function renderGallery() {
           '<span class="gy-count">' + (i + 1) + ' / ' + imgs.length + '</span>' +
           '<span class="gy-kind">' + (isVidUrl(cur) ? VID_SVG_CHIP + 'Video clip' : IMAGE_SVG_CHIP + 'Photo') + '</span>' +
           '<button class="btn btn-ghost gy-rm" type="button">Remove</button>' +
-        '</div>';
+        '</div>' +
+        /* this clip's own playback switches, under the clip they belong to
+           rather than in a card above the whole list - a setting that applies
+           to one thing belongs next to that thing, and there's no other way to
+           say WHICH clip a set of checkboxes is about once they're per clip.
+           Photos get nothing here; there's nothing to play. */
+        (isVidUrl(cur) ? galleryVideoSwitchesHtml(cur) : "");
     }
 
     html +=
@@ -1227,8 +1323,30 @@ function renderGallery() {
 
     var rmBtn = p.querySelector(".gy-rm");
     if (rmBtn) rmBtn.addEventListener("click", function () {
-      imgs.splice(GY_IDX[y], 1);
+      var gone = imgs.splice(GY_IDX[y], 1)[0];
+      pruneGalleryVideoOpt(gone);
       renderGallery();
+    });
+
+    /* this directory's current clip, if it's on one - the switches below are
+       about that clip specifically, so they're keyed by its url */
+    var curUrl = imgs[GY_IDX[y] || 0];
+    p.querySelectorAll("[data-vopt]").forEach(function (box) {
+      box.addEventListener("change", function () {
+        var key = box.getAttribute("data-vopt");
+        setGalleryVideoOpt(curUrl, key, this.checked);
+        /* applied to the preview in place rather than by re-rendering: a
+           re-render rebuilds the <video>, which restarts the clip and throws
+           away the checkbox that was just clicked (and the focus on it) */
+        var prev = p.querySelector("video.gy-media");
+        if (!prev) return;
+        if (key === "controls") prev.controls = this.checked;
+        if (key === "autoplay") {
+          prev.autoplay = this.checked;
+          if (this.checked) prev.play().catch(function () {});
+          else prev.pause();
+        }
+      });
     });
 
     var reorderBtn = p.querySelector(".gy-reorder-btn");
@@ -1331,7 +1449,6 @@ function renderAll() {
   renderPanels();
   renderExtras();
   renderGallery();
-  syncGalleryVideo();
 }
 
 /**
@@ -2128,7 +2245,13 @@ function renderProfiles() {
   PROFILES.forEach(function (p, i) {
     var open = EDITING && EDITING.id === p.id;
     html += '<div class="res-row prof-row" data-i="' + i + '">';
-    if (p.mine) {
+    /* a Most recently applied row is owned by the ta looking at it, so p.mine
+       is true for it - but nothing about it is theirs to change: the server
+       refuses a rename, a share and a delete on it alike (see
+       api_update_profile()/api_delete_profile() in app/main.py). Rendered as a
+       plain label with no owner controls, so the ui doesn't offer three
+       buttons that can only come back as errors. */
+    if (p.mine && !p.is_last_applied) {
       html += '<input type="text" class="pr-name" value="' + p.name + '" aria-label="Profile name">';
     } else {
       html += '<span class="rname">' + profileLabel(p) + '</span>';
@@ -2137,8 +2260,8 @@ function renderProfiles() {
       html += '<span class="shared-flag" title="The site\'s original look out of the box. Can\'t be edited, but any staff member can delete it.">' +
         SHARE_SVG_CHIP + 'default, shared with everyone</span>';
     } else if (p.is_last_applied) {
-      html += '<span class="shared-flag" title="Automatically updated to whatever was live right before the most recent Apply. A one-step-back recovery point if someone else\'s apply overwrites your changes. Can\'t be edited or deleted.">' +
-        SHARE_SVG_CHIP + 'auto-updated, shared with everyone</span>';
+      html += '<span class="shared-flag" title="Your own copy of whatever you last hit Apply on, saved automatically. Nobody else can see it. If another staff member applies after you and overwrites your changes, this is how you get them back. Can\'t be renamed, shared, edited or deleted.">' +
+        PRIVATE_SVG_CHIP + 'auto-updated, only you</span>';
     } else if (p.shared) {
       html += '<span class="shared-flag" title="Every staff member can see and edit this profile">' + SHARE_SVG_CHIP + 'shared</span>' +
         '<button class="btn btn-ghost pr-unshare" type="button">Unshare</button>';
@@ -2148,7 +2271,7 @@ function renderProfiles() {
       html += '<button class="btn btn-ghost pr-edit" type="button"' + (open ? " disabled" : "") + '>' +
         (open ? "Editing" : "Edit") + '</button>';
     }
-    if (p.mine) {
+    if (p.mine && !p.is_last_applied) {
       if (!p.shared) html += '<button class="btn btn-ghost pr-share" type="button">Share</button>';
       html += '<button class="btn btn-ghost pr-del" type="button">Delete</button>';
     } else if (p.is_default) {
@@ -2333,6 +2456,12 @@ function applyContent() {
       } else {
         showMsg("Applied. Students see this now.", true);
       }
+      /* the apply just rewrote this ta's own "Most recently applied" profile
+         server side - and CREATED it, if this was their first ever apply (see
+         snapshot_last_applied() in app/db.py). Refetch so the row is there,
+         holding what was just applied, rather than only showing up after a
+         reload with whatever it held before. */
+      fetchProfiles();
     })
     .catch(function (err) {
       if (err.message === "expired") return;
@@ -2437,11 +2566,6 @@ document.addEventListener("DOMContentLoaded", function () {
       id: newExtraId(), children: []
     });
     renderPanels();
-  });
-
-  GALLERY_VIDEO_INPUTS.forEach(function (pair) {
-    var box = document.getElementById(pair[0]);
-    if (box) box.addEventListener("change", function () { STATE.gallery.video[pair[1]] = this.checked; });
   });
 
   var newYearInput = document.getElementById("newYearInput");

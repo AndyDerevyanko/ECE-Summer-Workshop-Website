@@ -124,15 +124,15 @@ def api_get_content():
 
 
 @app.post("/api/content")
-def api_save_content(payload: dict[str, Any], _ta=Depends(require_ta)):
-    """overwrites the live content blob. ta-only. snapshots the OUTGOING
-    (about to be replaced) content into the "Most recently applied" profile
-    first (see snapshot_last_applied() in app/db.py), so if this apply
-    clobbers someone else's concurrent edit, whatever they had live a
-    moment ago is still one click away to recover.
+def api_save_content(payload: dict[str, Any], ta=Depends(require_ta)):
+    """overwrites the live content blob. ta-only. copies what's being applied
+    into THIS ta's own private "Most recently applied" profile (see
+    snapshot_last_applied() in app/db.py), so if another ta applies straight
+    after and clobbers it, the work is still one click away to recover -
+    however many applies have happened in between.
     @param payload the full content dict to save
     """
-    snapshot_last_applied(get_content())
+    snapshot_last_applied(ta["username"], payload)
     save_content(payload)
     return {"ok": True}
 
@@ -159,12 +159,14 @@ def api_create_profile(payload: dict[str, Any], ta=Depends(require_ta)):
 @app.post("/api/profiles/{profile_id}")
 def api_update_profile(profile_id: int, payload: dict[str, Any], ta=Depends(require_ta)):
     """partially updates a profile: name/shared are owner-only, data needs
-    ownership or sharing. the seeded "Default" profile (is_default) and the
-    seeded "Most recently applied" profile (is_last_applied) both reject
+    ownership or sharing. the seeded "Default" profile (is_default) and a
+    ta's own "Most recently applied" profile (is_last_applied) both reject
     every field, regardless of owner or shared: Default's data never
     changes (see _seed_default_profile()), and Most recently applied's data
-    is server-managed, overwritten automatically on every Apply (see
-    snapshot_last_applied()), never by a direct edit.
+    is server-managed, overwritten on every Apply by the ta it belongs to
+    (see snapshot_last_applied()), never by a direct edit. Sharing one is
+    refused by the same blanket rule, which is what keeps "what I applied
+    last" a private record rather than something that can be handed around.
     @param profile_id the profile to update
     @param payload any subset of {name, data, shared}
     """
@@ -198,10 +200,10 @@ def api_update_profile(profile_id: int, payload: dict[str, Any], ta=Depends(requ
 def api_delete_profile(profile_id: int, ta=Depends(require_ta)):
     """deletes a profile. owner only, except the seeded "Default" profile
     (is_default), which any ta can delete, see _seed_default_profile() in
-    app/db.py. The seeded "Most recently applied" profile (is_last_applied)
-    is the opposite special case: nobody can delete it, not even by an
-    owner bypass, since it's the active safety net for every ta, not a
-    discardable starter template.
+    app/db.py. A "Most recently applied" profile (is_last_applied) is the
+    opposite special case: not deletable at all, not even by the ta who owns
+    it, since it's their live safety net rather than a draft they keep - and
+    the next Apply would just recreate it anyway.
     @param profile_id the profile to delete
     """
     prof = get_profile(profile_id)

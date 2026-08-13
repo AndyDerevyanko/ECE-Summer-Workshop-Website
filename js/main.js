@@ -10098,9 +10098,14 @@ function buildCustomElementNode(d) {
        the moment it lands. That's why these draw in the page-exclusive outline
        colour in edit mode, the same signal the login page's own elements get.
 
-       data-nav-state is derived from the kind rather than stored on the
-       descriptor: a Log out button IS a signed-in-state thing, there's no
-       version of it that makes sense on a page nobody is signed in to. */
+       Which session state it shows in is the kind's default and the ta's
+       choice: the kind decides where it STARTS (an Access portal button is a
+       signed-out thing, Dashboard and Log out signed-in ones), and the
+       right-click menu's "Shown to" switch can override that per element, all
+       the way to "everyone" - see navStateForDescriptor(). A button dropped in
+       the middle of the page isn't a navbar button any more, and a ta who put
+       one there generally means it as page furniture that every reader gets,
+       which the kind alone had no way to express. */
     var navKind = d.kind === "navPortal" ? "portal" :
       d.kind === "navDashboard" ? "dashboard" : "logout";
     el = document.createElement(navKind === "logout" ? "button" : "a");
@@ -10109,7 +10114,11 @@ function buildCustomElementNode(d) {
     else el.href = navKind === "portal" ? "login.html" : "dashboard.html";
     el.setAttribute("data-edit-id", d.id);
     el.setAttribute("data-nav-el", navKind);
-    el.setAttribute("data-nav-state", navKind === "portal" ? "out" : "in");
+    /* "both" means carrying no marker at all, which is exactly what an element
+       that belongs to neither state looks like to applyNavState() - no special
+       case needed there, it only ever visits [data-nav-state] elements */
+    var navState = navStateForDescriptor(d);
+    if (navState !== "both") el.setAttribute("data-nav-state", navState);
     el.textContent = navKind === "portal" ? "Access portal" :
       navKind === "dashboard" ? "Dashboard" : "Log out";
   } else if (d.kind === "image" && d.url) {
@@ -11949,10 +11958,12 @@ function buildCtxMenu() {
  *
  * So: say it, on the element, at the moment a ta is looking at it. Not a
  * warning - this is correct and often deliberate behaviour, an "Access portal"
- * button genuinely has no business on a page its reader is already signed in
- * to - just the fact, plus where the other state is (the portal's Navbar
- * switch), since seeing it is the only way to check the other half of the
- * page.
+ * button in the navbar genuinely has no business on a page its reader is
+ * already signed in to - just the fact, and then whatever the ta can do about
+ * it from here: a placed nav button is re-pointed on the spot by the "Shown
+ * to" switch right below this note (see navStateForDescriptor()), and anything
+ * else is pointed at the portal's Navbar switch, since looking at the other
+ * state is the only way to check the other half of the page.
  * @return the note's html, or "" if the element isn't state-bound
  */
 function ctxNavStateNoteHtml() {
@@ -11962,12 +11973,19 @@ function ctxNavStateNoteHtml() {
   var state = holder.getAttribute("data-nav-state");
   if (state !== "in" && state !== "out") return "";
   var own = holder === CTX_TARGET_EL;
+  /* a placed nav button carries its own marker and can be re-pointed right
+     here, so it gets sent to the switch that does it rather than to the Navbar
+     toggle, which only changes which state you're LOOKING at */
+  var placed = own && CTX_TARGET_EL.hasAttribute("data-nav-el") &&
+    !!customElementById(CTX_TARGET_ID);
   return '<div class="ctx-note">' +
     (state === "out"
-      ? "Signed-out navbar only – a signed-in visitor never sees this."
-      : "Signed-in navbar only – a signed-out visitor never sees this.") +
+      ? "Signed-out visitors only – a signed-in visitor never sees this."
+      : "Signed-in visitors only – a signed-out visitor never sees this.") +
     (own ? "" : " It's inside that navbar, wherever it's been dragged to.") +
-    " Use the Navbar switch to look at the other state." +
+    (placed
+      ? " Change that with Shown to, below."
+      : " Use the Navbar switch to look at the other state.") +
     '</div>';
 }
 
@@ -12112,6 +12130,25 @@ function renderCtxMenuRoot() {
         '<button type="button" data-video-play="video_pausable">Click to play/pause: ' +
         (videoPlaybackOn(CTX_TARGET_EL, "video_pausable")
           ? "on &rarr; off" : "off &rarr; on") +
+        '</button>';
+    }
+    /* a PLACED Access portal / Dashboard / Log out button's "Shown to" switch
+       (see navStateForDescriptor()). Only offered for a placed one - the
+       navbars' own buttons are template markup inside a <nav> that IS one
+       state, and there's nothing to choose there.
+
+       Same "current &rarr; next" wording as every other switch in this menu,
+       and deliberately right under the note that explains what the current
+       state costs: the moment a ta reads "a signed-in visitor never sees
+       this" is the moment they want to change it. */
+    if (CTX_TARGET_EL && CTX_TARGET_EL.hasAttribute("data-nav-el") &&
+        customElementById(CTX_TARGET_ID)) {
+      var navShown = navStateForDescriptor(customElementById(CTX_TARGET_ID));
+      toggleHtml += '<div class="ctx-title">Session</div>' +
+        '<button type="button" data-nav-shown="1">Shown to: ' +
+        (navShown === "out" ? "signed-out visitors only &rarr; everyone"
+          : navShown === "both" ? "everyone &rarr; signed-in visitors only"
+          : "signed-in visitors only &rarr; signed-out visitors only") +
         '</button>';
     }
   }
@@ -12357,6 +12394,13 @@ function renderCtxMenuRoot() {
     flowWrapBtn.addEventListener("click", function () {
       var area = ctxFlowArea();
       if (area) toggleAreaFlowWrap(elId(area));
+      hideCtxMenu();
+    });
+  }
+  var navShownBtn = CTX_MENU.querySelector("[data-nav-shown]");
+  if (navShownBtn) {
+    navShownBtn.addEventListener("click", function () {
+      cycleCustomElementNavState(CTX_TARGET_ID);
       hideCtxMenu();
     });
   }
@@ -15278,6 +15322,9 @@ function redoEdit() {
  *  - "rotate": a whole-number degrees value, or 0 for the template default
  *  - "hovercolor"/"activecolor"/"darkhovercolor"/"darkactivecolor": a
  *    button's Hover color/Click color rows, same idea as "fill"/"darkfill"
+ *  - "navstate": "out"/"in"/"both", a placed nav button's "Shown to" switch
+ *    (see navStateForDescriptor()) - three states, so unlike the self-inverse
+ *    toggles below it stores a real value on each side
  *  - "videoplayback": no before/after value either, one of a video's three
  *    playback switches (action.key, see VIDEO_PLAYBACK_KEYS) - flipping it
  *    again is its own inverse, same as "shadow"
@@ -15696,6 +15743,12 @@ function applyHistoryAction(action, side) {
     shEl.style.boxShadow = on ? BOX_SHADOW_VALUE : "none";
     saveEditedShadow(action.id, on);
     if (STYLE_MENU_ID === action.id) STYLE_MENU.querySelector(".sm-shadow").checked = on;
+    return;
+  }
+  if (action.type === "navstate") {
+    /* a real before/after value rather than a self-inverse flip, since this
+       one has three states and "the other one" isn't defined */
+    setCustomElementNavState(action.id, val);
     return;
   }
   if (action.type === "videoplayback") {
@@ -16473,6 +16526,76 @@ function applyNavState(state) {
   document.querySelectorAll("[data-nav-state]").forEach(function (el) {
     setStateViewOff(el, "nav-state-off", el.getAttribute("data-nav-state") !== NAV_STATE);
   });
+}
+
+/**
+ * Which session state(s) a placed Access portal / Dashboard / Log out button
+ * is shown in: "out", "in", or "both".
+ *
+ * The kind supplies the default, and for a button that stays in the navbar
+ * that default is the whole answer - a Log out button in the signed-in navbar
+ * IS a signed-in thing. What the default couldn't express is the case this was
+ * written for: an Access portal button dropped in the middle of the landing
+ * page, hundreds of pixels from any navbar, as a call to action. Read as a
+ * navbar button it's signed-out-only and every logged-in visitor loses it;
+ * read as page furniture it should just be there. Only the ta knows which they
+ * meant, so d.navState records it and the kind decides only where it starts.
+ *
+ * Absent (every element placed before this existed) means the kind's default,
+ * so nothing that was already on a page moves.
+ * @param d the element's custom_elements entry
+ * @return "out", "in" or "both"
+ */
+function navStateForDescriptor(d) {
+  if (!d) return "both";
+  if (d.navState === "out" || d.navState === "in" || d.navState === "both") return d.navState;
+  return d.kind === "navPortal" ? "out" : "in";
+}
+
+/**
+ * Writes a placed nav button's "Shown to" choice: onto the descriptor (so it
+ * survives Apply/reload), onto the live element, and then through
+ * applyNavState() so the editor immediately shows what the switch it's
+ * currently sitting on would show.
+ * @param id the element's id
+ * @param state "out", "in" or "both"
+ */
+function setCustomElementNavState(id, state) {
+  var d = customElementById(id);
+  var el = elByAnyId(id);
+  if (!d) return;
+  d.navState = state === "out" || state === "in" ? state : "both";
+  if (el) {
+    if (d.navState === "both") el.removeAttribute("data-nav-state");
+    else el.setAttribute("data-nav-state", d.navState);
+    /* an element leaving the marker set keeps whatever "off" class its last
+       state left on it, and applyNavState() below won't visit it any more to
+       take it back off - so clear it here, on the element AND on its wrap, the
+       same pair setStateViewOff() works on */
+    if (d.navState === "both") setStateViewOff(el, "nav-state-off", false);
+  }
+  saveCustomElements(CUSTOM_ELEMENTS);
+  applyNavState(NAV_STATE);
+}
+
+/* the three "Shown to" states in the order one button steps through them, so
+   every state is two clicks from every other one - "both" sits between the two
+   exclusive ones because that's the useful middle, not because it's a default */
+var NAV_STATE_CYCLE = ["out", "both", "in"];
+
+/**
+ * Steps a placed nav button through its three "Shown to" states. Undoable as a
+ * plain before/after pair.
+ * @param id the element's id
+ */
+function cycleCustomElementNavState(id) {
+  var d = customElementById(id);
+  if (!d) return;
+  var from = navStateForDescriptor(d);
+  var to = NAV_STATE_CYCLE[(NAV_STATE_CYCLE.indexOf(from) + 1) % NAV_STATE_CYCLE.length];
+  setCustomElementNavState(id, to);
+  EDIT_UNDO.push({ type: "navstate", id: id, before: from, after: to });
+  EDIT_REDO.length = 0;
 }
 
 /**

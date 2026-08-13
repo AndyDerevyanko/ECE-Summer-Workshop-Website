@@ -18,6 +18,7 @@
    just isn't worth a migration to rename. */
 var DEFAULT_GALLERY = {
   video: { autoplay: true, controls: false, pausable: false },
+  video_opts: {},
   years: ["2026", "2025"],
   images: {
     "2026": ["assets/gallery/group-main-2026.png"],
@@ -58,11 +59,16 @@ function isGalleryPreview() {
  */
 function isVid(u) { return /\.mov$/i.test(u); }
 
-/* how a clip plays inside an image pane, straight out of content.gallery.video
-   (the content manager's Gallery section). Held here rather than read off
+/* the baseline every clip plays by, straight out of content.gallery.video (see
+   DEFAULT_CONTENT["gallery"] in app/db.py). Held here rather than read off
    GALLERY_CONTENT every time so the fallback path, which never sees a content
    blob at all, has the same defaults to paint from. */
 var GALLERY_VIDEO_OPTS = { autoplay: true, controls: false, pausable: false };
+
+/* the per-clip choices on top of it, {url: {autoplay, controls, pausable}},
+   straight out of content.gallery.video_opts (the checkboxes under a clip in
+   the content manager's Gallery section) */
+var GALLERY_VIDEO_BY_URL = {};
 
 /**
  * Loads the gallery's video playback settings out of a content blob. A blob
@@ -77,6 +83,28 @@ function initGalleryVideoOpts(gallery) {
     autoplay: v.autoplay !== false,
     controls: !!v.controls,
     pausable: !!v.pausable
+  };
+  GALLERY_VIDEO_BY_URL = (gallery && gallery.video_opts) || {};
+}
+
+/**
+ * How one particular clip plays: its own saved settings if a ta has set any,
+ * otherwise the gallery-wide baseline.
+ *
+ * All-or-nothing per clip rather than per flag - an entry carries all three
+ * switches, because that's what the content manager writes when a ta touches
+ * any one of them. Per-flag merging would mean a clip that "inherits autoplay
+ * but not controls", a state nothing in the ui can show and nobody asked for.
+ * @param url the clip's media url
+ * @return {autoplay, controls, pausable}
+ */
+function galleryVideoOptsFor(url) {
+  var own = url && GALLERY_VIDEO_BY_URL[url];
+  if (!own) return GALLERY_VIDEO_OPTS;
+  return {
+    autoplay: own.autoplay !== false,
+    controls: !!own.controls,
+    pausable: !!own.pausable
   };
 }
 
@@ -159,16 +187,17 @@ function paintPanes() {
     if (i >= list.length) { i = 0; GALLERY_IDX[dir] = 0; }
     var cur = list[i];
     if (isVid(cur)) {
+      var vopts = galleryVideoOptsFor(cur);
       img.hidden = true;
       vid.hidden = false;
-      vid.controls = GALLERY_VIDEO_OPTS.controls;
-      vid.autoplay = GALLERY_VIDEO_OPTS.autoplay;
+      vid.controls = vopts.controls;
+      vid.autoplay = vopts.autoplay;
       if (vid.getAttribute("src") !== cur) vid.src = cur;
       /* flipping to a clip is a fresh start either way: autoplay off means it
          waits on the visitor (its first frame is already showing, so the pane
          doesn't go black), and autoplay on has to be asked for explicitly -
          the attribute alone only covers a clip that was in the markup at load */
-      if (GALLERY_VIDEO_OPTS.autoplay) vid.play().catch(function () {});
+      if (vopts.autoplay) vid.play().catch(function () {});
       else vid.pause();
     } else {
       vid.pause();
@@ -379,10 +408,14 @@ document.addEventListener("click", function (e) {
      on the same click that pauses (or that reaches for the scrub bar) would
      make both unusable. Everywhere else in the pane still steps as always. */
   var vid = e.target.closest('[data-gallery-media="vid"]');
-  if (vid && !vid.hidden && (GALLERY_VIDEO_OPTS.controls || GALLERY_VIDEO_OPTS.pausable)) {
+  /* whichever clip this pane is actually sitting on - paintPanes() puts its
+     url on the element, so the settings that decide this are the same ones it
+     painted with, even with two panes on different clips side by side */
+  var vopts = vid ? galleryVideoOptsFor(vid.getAttribute("src")) : null;
+  if (vid && !vid.hidden && (vopts.controls || vopts.pausable)) {
     /* with the native controls up the browser already play/pauses on a click
        on the video, so this only has to cover the controls-free case */
-    if (!GALLERY_VIDEO_OPTS.controls) {
+    if (!vopts.controls) {
       if (vid.paused) vid.play().catch(function () {});
       else vid.pause();
     }

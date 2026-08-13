@@ -234,13 +234,22 @@ DEFAULT_CONTENT = {
         {"big": "", "lbl": "Certificate of completion", "icon": True},
     ],
     "gallery": {
-        # how a clip plays inside a gallery image pane, chosen once for the
-        # whole gallery in the content manager's Gallery section (the panes
-        # themselves are placed elements a ta can have several of, but "how
-        # our videos play" is one decision about the gallery, not a per-pane
-        # one). Same three switches a placed video gets from its own right-
-        # click menu, see VIDEO_PLAYBACK_KEYS in js/main.js.
+        # how a clip plays inside a gallery image pane. Same three switches a
+        # placed video gets from its own right-click menu, see
+        # VIDEO_PLAYBACK_KEYS in js/main.js.
+        #
+        # "video" is the baseline every clip starts from; "video_opts" holds
+        # the per-clip choices a ta has actually made, keyed by media url, and
+        # wins wherever it has an entry. It used to be "video" alone - one
+        # decision for the whole gallery - which is wrong the moment two clips
+        # want different things (a short silent loop that should just run, next
+        # to a long one a visitor ought to be able to scrub), and that's the
+        # normal case rather than the exotic one. Keyed by URL rather than by
+        # (directory, index) so a clip keeps its settings when the directory is
+        # renamed or its images reordered, and so the same clip in two
+        # directories behaves the same way in both.
         "video": {"autoplay": True, "controls": False, "pausable": False},
+        "video_opts": {},
         "years": ["2026", "2025"],
         "images": {
             "2026": [
@@ -1014,7 +1023,7 @@ def init_db():
     except sqlite3.OperationalError:
         pass
     # guarded add for dbs created before is_last_applied existed (see
-    # _seed_last_applied_profile()).
+    # snapshot_last_applied()).
     try:
         conn.execute("ALTER TABLE profiles ADD COLUMN is_last_applied INTEGER NOT NULL DEFAULT 0")
     except sqlite3.OperationalError:
@@ -1069,7 +1078,7 @@ def init_db():
     _backfill_plain(conn)
     _seed_content(conn)
     _seed_default_profile(conn)
-    _seed_last_applied_profile(conn)
+    _unshare_seeded_last_applied(conn)
     _seed_default_objects(conn)
     _migrate_learn_reel(conn)
     _migrate_dashboard_progress(conn)
@@ -1291,33 +1300,22 @@ def _seed_default_profile(conn):
     conn.commit()
 
 
-def _seed_last_applied_profile(conn):
-    """inserts a shared, permanent "Most recently applied" profile, exactly
-    once, ever (same meta-flag trick as _seed_default_profile(), and for the
-    same reason: this one is never supposed to come back once seeded,
-    unlike a profile a ta made themselves). Its `data` isn't meant to stay
-    at this seeded value: snapshot_last_applied() overwrites it every time
-    anyone applies changes (see api_save_content() in app/main.py), always
-    holding whatever was LIVE right before the most recent apply replaced
-    it. That's the actual point of it: two tas editing at the same time can
-    silently clobber each other (the last Apply always wins, there's no
-    merge), and without this there'd be no way to get back what was live a
-    moment before that happened. Unlike the Default profile, it can't be
-    deleted by anyone at all (see api_delete_profile() in app/main.py), a
-    ta deleting their own safety net would be a very easy way to lose it
-    for good.
+def _unshare_seeded_last_applied(conn):
+    """retires the single shared "Most recently applied" profile that used to
+    be seeded for the whole site (owner "system", shared=1).
+
+    There is one of these per ta now, private to them, created on their first
+    Apply and holding what THEY applied - see snapshot_last_applied() for why
+    the shared one couldn't do the job it existed for. The old row is only
+    unshared, never deleted: it still holds a real snapshot of live content
+    from before the change, and a migration that throws away a recovery
+    profile would be exactly the kind of loss this whole feature is for. Once
+    unshared it belongs to "system", which is not a ta anyone logs in as, so
+    it simply stops appearing in every ta's list.
     @param conn an open db connection
     """
-    cur = conn.execute(
-        "INSERT OR IGNORE INTO meta (key, value) VALUES ('last_applied_profile_seeded', '1')"
-    )
-    conn.commit()
-    if cur.rowcount == 0:
-        return
     conn.execute(
-        "INSERT INTO profiles (owner, name, data, shared, is_last_applied)"
-        " VALUES (?, ?, ?, 1, 1)",
-        ("system", "Most recently applied", json.dumps(DEFAULT_CONTENT)),
+        "UPDATE profiles SET shared = 0 WHERE is_last_applied = 1 AND owner = 'system'"
     )
     conn.commit()
 
@@ -1988,6 +1986,14 @@ def _backfill_gallery_video(data):
         "controls": bool(video.get("controls")),
         "pausable": bool(video.get("pausable")),
     }
+    # per-clip overrides (see DEFAULT_CONTENT["gallery"]). Deliberately NOT
+    # backfilled per clip: a blob from before these existed has no entries, and
+    # every clip in it correctly resolves to the gallery-wide "video" above, so
+    # it keeps playing exactly as it did until a ta changes one. Writing an
+    # entry per clip here instead would freeze today's baseline onto every
+    # existing clip and be wrong the moment anything is added.
+    if not isinstance(gallery.get("video_opts"), dict):
+        gallery["video_opts"] = {}
 
 
 def _backfill_extras_ids(data):
@@ -2085,19 +2091,44 @@ def get_profile(profile_id):
     }
 
 
-def snapshot_last_applied(data):
-    """overwrites the "Most recently applied" profile's data (see
-    _seed_last_applied_profile()), called right before the live content
-    gets replaced by a new Apply (see api_save_content() in app/main.py),
-    so it always holds whatever was live a moment ago, not whatever just
-    went live.
-    @param data the outgoing (about to be replaced) live content dict
+def snapshot_last_applied(owner, data):
+    """overwrites one ta's "Most recently applied" profile with the content
+    they just applied, creating it on their first ever Apply.
+
+    ONE PER TA, PRIVATE TO THEM, holding what THEY applied. All three of
+    those matter, and none of them were true at first: there used to be a
+    single shared row (owner "system", shared=1) holding the OUTGOING live
+    content, whatever it was and whoever had put it there.
+
+    Two tas editing at once clobber each other - the last Apply wins, there
+    is no merge - and the point of this profile is to get your own work back
+    afterward. The shared version couldn't do that reliably. If you apply and
+    someone else applies straight after, the one row now holds YOUR content
+    (it was the outgoing blob when they applied), so you're fine; but a third
+    apply overwrites it with theirs and yours is gone, and meanwhile every
+    other ta is looking at a "Most recently applied" that has nothing to do
+    with anything they did. Keyed to the ta who applied, holding what they
+    sent, it's simply their own last Apply, safe from anyone else's.
+    @param owner the ta applying the changes
+    @param data the content dict being applied
+    @return nothing
     """
     conn = get_db()
-    conn.execute(
-        "UPDATE profiles SET data = ? WHERE is_last_applied = 1",
-        (json.dumps(data),),
+    blob = json.dumps(data)
+    cur = conn.execute(
+        "UPDATE profiles SET data = ? WHERE is_last_applied = 1 AND owner = ?",
+        (blob, owner),
     )
+    # created lazily on first Apply rather than seeded per ta at signup: a ta
+    # who has never applied anything has nothing to recover, and an empty
+    # "Most recently applied" sitting in their list would be a restore button
+    # that silently reverts the site to whatever the defaults were.
+    if cur.rowcount == 0:
+        conn.execute(
+            "INSERT INTO profiles (owner, name, data, shared, is_last_applied)"
+            " VALUES (?, ?, ?, 0, 1)",
+            (owner, "Most recently applied", blob),
+        )
     conn.commit()
     conn.close()
 

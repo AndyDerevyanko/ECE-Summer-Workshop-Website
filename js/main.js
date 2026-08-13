@@ -2896,7 +2896,7 @@ function setSharedJoinUrl(url) {
    verbatim and applyTextOverrides() already restores it, so a link survives
    Apply/reload/profiles with zero new plumbing, and gets full undo/redo for
    free through commitTextFieldChange() - the same "a chip is just markup"
-   reasoning the formula chips (buildFormulaChipHtml()) already rely on.
+   reasoning the expression chips (buildExpressionChipHtml()) already rely on.
    --------------------------------------------------------------------------- */
 
 /* what marks a piece of a field's text as linked. One class over both element
@@ -8807,14 +8807,57 @@ function variableByKey(key) {
  *   filling a select can't silently swap an existing binding for something
  *   else (eg a chip built on a pane variable whose pane has since been
  *   deleted). Optional.
+ * @param scopeEl the element the picker is being opened FOR (the text field
+ *   being edited, the progress bar being configured). Passing it narrows the
+ *   tile locals to the one tile that element actually sits inside - see
+ *   scopedPageLocalVariables(). Omit it entirely (not null, which means "sits
+ *   inside nothing") to offer every tile on the page.
  * @return an array of variables, content ones first in content order
  */
-function pickableVariables(keepKey) {
-  var out = VARIABLES.concat(pageLocalVariables());
+function pickableVariables(keepKey, scopeEl) {
+  var out = VARIABLES.concat(arguments.length < 2 ? pageLocalVariables() : scopedPageLocalVariables(scopeEl));
   if (keepKey && !out.some(function (v) { return v.key === keepKey; })) {
     var kept = variableByKey(keepKey);
     if (kept) out.push(kept);
   }
+  return out;
+}
+
+/**
+ * The tile locals ONE PLACE on the page may pick from - the same records
+ * pageLocalVariables() returns, cut down to the tile scopeEl is physically
+ * inside.
+ *
+ * Every day tile's locals existing everywhere at once is right for
+ * RESOLUTION (a chip keeps reading Day 3's title wherever it ends up) but
+ * wrong for a picker: editing a field inside Day 1's tile and being offered
+ * Day2Header/Day3Header alongside Day1's own is offering a binding that,
+ * because these fields are one shared template mirrored onto every tile,
+ * isn't the one the ta means. So a picker sees its OWN tile's locals and no
+ * other tile's - and a picker opened on something sitting in no tile at all
+ * (scopeEl null, or an element outside every tile) sees none of them, since
+ * there's no "this tile" for a relative reference to mean.
+ *
+ * The gallery's own pane variables are page-level rather than tile-relative
+ * (a pane is bound to a directory, not to whatever a field sits inside), so
+ * they're offered on the gallery page regardless of scope, exactly as before.
+ * @param scopeEl the element the picker is for, or null for none
+ * @return an array of variable records, possibly empty
+ */
+function scopedPageLocalVariables(scopeEl) {
+  var out = [];
+  var closest = function (sel) { return scopeEl && scopeEl.closest ? scopeEl.closest(sel) : null; };
+  var dTile = closest("[data-days-tile]");
+  if (dTile && dTile.dataset.daysVar) {
+    Object.keys(DAYS_CHIP_VAR_SUFFIX).forEach(function (local) {
+      out.push(dayTileVariableFor(TILE_VAR_PREFIX + "day:" + dTile.dataset.daysVar + ":" + local));
+    });
+  }
+  var xTile = closest("[data-extras-tile]");
+  if (xTile && xTile.dataset.extrasVar) {
+    out.push(extrasTileVariableFor(TILE_VAR_PREFIX + "extras:" + xTile.dataset.extrasVar));
+  }
+  if (currentPageKey() === "gallery") out = out.concat(galleryVariableInventory());
   return out;
 }
 
@@ -8850,7 +8893,7 @@ function pageLocalVariables() {
  * this identifier, which is exactly why that field can't contain "{", "}",
  * ":" or whitespace either - see app/db.py's _sanitize_variable_name()/js/
  * ta.js's sanitizeVariableName(). Used both by parseVariableTokens() (typed
- * text -> chip) and formulaChipEditText() (chip -> its own re-typable
+ * text -> chip) and chipNotation() (chip -> its own re-typable
  * notation while mid-edit).
  * @param v a variable record (see variableByKey()), or null
  * @return the token, or "" if v is falsy or has no token to offer
@@ -8909,10 +8952,12 @@ function variableNumericValue(key) {
  * @param selectEl the <select> to fill
  * @param predicate function(variable) -> bool, which variables to include
  * @param selectedKey the value to preselect
+ * @param scopeEl the element this picker is for, see pickableVariables() -
+ *   omit to offer every tile's locals rather than one tile's
  */
-function populateVariableSelect(selectEl, predicate, selectedKey) {
+function populateVariableSelect(selectEl, predicate, selectedKey, scopeEl) {
   selectEl.textContent = "";
-  pickableVariables(selectedKey).filter(predicate).forEach(function (v) {
+  pickableVariables(selectedKey, scopeEl).filter(predicate).forEach(function (v) {
     var opt = document.createElement("option");
     opt.value = v.key;
     opt.textContent = v.name || v.key;
@@ -8931,25 +8976,31 @@ function populateVariableSelect(selectEl, predicate, selectedKey) {
  * @param selectEl the ".ctx-var-current"/".ctx-var-total" <select>
  * @param selectedKey the element's current d.varCurrent/d.varTotal
  */
-function populateProgressVarSelect(selectEl, selectedKey) {
-  populateVariableSelect(selectEl, function (v) { return v.type === "number"; }, selectedKey);
+function populateProgressVarSelect(selectEl, selectedKey, scopeEl) {
+  populateVariableSelect(selectEl, function (v) { return v.type === "number"; }, selectedKey, scopeEl);
 }
 
 /**
- * Every operation the text toolbar's formula chip ("ƒx" button) can insert.
- * "value" is the only one that accepts a non-number variable (its B select
- * stays hidden); every other op reads both operands as numbers via
- * variableNumericValue(), same 0-on-unset/unparseable fallback as the
- * progress bar's bindings.
+ * Every operation the text toolbar's ƒx menu offers as a ready-made shape.
+ *
+ * These are no longer a closed set of stored operations: each one is just a
+ * shorthand for an EXPRESSION the ta could equally have typed by hand (see
+ * fxParse(), and .build below for the exact text each shape writes). "value"
+ * is the only one that accepts a non-number variable (its B select stays
+ * hidden); every other shape reads both operands as numbers. "custom" is the
+ * escape hatch: it swaps the two variable pickers for a plain text box
+ * holding the expression itself, which is also what the menu falls back to
+ * when it's opened on something no shape here can describe.
  */
 var FX_OPS = {
-  value: { label: "Value", needsB: false, anyType: true },
-  sum: { label: "Sum (A + B)", needsB: true },
-  difference: { label: "Difference (A − B)", needsB: true },
-  product: { label: "Product (A × B)", needsB: true },
-  quotient: { label: "Quotient (A ÷ B)", needsB: true },
-  percent: { label: "Percent (A of B, as %)", needsB: true },
-  fraction: { label: "“A of B”", needsB: true }
+  value: { label: "Value", needsB: false, anyType: true, build: function (a) { return a; } },
+  sum: { label: "Sum (A + B)", needsB: true, build: function (a, b) { return a + " + " + b; } },
+  difference: { label: "Difference (A − B)", needsB: true, build: function (a, b) { return a + " - " + b; } },
+  product: { label: "Product (A × B)", needsB: true, build: function (a, b) { return a + " * " + b; } },
+  quotient: { label: "Quotient (A ÷ B)", needsB: true, build: function (a, b) { return a + " / " + b; } },
+  percent: { label: "Percent (A of B, as %)", needsB: true, build: function (a, b) { return a + " / " + b + ' * 100 + "%"'; } },
+  fraction: { label: "“A of B”", needsB: true, build: function (a, b) { return a + ' + " of " + ' + b; } },
+  custom: { label: "Custom expression…", needsB: false, anyType: true, custom: true }
 };
 
 /**
@@ -8957,7 +9008,7 @@ var FX_OPS = {
  * file needs this (a ta's own contentEditable output is trusted verbatim,
  * see saveEditedField()/applyTextOverrides()), but a formula chip's
  * displayed text is computed from live variable data, not typed by a ta, so
- * building its <span> markup (see buildFormulaChipHtml()) is the one place
+ * building its <span> markup (see buildExpressionChipHtml()) is the one place
  * here that turns arbitrary data into an HTML string and needs to guard
  * against it looking like markup.
  * @param str any value, coerced to string
@@ -8969,11 +9020,229 @@ function escapeHtml(str) {
   });
 }
 
+/* ---------------------------------------------------------------------------
+   THE EXPRESSION LANGUAGE INSIDE {...}
+
+   What a ta types between the braces is a small expression, not just a
+   variable name: {Day1Header}, {Totaldays - Daysprogressed},
+   {Daysprogressed / Totaldays * 100 + "%"}, {Day1Header + " — day one"}.
+
+   The grammar is deliberately tiny and total - no property access, no calls,
+   no assignment, nothing that could reach the page or the network - and it is
+   parsed and walked here rather than handed to eval()/Function(), so a
+   variable name is the ONLY thing an expression can read.
+
+     value     number literal (12, 1.5), string literal ("..." or '...',
+               backslash-escaped quotes), or a variable's own token
+     operator  + - * / with the usual precedence, parentheses, unary minus
+     +         concatenates when either side is a string, adds otherwise
+
+   Numbers become text through the chip's own format flags wherever they land
+   - as the whole result, or spliced into a string by "+" - so
+   {Daysprogressed / Totaldays * 100 + "%":.1f} reads "37.5%" rather than
+   "37.49999999999999%".
+
+   An expression that doesn't parse, or that names a variable nothing on the
+   page defines, doesn't become a chip at all: the ta's own literal
+   "{whatever}" text stays exactly as typed, which is what makes a half-typed
+   or misremembered name something you can see and fix in place rather than
+   something that silently vanishes.
+   --------------------------------------------------------------------------- */
+
 /**
- * Computes a formula chip's live display text from its op + operand
- * variable keys (see FX_OPS, buildFormulaChipHtml()). Reads current
- * VARIABLES, so this always reflects whatever was last fetched - same
- * reload-to-refresh freshness as the progress bar's own bindings
+ * Splits expression source into tokens.
+ * @param src the text between "{" and its flags/closing brace
+ * @return an array of {t, v} tokens, or null if src contains a character
+ *   this grammar has no meaning for (which leaves the ta's text alone)
+ */
+function fxTokenize(src) {
+  var out = [];
+  var i = 0;
+  while (i < src.length) {
+    var c = src.charAt(i);
+    if (/\s/.test(c)) { i++; continue; }
+    if (c === '"' || c === "'") {
+      var s = "";
+      var j = i + 1;
+      while (j < src.length && src.charAt(j) !== c) {
+        if (src.charAt(j) === "\\" && j + 1 < src.length) { s += src.charAt(j + 1); j += 2; }
+        else { s += src.charAt(j); j++; }
+      }
+      if (j >= src.length) return null; /* unterminated string */
+      out.push({ t: "str", v: s });
+      i = j + 1;
+      continue;
+    }
+    var num = /^(?:[0-9]+\.?[0-9]*|\.[0-9]+)/.exec(src.slice(i));
+    if (num) { out.push({ t: "num", v: parseFloat(num[0]) }); i += num[0].length; continue; }
+    var id = /^[A-Za-z_][A-Za-z0-9_]*/.exec(src.slice(i));
+    if (id) { out.push({ t: "id", v: id[0] }); i += id[0].length; continue; }
+    if ("+-*/()".indexOf(c) !== -1) { out.push({ t: c }); i++; continue; }
+    return null;
+  }
+  return out;
+}
+
+/**
+ * Parses expression source into a tree, by recursive descent over
+ * fxTokenize()'s tokens.
+ * @param src the text between "{" and its flags/closing brace
+ * @return the root node, or null if src isn't a complete valid expression
+ */
+function fxParse(src) {
+  var toks = fxTokenize(src);
+  if (!toks || !toks.length) return null;
+  var pos = 0;
+  var peek = function () { return toks[pos]; };
+
+  function primary() {
+    var tk = peek();
+    if (!tk) return null;
+    if (tk.t === "num" || tk.t === "str") { pos++; return { t: tk.t, v: tk.v }; }
+    if (tk.t === "id") { pos++; return { t: "var", v: tk.v }; }
+    if (tk.t === "(") {
+      pos++;
+      var inner = additive();
+      if (!inner || !peek() || peek().t !== ")") return null;
+      pos++;
+      return inner;
+    }
+    return null;
+  }
+  function unary() {
+    if (peek() && peek().t === "-") {
+      pos++;
+      var n = unary();
+      return n ? { t: "neg", a: n } : null;
+    }
+    return primary();
+  }
+  function multiplicative() {
+    var node = unary();
+    while (node && peek() && (peek().t === "*" || peek().t === "/")) {
+      var op = toks[pos++].t;
+      var rhs = unary();
+      node = rhs ? { t: "bin", op: op, a: node, b: rhs } : null;
+    }
+    return node;
+  }
+  function additive() {
+    var node = multiplicative();
+    while (node && peek() && (peek().t === "+" || peek().t === "-")) {
+      var op = toks[pos++].t;
+      var rhs = multiplicative();
+      node = rhs ? { t: "bin", op: op, a: node, b: rhs } : null;
+    }
+    return node;
+  }
+
+  var ast = additive();
+  /* trailing junk ("{A B}") is a parse failure, not a prefix match */
+  return (ast && pos === toks.length) ? ast : null;
+}
+
+/**
+ * Reads one variable token as an expression value, applying the same
+ * per-type display rules a "value" formula chip has always used: a number
+ * stays a number (so it can still be arithmetic), everything else arrives as
+ * the text it displays as.
+ * @param token an identifier from an expression, see variableNotationToken()
+ * @return a number or string, or undefined if nothing on the page defines it
+ */
+function fxVariableValue(token) {
+  var v = variableByToken(token);
+  if (!v) return undefined;
+  if (v.type === "number") {
+    var n = parseFloat(v.value);
+    return isNaN(n) ? 0 : n;
+  }
+  if (v.type === "boolean") return v.value ? "Yes" : "No";
+  if (v.type === "datetime") {
+    var d = v.value ? new Date(v.value) : null;
+    return d && !isNaN(d.getTime()) ? d.toLocaleString() : "";
+  }
+  return v.value == null ? "" : String(v.value);
+}
+
+/** Coerces an expression value to a number, 0 when it isn't one - same
+    never-throw stance variableNumericValue() takes. */
+function fxNumber(v) {
+  var n = typeof v === "number" ? v : parseFloat(v);
+  return isNaN(n) ? 0 : n;
+}
+
+/**
+ * Renders a number through a chip's format flags. A non-finite result (÷ 0)
+ * reads as an em dash, the same placeholder the old quotient/percent ops
+ * showed for exactly that case.
+ * @param n the number
+ * @param fmt {decimals, comma} from parseFormatFlags()
+ */
+function fxFormatNumber(n, fmt) {
+  if (!isFinite(n)) return "—";
+  var dp = fmt.decimals;
+  return fmt.comma ? n.toLocaleString(undefined, { minimumFractionDigits: dp, maximumFractionDigits: dp }) : n.toFixed(dp);
+}
+
+/** An expression value as display text - the one place a number turns into
+    characters, so the chip's flags apply identically whether the number is
+    the whole result or one piece of a concatenation. */
+function fxText(v, fmt) {
+  return typeof v === "number" ? fxFormatNumber(v, fmt) : String(v);
+}
+
+/**
+ * Walks a parsed expression. Returns undefined the moment any variable in it
+ * is unknown, which propagates all the way out so the caller can leave the
+ * ta's literal text alone rather than printing a half-resolved result.
+ * @param node an fxParse() node
+ * @param fmt {decimals, comma}, for numbers concatenated into strings
+ * @return a number, a string, or undefined
+ */
+function fxEval(node, fmt) {
+  if (node.t === "num" || node.t === "str") return node.v;
+  if (node.t === "var") return fxVariableValue(node.v);
+  if (node.t === "neg") {
+    var inner = fxEval(node.a, fmt);
+    return inner === undefined ? undefined : -fxNumber(inner);
+  }
+  var a = fxEval(node.a, fmt);
+  if (a === undefined) return undefined;
+  var b = fxEval(node.b, fmt);
+  if (b === undefined) return undefined;
+  if (node.op === "+" && (typeof a === "string" || typeof b === "string")) return fxText(a, fmt) + fxText(b, fmt);
+  var x = fxNumber(a);
+  var y = fxNumber(b);
+  if (node.op === "+") return x + y;
+  if (node.op === "-") return x - y;
+  if (node.op === "*") return x * y;
+  return x / y;
+}
+
+/**
+ * The whole pipeline: expression source plus format flags to display text.
+ * @param src the expression, eg "Totaldays - Daysprogressed"
+ * @param fmt {decimals, comma} from parseFormatFlags()
+ * @return the text, or undefined if src doesn't parse or names an unknown
+ *   variable - the signal for "this isn't a reference, leave it as typed"
+ */
+function fxEvaluate(src, fmt) {
+  var ast = fxParse(src);
+  if (!ast) return undefined;
+  var v = fxEval(ast, fmt);
+  return v === undefined ? undefined : fxText(v, fmt);
+}
+
+/**
+ * LEGACY. Computes a formula chip's live display text from its op + operand
+ * variable KEYS, the shape every chip had before they carried an expression
+ * (see buildExpressionChipHtml()). Still the renderer for any such chip in
+ * already-saved content: nothing rewrites them on load, they just render as
+ * they always did, and the first time a ta edits the field one sits in it
+ * becomes an expression chip like any other (see chipNotation()).
+ *
+ * Reads current VARIABLES, so this always reflects whatever was last fetched
+ * - same reload-to-refresh freshness as the progress bar's own bindings
  * (paintProgressElement()), there is no live polling anywhere in this app.
  * @param op one of FX_OPS's keys
  * @param aKey variable A's key
@@ -9013,38 +9282,45 @@ function formulaChipText(op, aKey, bKey, decimals, comma) {
 }
 
 /**
- * Builds the <span> markup for a new/edited formula chip, config baked into
- * data-fx-* attributes (read back by repaintFormulaChips() and
- * openFormulaMenu()'s edit flow) riding along inside the same content.text
- * HTML string as everything else a ta types in this field - same
+ * Builds the <span> markup for an expression chip: the expression source and
+ * its format flags baked into data-fx-* attributes (read back by
+ * repaintFormulaChips() and chipNotation()) riding along inside the same
+ * content.text HTML string as everything else a ta types in this field - same
  * self-describing-inline-span approach as the toolbar's own foreColor spans
  * (data-light-color/data-dark-color, see applyThemedForeColor()).
  * contenteditable="false" makes the browser treat it as one atomic unit for
- * caret/backspace navigation inside the surrounding contentEditable field.
- * @param op one of FX_OPS's keys
- * @param aKey variable A's key
- * @param bKey variable B's key, omitted from the markup for "value"
+ * caret/backspace navigation - but only OUTSIDE an edit session: a field
+ * being edited holds no chips at all, just the notation text they came from,
+ * see chipsToNotation().
+ *
+ * The expression references variables by their typed token rather than their
+ * internal key, because the token is what the ta wrote and what they'll see
+ * again the next time they open the field. Renaming a variable therefore
+ * breaks references to it, the same way renaming a named range breaks a
+ * spreadsheet formula - and breaks it visibly, back into the literal
+ * "{OldName}" text that says exactly what went missing.
+ * @param expr the expression source, see fxParse()
  * @param decimals decimal places for any numeric result
  * @param comma true to group thousands (python's "," format flag)
  * @return an HTML string for a single <span class="fx-chip">
  */
-function buildFormulaChipHtml(op, aKey, bKey, decimals, comma) {
-  var text = formulaChipText(op, aKey, bKey, decimals, comma);
-  var attrs = ' data-fx-op="' + escapeHtml(op) + '" data-fx-a="' + escapeHtml(aKey) + '"' +
-    (bKey ? ' data-fx-b="' + escapeHtml(bKey) + '"' : '') +
-    ' data-fx-decimals="' + escapeHtml(String(decimals)) + '"' +
+function buildExpressionChipHtml(expr, decimals, comma) {
+  var dp = parseInt(decimals, 10);
+  if (isNaN(dp) || dp < 0) dp = 0;
+  var text = fxEvaluate(expr, { decimals: dp, comma: !!comma });
+  var attrs = ' data-fx-expr="' + escapeHtml(expr) + '"' +
+    ' data-fx-decimals="' + dp + '"' +
     (comma ? ' data-fx-comma="1"' : '');
-  return '<span class="fx-chip" contenteditable="false"' + attrs + '>' + escapeHtml(text) + '</span>';
+  return '<span class="fx-chip" contenteditable="false"' + attrs + '>' + escapeHtml(text === undefined ? "" : text) + '</span>';
 }
 
 /**
  * The python-style format-flag suffix (everything after the ":" in
- * "{Name:flags}") a formula chip's own decimals/comma settings spell out -
- * the exact inverse of parseFormatFlags(), used by formulaChipEditText() to
- * show a chip's real, re-typable notation while its field is mid-edit.
- * Decimals of 0 (the default, same as typing "{Name}" with no flags at all)
- * omits the ".0f" clause entirely, so the common case stays as clean as
- * what a ta would actually type by hand.
+ * "{expr:flags}") a chip's own decimals/comma settings spell out - the exact
+ * inverse of parseFormatFlags(), used by chipNotation() to show a chip's
+ * real, re-typable notation. Decimals of 0 (the default, same as typing
+ * "{expr}" with no flags at all) omits the ".0f" clause entirely, so the
+ * common case stays as clean as what a ta would actually type by hand.
  * @param decimals decimal places, as stored in a chip's data-fx-decimals
  * @param comma true to include the "," thousands-separator flag
  * @return "" (no flags), or ":" plus the flag characters
@@ -9056,29 +9332,28 @@ function formulaFlagString(decimals, comma) {
 }
 
 /**
- * A formula chip's notation while mid-edit - the formula-chip counterpart of
- * localChipVarToken(), and the fix for repaintFormulaChips() previously
- * showing every chip's live resolved VALUE even while a ta was actively
- * editing the field it sits in, indistinguishable from ordinary typed text.
+ * The literal text one chip came from, and the text it goes back to for the
+ * whole of an edit session (see chipsToNotation()). Every chip has one, and
+ * retyping it character for character rebuilds the same chip - that round
+ * trip is the entire reason chips can be edited as ordinary text at all.
  *
- * A "value" chip (the only op the typed {Name:flags} notation itself can
- * express, see parseVariableTokens()) shows its own real, re-typable token:
- * backspacing it out and retyping the exact same text rebuilds an identical
- * chip. Every other op (sum/difference/...) has no textual form the parser
- * understands - typing what's shown would NOT regenerate it - so those show
- * a plainly-labeled but intentionally non-reinterpretable summary instead,
- * still always bracketed so a chip never reads as ordinary resolved text
- * while its field is being edited.
- * @param chip a .fx-chip[data-fx-op] element
- * @return the "{...}" text to show
+ *   expression chip  its own source, "{Totaldays - Daysprogressed:.1f}"
+ *   local chip       the tile-relative token the tile resolves, "{Day1Header}"
+ *   legacy op chip   the equivalent expression (see FX_OPS's .build), which
+ *                    is how a chip saved before expressions existed migrates:
+ *                    the ta edits the field, it re-parses as an expression
+ *
+ * @param chip a .fx-chip element of any kind
+ * @return the "{...}" text
  */
-function formulaChipEditText(chip) {
-  var op = chip.dataset.fxOp || "value";
+function chipNotation(chip) {
+  if (chip.dataset.fxLocal) return "{" + localChipToken(chip) + "}";
+  var flags = formulaFlagString(chip.dataset.fxDecimals, chip.dataset.fxComma === "1");
+  if (chip.dataset.fxExpr) return "{" + chip.dataset.fxExpr + flags + "}";
+  var op = FX_OPS[chip.dataset.fxOp || "value"] || FX_OPS.value;
   var aTok = variableNotationToken(variableByKey(chip.dataset.fxA)) || chip.dataset.fxA || "?";
-  if (op === "value") return "{" + aTok + formulaFlagString(chip.dataset.fxDecimals, chip.dataset.fxComma === "1") + "}";
   var bTok = variableNotationToken(variableByKey(chip.dataset.fxB)) || chip.dataset.fxB || "?";
-  var symbols = { sum: "+", difference: "−", product: "×", quotient: "÷", percent: "% of", fraction: "of" };
-  return "{" + aTok + " " + (symbols[op] || op) + " " + bTok + "}";
+  return "{" + (op.build ? op.build(aTok, bTok) : aTok) + flags + "}";
 }
 
 /**
@@ -9092,49 +9367,60 @@ function formulaChipEditText(chip) {
  * again whenever a gallery pane moves (a chip can be built on a pane
  * variable, see galleryVariableFor()).
  *
- * While the chip's own field is mid-edit (wireTextField() stamps ".editing"
- * for exactly that window), it shows its {Name:flags} notation instead of
- * its resolved value - see formulaChipEditText() - same "you see the
- * variable while editing, the real page's own value otherwise" rule a local
- * chip's ${Name} already followed, just extended to formula chips too.
+ * There is no mid-edit case to handle here any more: a field being edited
+ * has no chips in it at all, only the notation text they were unpacked into
+ * (see chipsToNotation()), so nothing this touches is ever inside an active
+ * edit session.
  *
- * Local chips (data-fx-local: a day tile's ${Day3Number}, an attachment's
+ * Local chips (data-fx-local: a day tile's Day3Number, an attachment's
  * filename, a gallery pane's own two numbers) share the .fx-chip class but
- * carry no formula at all, and resolve through repaintLocalTileContent()
+ * carry no expression at all, and resolve through repaintLocalTileContent()
  * instead - they're skipped here rather than blanked and restored.
  */
 function repaintFormulaChips() {
   document.querySelectorAll(".fx-chip:not([data-fx-local])").forEach(function (chip) {
-    chip.textContent = chip.closest(".editing") ? formulaChipEditText(chip) :
-      formulaChipText(chip.dataset.fxOp, chip.dataset.fxA, chip.dataset.fxB, chip.dataset.fxDecimals, chip.dataset.fxComma === "1");
+    var comma = chip.dataset.fxComma === "1";
+    if (chip.dataset.fxExpr) {
+      var dp = parseInt(chip.dataset.fxDecimals, 10);
+      var text = fxEvaluate(chip.dataset.fxExpr, { decimals: isNaN(dp) || dp < 0 ? 0 : dp, comma: comma });
+      chip.textContent = text === undefined ? "" : text;
+      return;
+    }
+    /* saved before expressions existed, see formulaChipText() */
+    chip.textContent = formulaChipText(chip.dataset.fxOp, chip.dataset.fxA, chip.dataset.fxB, chip.dataset.fxDecimals, comma);
   });
 }
 
 /* ---------------------------------------------------------------------------
-   TYPING {Name}/{Name:flags} BY HAND
+   TYPING {expr}/{expr:flags} BY HAND
 
-   A "value" formula chip's own notation (see formulaChipEditText()) isn't
-   only for display: a ta can type it directly into a field - {TotalDays},
-   {TotalDays:,}, {TotalDays:.2f} - and have it become a real live chip the
-   moment they're done editing, same as pasting one in. \{ and \} escape a
-   literal brace that was never meant to be read as notation at all.
+   A chip's notation (see chipNotation()) isn't only for display: it is the
+   editable form. For the whole of an edit session a field holds nothing but
+   text - {Totaldays}, {Totaldays:,}, {Day1Header + " (day one)"} - which the
+   ta can select, cut, retype and rearrange with no atomic anything in the
+   way, and which turns back into live chips the moment they're done (see
+   parseVariableTokens()).
+
+   A token that doesn't parse, or names a variable that doesn't exist, simply
+   stays as the text it is. That's the point: typing "{pvar}" over "{var}"
+   leaves "{pvar}" sitting there in plain sight rather than erasing itself.
+   \{ and \} escape a literal brace that was never meant to be notation.
    --------------------------------------------------------------------------- */
 
 /* matches either an escaped brace (\{ or \}, captured in group 1 with the
-   backslash) or a {Identifier} / {Identifier:flags} token (Identifier in
-   group 2, flags - everything after the ":" - in group 3, present only when
-   a ":" separates it from the identifier). Identifier and flags both
-   exclude "{"/"}" so a malformed/nested run of braces can never make this
-   greedily swallow more than one token's worth of text. */
-var VARIABLE_TOKEN_RE = /\\([{}])|\{([^{}:]+)(?::([^{}]*))?\}/g;
+   backslash) or a whole {...} token (its body in group 2). The body excludes
+   "{"/"}" so a malformed/nested run of braces can never make this greedily
+   swallow more than one token's worth of text. Splitting the body into
+   expression and flags is splitTokenBody()'s job, not the regex's - a ":"
+   can legitimately sit inside a string literal in the expression itself. */
+var VARIABLE_TOKEN_RE = /\\([{}])|\{([^{}]*)\}/g;
 
 /**
- * Parses the flags after a {Name:flags} token's ":" - the same python-style
+ * Parses the flags after a {expr:flags} token's ":" - the same python-style
  * subset formulaFlagString() produces on the way out: an optional ","
  * (thousands separator) followed by an optional ".Nf" (N decimal places, 0-9),
  * in that order, same as python's own "[,][.precision][type]" mini-language.
- * A bare "{Name}" (no ":" at all) means the same defaults formulaChipText()
- * already uses with nothing passed - 0 decimals, no grouping.
+ * A bare "{expr}" (no ":" at all) means 0 decimals and no grouping.
  * @param flags the raw text between ":" and the closing "}", or undefined
  *   for a token with no ":" at all
  * @return {decimals, comma}, or null if flags doesn't match this grammar
@@ -9149,17 +9435,104 @@ function parseFormatFlags(flags) {
 }
 
 /**
- * Scans one text node for {Name}/{Name:flags} tokens and \{ \} escapes,
- * replacing it in place with a mix of plain text and new formula chips
- * wherever a token both parses as valid flags AND names a real variable
- * (see variableByToken()) - anything else (a typo'd flag, a "{" that just
- * isn't naming anything pickableVariables() offers) is left completely
- * alone as ordinary text, so a stray "{" typed for any other reason is
- * never assumed to be a mistake.
+ * Splits a token's body into its expression and its format flags.
+ *
+ * The separator is a ":", but not just any ":": an expression can contain
+ * string literals, and {Day1Header + "10:30"} has one that means nothing of
+ * the sort. So this scans right to left over the colons that sit OUTSIDE
+ * every string literal, and takes the first one whose tail actually parses
+ * as flags. Nothing qualifying means the whole body is the expression.
+ * @param body the text between "{" and "}"
+ * @return {expr, flags, hasFlags}
+ */
+function splitTokenBody(body) {
+  var cuts = [];
+  var quote = "";
+  for (var i = 0; i < body.length; i++) {
+    var c = body.charAt(i);
+    if (quote) {
+      if (c === "\\") i++;
+      else if (c === quote) quote = "";
+    } else if (c === '"' || c === "'") quote = c;
+    else if (c === ":") cuts.push(i);
+  }
+  for (var j = cuts.length - 1; j >= 0; j--) {
+    var flags = parseFormatFlags(body.slice(cuts[j] + 1));
+    if (flags) return { expr: body.slice(0, cuts[j]), flags: flags, hasFlags: true };
+  }
+  return { expr: body, flags: { decimals: 0, comma: false }, hasFlags: false };
+}
+
+/**
+ * The chip markup one {...} token should become, or null if it should stay
+ * the text it is.
+ *
+ * A bare token naming one of the CONTAINING TILE's own locals rebuilds the
+ * tile-relative local chip rather than an absolute reference to that one
+ * tile - {Day1Header} typed inside Day 1's tile is the day tile template's
+ * own "this day's header", which is what makes it still read Day 2's header
+ * on Day 2's copy of that shared template (see mirrorEditedField()). The
+ * same token typed anywhere else is an ordinary absolute reference to Day 1.
+ * @param body the text between "{" and "}"
+ * @param field the field being parsed, for that containing-tile test
+ * @return an HTML string for one chip, or null
+ */
+function chipHtmlForToken(body, field) {
+  var split = splitTokenBody(body);
+  var expr = split.expr.trim();
+  if (!expr) return null;
+  if (!split.hasFlags) {
+    var local = localChipHtmlForToken(expr, field);
+    if (local) return local;
+  }
+  /* an expression that doesn't parse, or that reaches for a variable nothing
+     defines, is not a reference at all - the ta's own text stands */
+  if (fxEvaluate(expr, split.flags) === undefined) return null;
+  return buildExpressionChipHtml(expr, split.flags.decimals, split.flags.comma);
+}
+
+/**
+ * The local-chip markup a token rebuilds, if it names something local at all
+ * - the exact inverse of localChipToken(). Everything but the gallery's two
+ * pane variables is TILE-RELATIVE, so the token has to match the scope of a
+ * tile the field is actually inside; the pane variables carry their own
+ * binding instead (data-fx-dir) and so resolve from anywhere on the page.
+ * @param token a bare identifier from inside {...}
+ * @param field the field being parsed
+ * @return an HTML string for one chip, or null if token names no local
+ */
+function localChipHtmlForToken(token, field) {
+  var closest = function (sel) { return field && field.closest ? field.closest(sel) : null; };
+  var dTile = closest("[data-days-tile]");
+  var dBase = dTile && dTile.dataset.daysVar;
+  if (dBase) {
+    var locals = Object.keys(DAYS_CHIP_VAR_SUFFIX);
+    for (var i = 0; i < locals.length; i++) {
+      if (token === dBase + DAYS_CHIP_VAR_SUFFIX[locals[i]]) return buildDaysChipHtml(locals[i], token);
+    }
+  }
+  var xTile = closest("[data-extras-tile]");
+  var xBase = xTile && xTile.dataset.extrasVar;
+  if (xBase && token === xBase + "Name") return buildExtrasFilenameChipHtml();
+  var gTile = closest("[data-gallery-tile]");
+  var gDir = gTile && gTile.dataset.galleryDir;
+  if (gDir && token === galleryVarScope(gDir) + "Name") return buildGalleryDirChipHtml();
+  var v = variableByToken(token);
+  var g = v && v.derived ? galleryVarOf(v.key) : null;
+  return g ? buildGalleryChipHtml(g.local, g.dir) : null;
+}
+
+/**
+ * Scans one text node for {...} tokens and \{ \} escapes, replacing it in
+ * place with a mix of plain text and new chips wherever a token resolves to
+ * one (see chipHtmlForToken()) - anything else is left completely alone as
+ * ordinary text, so a stray "{" typed for any other reason is never assumed
+ * to be a mistake.
  * @param textNode a Text node currently attached to the document
+ * @param field the field being parsed, for tile-relative locals
  * @return true if this node was rewritten
  */
-function parseVariableTokensInNode(textNode) {
+function parseVariableTokensInNode(textNode, field) {
   var text = textNode.nodeValue;
   if (text.indexOf("{") === -1 && text.indexOf("\\") === -1) return false;
   var frag = document.createDocumentFragment();
@@ -9175,12 +9548,11 @@ function parseVariableTokensInNode(textNode) {
       changed = true;
       continue;
     }
-    var flags = parseFormatFlags(m[3]);
-    var v = flags ? variableByToken(m[2]) : null;
-    if (!v) continue; /* doesn't parse or doesn't name anything - leave as text */
+    var html = chipHtmlForToken(m[2], field);
+    if (!html) continue; /* not a reference - leave as text */
     frag.appendChild(document.createTextNode(text.slice(last, m.index)));
     var holder = document.createElement("span");
-    holder.innerHTML = buildFormulaChipHtml("value", v.key, "", flags.decimals, flags.comma);
+    holder.innerHTML = html;
     frag.appendChild(holder.firstChild);
     last = VARIABLE_TOKEN_RE.lastIndex;
     changed = true;
@@ -9192,24 +9564,53 @@ function parseVariableTokensInNode(textNode) {
 }
 
 /**
- * Converts every hand-typed {Name}/{Name:flags} token in a field into a
- * live formula chip - the typing-direction counterpart to
- * formulaChipEditText() (chip -> notation). Run once, right before a
- * field's edit session commits (see wireTextField()'s blur handler) rather
- * than per-keystroke: rewriting the DOM under a still-focused caret is
- * exactly the kind of thing that makes a cursor jump mid-sentence, and this
- * only ever needs to happen once the ta is done typing anyway - the same
- * moment a local chip's own ${Name} already swaps back to its resolved
- * value.
+ * Unpacks every chip in a field into the plain notation text it came from,
+ * run the moment the field enters edit mode. This is what makes a variable
+ * reference behave like the text it looks like: for the whole of an edit
+ * session there is no contenteditable="false" atom anywhere in the field, so
+ * a ta can put the caret in the middle of "{Day1Header}", select half of it,
+ * retype it as "{Day2Header}", paste one somewhere else, or wrap text around
+ * it - all with the browser's ordinary text editing, none of it special-cased.
  *
- * Walks every text node in the field except ones already inside a .fx-chip
- * (its contenteditable="false" label is never a ta's own typing, see
- * buildFormulaChipHtml()) - collected up front via a TreeWalker snapshot so
- * rewriting one node mid-walk can't disturb the walk itself.
+ * The previous design kept chips atomic while editing and only swapped their
+ * LABEL to the notation, which looked identical but wasn't: the only edit
+ * those braces would accept was deleting the whole chip, and notation typed
+ * beside one was the only notation that could ever be read back.
+ * @param field the field about to become contentEditable
+ */
+function chipsToNotation(field) {
+  field.querySelectorAll(".fx-chip").forEach(function (chip) {
+    var text = chipNotation(chip);
+    /* a local chip whose tile carries no variable scope at all (the trailing
+       synthetic locked card) has no token to spell, and "{}" would parse
+       back as nothing - leave that one atomic rather than dissolving it */
+    if (text === "{}") return;
+    chip.parentNode.replaceChild(document.createTextNode(text), chip);
+  });
+  /* a chip sat between two text nodes; with it gone they're one run of text,
+     and a token typed across what used to be that seam has to read as one
+     token rather than as two neighbouring halves the parser can't see */
+  field.normalize();
+}
+
+/**
+ * Converts every {...} token in a field back into a live chip - the exact
+ * inverse of chipsToNotation(). Run once, right before a field's edit
+ * session commits (see wireTextField()'s blur handler) rather than
+ * per-keystroke: rewriting the DOM under a still-focused caret is exactly
+ * the kind of thing that makes a cursor jump mid-sentence, and half-typed
+ * notation shouldn't resolve out from under the ta anyway.
+ *
+ * Walks every text node in the field - collected up front via a TreeWalker
+ * snapshot so rewriting one node mid-walk can't disturb the walk itself, and
+ * normalized first so a token split across adjacent text nodes (which is
+ * what typing into the middle of one leaves behind) is still one token by
+ * the time the regex sees it.
  * @param field the data-edit-id field whose edit session just ended
  * @return true if anything in the field was rewritten
  */
 function parseVariableTokens(field) {
+  field.normalize();
   var texts = [];
   var walker = document.createTreeWalker(field, NodeFilter.SHOW_TEXT, null, false);
   var n;
@@ -9217,7 +9618,7 @@ function parseVariableTokens(field) {
     if (!n.parentElement || !n.parentElement.closest(".fx-chip")) texts.push(n);
   }
   var changed = false;
-  texts.forEach(function (t) { if (parseVariableTokensInNode(t)) changed = true; });
+  texts.forEach(function (t) { if (parseVariableTokensInNode(t, field)) changed = true; });
   return changed;
 }
 
@@ -9255,7 +9656,7 @@ function buildExtrasFilenameChipHtml() {
 function repaintExtrasFilenameChips() {
   document.querySelectorAll('.fx-chip[data-fx-local="filename"]').forEach(function (chip) {
     var tile = chip.closest("[data-extras-tile]");
-    chip.textContent = localChipVarToken(chip) || ((tile && tile.dataset.extrasFilename) || "");
+    chip.textContent = (tile && tile.dataset.extrasFilename) || "";
   });
 }
 
@@ -9289,70 +9690,62 @@ var DAYS_CHIP_RESOLVERS = {
 };
 
 /**
- * The `${...}` variable name a local chip stands for, but ONLY while the
- * field it sits in is actually being edited (wireTextField() stamps
- * ".editing" for exactly that window). The rest of the time every chip shows
- * its resolved value, so the editor keeps looking like the real page.
+ * The bare variable token a local chip stands for - what chipNotation()
+ * wraps in braces to unpack the chip back into editable text, and what
+ * localChipHtmlForToken() reads to pack that text back into a chip.
  *
- * That's the spec's "upon editing them, users will just see the variable
- * inline": these names are per-tile and deliberately exist nowhere else -
- * they're not in content.variables, so they never appear in the content
- * manager's variables list, and the only way to change what one RESOLVES to
- * is the content manager's own day panel (see js/ta.js's renderPanels()).
- * (The gallery's two page variables are the one kind a formula can also be
- * built on, through a derived record rather than this ${} name - see
- * galleryVariableFor().)
+ * That round trip is the spec's "upon editing them, users will just see the
+ * variable inline", now literally: these names are per-tile and deliberately
+ * exist nowhere else - they're not in content.variables, so they never
+ * appear in the content manager's variables list, and the only way to change
+ * what one RESOLVES to is the content manager's own day panel (see
+ * js/ta.js's renderPanels()).
  * @param chip a .fx-chip element carrying data-fx-local
- * @return the "${Name}" token, or "" when the chip isn't mid-edit (or its
- *   tile carries no variable scope, eg the trailing synthetic locked card)
+ * @return the token, or "" if its tile carries no variable scope (eg the
+ *   trailing synthetic locked card)
  */
-function localChipVarToken(chip) {
-  if (!chip.closest(".editing")) return "";
+function localChipToken(chip) {
   var local = chip.dataset.fxLocal;
   /* the gallery's two page-level variables name their PANE BINDING, not a
      tile they sit inside - they're placed anywhere on the page (see
      buildGalleryChipHtml()) - so their scope comes off the chip itself */
   if (local === "gallery-current" || local === "gallery-total") {
-    return "${" + galleryVarScope(chip.dataset.fxDir || "") +
-      (local === "gallery-current" ? "Current" : "Total") + "}";
+    return galleryVarScope(chip.dataset.fxDir || "") + (local === "gallery-current" ? "Current" : "Total");
   }
   if (local === "gallery-dir") {
     var gTile = chip.closest("[data-gallery-tile]");
     var gDir = gTile && gTile.dataset.galleryDir;
-    return gDir ? "${" + galleryVarScope(gDir) + "Name}" : "";
+    return gDir ? galleryVarScope(gDir) + "Name" : "";
   }
   if (local === "filename") {
     var xTile = chip.closest("[data-extras-tile]");
     var xBase = xTile && xTile.dataset.extrasVar;
-    return xBase ? "${" + xBase + "Name}" : "";
+    return xBase ? xBase + "Name" : "";
   }
   var suffix = DAYS_CHIP_VAR_SUFFIX[local];
   var dTile = chip.closest("[data-days-tile]");
   var dBase = dTile && dTile.dataset.daysVar;
-  return (suffix && dBase) ? "${" + dBase + suffix + "}" : "";
+  return (suffix && dBase) ? dBase + suffix : "";
 }
 
 /**
- * Repaints every local chip, every FORMULA chip, and every per-tile
+ * Repaints every local chip, every expression chip, and every per-tile
  * attachment icon at once - the whole "this piece of content resolves
- * differently depending on live state, or swaps to its own notation while
- * mid-edit" set. Called whenever a text field enters or leaves edit mode
- * (chips swap between their resolved value and their notation - a local
- * chip's ${Name}, see localChipVarToken(), or a formula chip's {Name:flags},
- * see formulaChipEditText()) and after any render/mirror that could have
- * copied one tile's resolved text onto another's.
+ * differently depending on live state" set. Called whenever a text field
+ * leaves edit mode (its notation text has just been packed back into fresh
+ * chips, see parseVariableTokens()) and after any render/mirror that could
+ * have copied one tile's resolved text onto another's.
  *
  * repaintFormulaChips() belongs here rather than only inside
  * repaintGalleryChips() (which used to be its one and only caller): that
  * function returns early on any page that hasn't loaded js/gallery.js (see
- * its own comment), which used to silently skip formula-chip repainting
- * everywhere except the gallery page. Harmless back when a formula chip's
+ * its own comment), which used to silently skip expression-chip repainting
+ * everywhere except the gallery page. Harmless back when such a chip's
  * displayed text never changed after being placed (baked in once and left
- * alone), but the moment it needed to swap to notation and back (see
- * formulaChipEditText()) that gate meant a chip inserted from the ƒx menu on
- * any OTHER page would edit-blur back to its own leftover "{Name:flags}"
- * text forever instead of its real resolved value. Called unconditionally
- * here instead, same as every other repaint in this function.
+ * alone), but the moment a chip could be rebuilt from notation on blur, that
+ * gate meant one inserted on any OTHER page kept its leftover "{...}" text
+ * forever instead of its real resolved value. Called unconditionally here
+ * instead, same as every other repaint in this function.
  */
 function repaintLocalTileContent() {
   repaintExtrasFilenameChips();
@@ -9429,7 +9822,7 @@ function repaintDaysChips() {
   Object.keys(DAYS_CHIP_RESOLVERS).forEach(function (local) {
     document.querySelectorAll('.fx-chip[data-fx-local="' + local + '"]').forEach(function (chip) {
       var tile = chip.closest("[data-days-tile]");
-      chip.textContent = localChipVarToken(chip) || (tile ? DAYS_CHIP_RESOLVERS[local](tile) : "");
+      chip.textContent = tile ? DAYS_CHIP_RESOLVERS[local](tile) : "";
     });
   });
 }
@@ -9540,7 +9933,7 @@ function dayTileVariableFor(key) {
   /* derived - see variableNotationToken(). .key here is the internal
      TILE_VAR_PREFIX form (unique, disambiguated), but the token a ta
      actually types is the same bare "Day1Header" a local chip already shows
-     while mid-edit, see localChipVarToken() */
+     while mid-edit, see localChipToken() */
   return { key: key, name: scope + suffix, type: "string", value: found ? resolver(found.tile) : "",
     derived: true, token: scope + suffix };
 }
@@ -9714,13 +10107,12 @@ function buildGalleryDirChipHtml() {
 function repaintGalleryChips() {
   document.querySelectorAll('.fx-chip[data-fx-local="gallery-dir"]').forEach(function (chip) {
     var tile = chip.closest("[data-gallery-tile]");
-    chip.textContent = localChipVarToken(chip) || ((tile && tile.dataset.galleryDir) || "");
+    chip.textContent = (tile && tile.dataset.galleryDir) || "";
   });
   if (!window.galleryChipValue) return;
   document.querySelectorAll('.fx-chip[data-fx-local="gallery-current"], ' +
     '.fx-chip[data-fx-local="gallery-total"]').forEach(function (chip) {
-    chip.textContent = localChipVarToken(chip) ||
-      window.galleryChipValue(chip.dataset.fxLocal, chip.dataset.fxDir || "");
+    chip.textContent = window.galleryChipValue(chip.dataset.fxLocal, chip.dataset.fxDir || "");
   });
   /* a formula chip can be built on a pane variable too (see
      galleryVariableFor()), and those read live off the pane, so stepping an
@@ -9802,7 +10194,7 @@ function galleryVariableFor(key) {
        .key itself can't double as the typed {...} identifier (it has colons
        in it, the notation's own flag delimiter), so this is the same bare
        token a gallery local chip already shows while mid-edit, see
-       localChipVarToken() */
+       localChipToken() */
     derived: true,
     token: galleryVarScope(g.dir) + (g.local === "gallery-total" ? "Total" : "Current")
   };
@@ -13419,7 +13811,10 @@ function setProgressVar(id, field, key) {
 function renderCtxMenuProgressVars() {
   var id = CTX_TARGET_ID;
   var d = customElementById(id) || {};
-  var numbers = pickableVariables(d.varCurrent).filter(function (v) { return v.type === "number"; });
+  /* scoped to the bar itself: a bar sitting inside Day 1's tile binds Day 1's
+     own numbers, not every day's, see pickableVariables() */
+  var scopeEl = elByAnyId(id);
+  var numbers = pickableVariables(d.varCurrent, scopeEl).filter(function (v) { return v.type === "number"; });
   CTX_MENU.innerHTML =
     '<div class="ctx-title">Progress bar variables</div>' +
     (numbers.length ?
@@ -13433,8 +13828,8 @@ function renderCtxMenuProgressVars() {
 
   var current = CTX_MENU.querySelector(".ctx-var-current");
   var total = CTX_MENU.querySelector(".ctx-var-total");
-  populateProgressVarSelect(current, d.varCurrent || "");
-  populateProgressVarSelect(total, d.varTotal || "");
+  populateProgressVarSelect(current, d.varCurrent || "", scopeEl);
+  populateProgressVarSelect(total, d.varTotal || "", scopeEl);
   current.addEventListener("change", function () { setProgressVar(id, "varCurrent", current.value); });
   total.addEventListener("change", function () { setProgressVar(id, "varTotal", total.value); });
 }
@@ -14810,7 +15205,7 @@ function buildTextToolbar() {
 
   TEXT_TOOLBAR.querySelector(".tt-fx").addEventListener("click", function () {
     if (!TEXT_TOOLBAR_EL || this.disabled) return;
-    openFormulaMenu(TEXT_TOOLBAR_EL, null);
+    openFormulaMenu(TEXT_TOOLBAR_EL);
   });
 
   /* the padding editor. Its own row, opened and closed by the Pad button the
@@ -15389,19 +15784,24 @@ function hidePadSideHint() {
   if (PAD_HINT) PAD_HINT.classList.remove("show");
 }
 
-/* the text toolbar's "ƒx" button's own popover: picks an operation + one or
-   two variables and inserts/edits a formula chip (see buildFormulaChipHtml())
-   in the field currently being edited. Same lazy-singleton pattern as
-   TEXT_TOOLBAR/STYLE_MENU. */
+/* the text toolbar's "ƒx" button's own popover: builds a {...} reference and
+   writes it, as ORDINARY TEXT, into the field currently being edited (see
+   writeFormulaMenuToken()). It doesn't produce chips: a field mid-edit holds
+   no chips at all, only notation (see chipsToNotation()), and the notation
+   this writes is exactly what a ta could have typed by hand. Same lazy-
+   singleton pattern as TEXT_TOOLBAR/STYLE_MENU. */
 var FX_MENU = null;
 /* the data-edit-id field the menu is currently acting on */
 var FX_MENU_FIELD = null;
-/* the chip <span> being edited, or null when inserting a brand new one */
-var FX_MENU_CHIP = null;
+/* the {...} run of text the menu opened ON - {node, start, end} into one of
+   the field's text nodes - or null when it's inserting a new one. This is
+   what replaces the old "the chip <span> being edited": with references
+   living as text mid-edit, "the one under the caret" is a text range. */
+var FX_MENU_TOKEN = null;
 /* the field's selection at the moment the menu opened (insert case only) -
    picking a variable in the menu's own <select>s moves real browser focus
    (and the selection) away from the field, so the caret position has to be
-   captured up front and restored right before execCommand("insertHTML") */
+   captured up front and restored when the token is written */
 var FX_MENU_RANGE = null;
 
 /** Builds the formula menu once, lazily. */
@@ -15412,6 +15812,7 @@ function buildFormulaMenu() {
     '<label class="fxm-row">Insert<select class="fxm-op"></select></label>' +
     '<label class="fxm-row fxm-a-row">Variable<select class="fxm-a"></select></label>' +
     '<label class="fxm-row fxm-b-row">Of<select class="fxm-b"></select></label>' +
+    '<label class="fxm-row fxm-expr-row">Expression<input type="text" class="fxm-expr" spellcheck="false"></label>' +
     '<label class="fxm-row fxm-dec-row">Decimals<input type="number" class="fxm-decimals" min="0" max="6" value="0"></label>' +
     '<label class="fxm-row fxm-comma-row"><input type="checkbox" class="fxm-comma"> Thousands separator (1,000)</label>' +
     '<div class="fxm-actions">' +
@@ -15433,10 +15834,10 @@ function buildFormulaMenu() {
   /* buttons never need to actually take focus themselves (same reasoning as
      TEXT_TOOLBAR's own buttons, see buildTextToolbar()): swallowing their
      mousedown keeps the field's contentEditable focus (and selection) intact
-     the whole time these are used. The op/variable/decimals controls DO need
-     real focus to open/type, so those only get their mousedown's bubbling
-     stopped, not prevented - same split TEXT_TOOLBAR's font <select> and
-     color <input>s already use. */
+     the whole time these are used. The op/variable/expression/decimals
+     controls DO need real focus to open/type, so those only get their
+     mousedown's bubbling stopped, not prevented - same split TEXT_TOOLBAR's
+     font <select> and color <input>s already use. */
   FX_MENU.querySelectorAll("button").forEach(function (btn) {
     btn.addEventListener("mousedown", function (e) { e.preventDefault(); e.stopPropagation(); });
   });
@@ -15448,77 +15849,169 @@ function buildFormulaMenu() {
   FX_MENU.querySelector(".fxm-a").addEventListener("change", refreshFormulaMenuRows);
   FX_MENU.querySelector(".fxm-cancel").addEventListener("click", closeFormulaMenu);
   FX_MENU.querySelector(".fxm-ok").addEventListener("click", commitFormulaMenu);
-  FX_MENU.querySelector(".fxm-remove").addEventListener("click", removeFormulaMenuChip);
+  FX_MENU.querySelector(".fxm-remove").addEventListener("click", removeFormulaMenuToken);
 }
 
 /**
- * Shows/hides the menu's Of/Decimals rows and refills the Variable/Of
- * selects for whichever operation is now picked - "value" is the only op
- * that accepts a non-number variable and has no second operand, every other
- * op needs two number-typed variables. Also drives the Decimals row's
- * visibility off the currently-picked A variable's type for "value" (a
- * string/boolean/datetime value has no decimal places to speak of), and
- * always hides it for "fraction" (always whole numbers, see
- * formulaChipText()).
+ * Shows/hides the menu's Of/Expression/Decimals rows and refills the
+ * Variable/Of selects for whichever shape is now picked - "value" is the
+ * only one that accepts a non-number variable and has no second operand,
+ * every other one needs two number-typed variables, and "custom" needs
+ * neither because the ta is writing the expression themselves. Also drives
+ * the Decimals row's visibility off the currently-picked A variable's type
+ * for "value" (a string/boolean/datetime value has no decimal places to
+ * speak of), and always hides it for "fraction" (always whole numbers).
+ *
+ * Both selects are SCOPED to the field being edited (see
+ * pickableVariables()): a field inside Day 1's tile offers Day 1's own five
+ * locals and no other day's, and a field inside no tile at all offers none
+ * of them. Offering every day's at once was offering bindings that, on a
+ * template mirrored across every tile, were never the one the ta meant.
  */
 function refreshFormulaMenuRows() {
   var op = FX_MENU.querySelector(".fxm-op").value;
-  var meta = FX_OPS[op];
+  var meta = FX_OPS[op] || FX_OPS.value;
+  var scopeEl = FX_MENU_FIELD;
   var aSelect = FX_MENU.querySelector(".fxm-a");
   var aPredicate = meta.anyType ? function () { return true; } : function (v) { return v.type === "number"; };
   var curA = aSelect.value;
-  /* the content manager's variables plus this page's own - on the gallery
-     that's its panes' numbers too, see pickableVariables() */
-  var poolA = pickableVariables(curA);
+  /* the content manager's variables plus whatever THIS field can see of the
+     page's own - on the gallery that's its panes' numbers too */
+  var poolA = pickableVariables(curA, scopeEl);
   var aStillValid = curA && poolA.some(function (v) { return v.key === curA && aPredicate(v); });
   var firstA = (poolA.filter(aPredicate)[0] || {}).key || "";
-  populateVariableSelect(aSelect, aPredicate, aStillValid ? curA : firstA);
+  populateVariableSelect(aSelect, aPredicate, aStillValid ? curA : firstA, scopeEl);
 
-  FX_MENU.querySelector(".fxm-b-row").style.display = meta.needsB ? "" : "none";
+  FX_MENU.querySelector(".fxm-a-row").style.display = meta.custom ? "none" : "";
+  FX_MENU.querySelector(".fxm-b-row").style.display = (meta.needsB && !meta.custom) ? "" : "none";
+  FX_MENU.querySelector(".fxm-expr-row").style.display = meta.custom ? "" : "none";
   if (meta.needsB) {
     var bSelect = FX_MENU.querySelector(".fxm-b");
     var curB = bSelect.value;
     var numberPredicate = function (v) { return v.type === "number"; };
-    var poolB = pickableVariables(curB);
+    var poolB = pickableVariables(curB, scopeEl);
     var bStillValid = curB && poolB.some(function (v) { return v.key === curB && numberPredicate(v); });
     var firstB = (poolB.filter(numberPredicate)[0] || {}).key || "";
-    populateVariableSelect(bSelect, numberPredicate, bStillValid ? curB : firstB);
+    populateVariableSelect(bSelect, numberPredicate, bStillValid ? curB : firstB, scopeEl);
   }
 
   var aVar = variableByKey(aSelect.value);
-  var showDecimals = op !== "fraction" && (meta.needsB || (aVar && aVar.type === "number"));
+  var showDecimals = meta.custom || (op !== "fraction" && (meta.needsB || (aVar && aVar.type === "number")));
   FX_MENU.querySelector(".fxm-dec-row").style.display = showDecimals ? "" : "none";
   FX_MENU.querySelector(".fxm-comma-row").style.display = showDecimals ? "" : "none";
 }
 
 /**
- * Opens the formula menu, either to insert a brand new chip at the field's
- * current selection (chip === null) or to reconfigure/remove one already
- * placed (chip is that <span class="fx-chip">, prefills every control from
- * its own data-fx-* attributes). Only ever called while fieldEl is already
- * mid-edit (isContentEditable), from the toolbar's ƒx button or a click on
- * an existing chip, see wireTextField().
- * @param fieldEl the data-edit-id field being edited
- * @param chip the fx-chip <span> to edit, or null to insert a new one
+ * The {...} run of text the caret is currently sitting in, if any - what the
+ * menu opens ON rather than beside. Replaces the old "did the ta click an
+ * fx-chip" test: mid-edit a reference is text, so the equivalent question is
+ * whether the caret is inside one of this text node's tokens.
+ * @param field the field being edited
+ * @return {node, start, end, body}, or null
  */
-function openFormulaMenu(fieldEl, chip) {
+function tokenAtSelection(field) {
+  var sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return null;
+  var r = sel.getRangeAt(0);
+  var node = r.startContainer;
+  if (!node || node.nodeType !== 3 || !field.contains(node)) return null;
+  var text = node.nodeValue;
+  var off = r.startOffset;
+  var m;
+  VARIABLE_TOKEN_RE.lastIndex = 0;
+  while ((m = VARIABLE_TOKEN_RE.exec(text))) {
+    if (m[1]) continue; /* an escaped brace isn't a reference */
+    if (off >= m.index && off <= m.index + m[0].length) {
+      return { node: node, start: m.index, end: m.index + m[0].length, body: m[2] };
+    }
+  }
+  return null;
+}
+
+/**
+ * Reads one expression back into the menu's own controls, so a reference
+ * built here (or typed by hand in the same shape) can be reopened and
+ * adjusted with the pickers rather than only as raw text. Anything the
+ * ready-made shapes can't describe falls through to null, which is what puts
+ * the menu into its "custom" mode with the expression itself in the box.
+ * @param expr the expression source
+ * @return {op, a, b} with a/b as variable tokens, or null
+ */
+function decomposeExpression(expr) {
+  var ast = fxParse(expr);
+  if (!ast) return null;
+  if (ast.t === "var") return { op: "value", a: ast.v, b: "" };
+  var pair = { "+": "sum", "-": "difference", "*": "product", "/": "quotient" };
+  if (ast.t === "bin" && pair[ast.op] && ast.a.t === "var" && ast.b.t === "var") {
+    return { op: pair[ast.op], a: ast.a.v, b: ast.b.v };
+  }
+  /* percent: A / B * 100 + "%" */
+  if (ast.t === "bin" && ast.op === "+" && ast.b.t === "str" && ast.b.v === "%" &&
+      ast.a.t === "bin" && ast.a.op === "*" && ast.a.b.t === "num" && ast.a.b.v === 100 &&
+      ast.a.a.t === "bin" && ast.a.a.op === "/" && ast.a.a.a.t === "var" && ast.a.a.b.t === "var") {
+    return { op: "percent", a: ast.a.a.a.v, b: ast.a.a.b.v };
+  }
+  /* fraction: A + " of " + B */
+  if (ast.t === "bin" && ast.op === "+" && ast.b.t === "var" &&
+      ast.a.t === "bin" && ast.a.op === "+" && ast.a.a.t === "var" &&
+      ast.a.b.t === "str" && ast.a.b.v === " of ") {
+    return { op: "fraction", a: ast.a.a.v, b: ast.b.v };
+  }
+  return null;
+}
+
+/** The <select> value (a variable key) that stands for one typed token. */
+function selectKeyForToken(token) {
+  var v = variableByToken(token);
+  return v ? v.key : "";
+}
+
+/**
+ * Opens the formula menu on the field being edited. If the caret is sitting
+ * inside a {...} reference, the menu prefills from it and replaces it on OK;
+ * otherwise it inserts a new one at the caret. Only ever called while
+ * fieldEl is already mid-edit (isContentEditable), from the toolbar's fx
+ * button - there are no chips left to click mid-edit, see chipsToNotation().
+ * @param fieldEl the data-edit-id field being edited
+ */
+function openFormulaMenu(fieldEl) {
   if (!FX_MENU) buildFormulaMenu();
   FX_MENU_FIELD = fieldEl;
-  FX_MENU_CHIP = chip;
+  var token = tokenAtSelection(fieldEl);
+  FX_MENU_TOKEN = token;
   var sel = window.getSelection();
-  FX_MENU_RANGE = (!chip && sel && sel.rangeCount) ? sel.getRangeAt(0).cloneRange() : null;
+  FX_MENU_RANGE = (!token && sel && sel.rangeCount) ? sel.getRangeAt(0).cloneRange() : null;
 
-  FX_MENU.querySelector(".fxm-op").value = chip ? (chip.dataset.fxOp || "value") : "value";
+  var split = token ? splitTokenBody(token.body) : null;
+  var shape = split ? decomposeExpression(split.expr.trim()) : null;
+  var opSelect = FX_MENU.querySelector(".fxm-op");
+  var exprInput = FX_MENU.querySelector(".fxm-expr");
+  opSelect.value = token ? (shape ? shape.op : "custom") : "value";
+  exprInput.value = (split && !shape) ? split.expr.trim() : "";
   refreshFormulaMenuRows();
-  if (chip && chip.dataset.fxA) FX_MENU.querySelector(".fxm-a").value = chip.dataset.fxA;
-  if (chip && chip.dataset.fxB) FX_MENU.querySelector(".fxm-b").value = chip.dataset.fxB;
-  FX_MENU.querySelector(".fxm-decimals").value = chip ? (chip.dataset.fxDecimals || "0") : "0";
-  FX_MENU.querySelector(".fxm-comma").checked = !!(chip && chip.dataset.fxComma === "1");
-  FX_MENU.querySelector(".fxm-ok").textContent = chip ? "Update" : "Insert";
-  FX_MENU.querySelector(".fxm-remove").style.display = chip ? "" : "none";
+  if (shape) {
+    var aKey = selectKeyForToken(shape.a);
+    var bKey = selectKeyForToken(shape.b);
+    if (aKey) FX_MENU.querySelector(".fxm-a").value = aKey;
+    if (bKey) FX_MENU.querySelector(".fxm-b").value = bKey;
+    /* a reference this field's own picker doesn't offer (Day 2's header,
+       typed by hand inside Day 1's tile) has no option to select - fall back
+       to showing the expression itself rather than silently rebinding it to
+       whatever the select happens to be sitting on */
+    if ((aKey && FX_MENU.querySelector(".fxm-a").value !== aKey) ||
+        (bKey && FX_OPS[shape.op].needsB && FX_MENU.querySelector(".fxm-b").value !== bKey)) {
+      opSelect.value = "custom";
+      exprInput.value = split.expr.trim();
+      refreshFormulaMenuRows();
+    }
+  }
+  FX_MENU.querySelector(".fxm-decimals").value = split ? String(split.flags.decimals) : "0";
+  FX_MENU.querySelector(".fxm-comma").checked = !!(split && split.flags.comma);
+  FX_MENU.querySelector(".fxm-ok").textContent = token ? "Update" : "Insert";
+  FX_MENU.querySelector(".fxm-remove").style.display = token ? "" : "none";
 
   FX_MENU.classList.add("show");
-  var anchor = chip || TEXT_TOOLBAR_EL || fieldEl;
+  var anchor = TEXT_TOOLBAR_EL || fieldEl;
   var r = anchor.getBoundingClientRect();
   var top = r.bottom + window.scrollY + 6;
   var left = r.left + window.scrollX;
@@ -15531,108 +16024,80 @@ function openFormulaMenu(fieldEl, chip) {
 /** Hides the formula menu without changing anything. */
 function closeFormulaMenu() {
   FX_MENU_FIELD = null;
-  FX_MENU_CHIP = null;
+  FX_MENU_TOKEN = null;
   FX_MENU_RANGE = null;
   if (FX_MENU) FX_MENU.classList.remove("show");
 }
 
 /**
- * Applies the menu's current picks: updates FX_MENU_CHIP in place if editing
- * one, otherwise inserts a brand new chip at the caret position captured
- * when the menu opened (FX_MENU_RANGE). Either way ends by diffing the
- * field's whole innerHTML through commitTextFieldChange() - same undo/save/
- * mirror path a normal typed edit commits through on blur, since a chip is
- * just more of the field's own innerHTML.
+ * Writes the menu's result into the field as plain text - replacing the
+ * token it opened on, or inserting at the caret position captured when it
+ * opened (FX_MENU_RANGE).
+ *
+ * Deliberately does NOT call commitTextFieldChange(): the field is still
+ * mid-edit and what's just been written is notation, not a chip. Its blur
+ * handler parses the whole field and commits once, so using the menu is one
+ * undo step alongside everything else typed in the same session rather than
+ * a separate one - and no half-edited notation is ever mirrored onto the
+ * other tiles sharing this template.
+ * @param text the "{...}" notation, or "" to delete the token
+ */
+function writeFormulaMenuToken(text) {
+  var field = FX_MENU_FIELD;
+  var token = FX_MENU_TOKEN;
+  var range = document.createRange();
+  if (token && token.node.parentNode) {
+    range.setStart(token.node, Math.min(token.start, token.node.nodeValue.length));
+    range.setEnd(token.node, Math.min(token.end, token.node.nodeValue.length));
+  } else if (FX_MENU_RANGE) {
+    range = FX_MENU_RANGE;
+  } else {
+    range.selectNodeContents(field);
+    range.collapse(false);
+  }
+  range.deleteContents();
+  var node = document.createTextNode(text);
+  range.insertNode(node);
+  closeFormulaMenu();
+  field.focus();
+  var after = document.createRange();
+  after.setStartAfter(node);
+  after.collapse(true);
+  var sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(after);
+}
+
+/**
+ * Applies the menu's current picks, as the notation they stand for. A
+ * ready-made shape spells itself out through its own FX_OPS .build (so
+ * "Percent" writes {A / B * 100 + "%"}, which the ta can then go on to edit
+ * by hand like anything else); "custom" takes the expression verbatim.
  */
 function commitFormulaMenu() {
   if (!FX_MENU_FIELD) return;
   var op = FX_MENU.querySelector(".fxm-op").value;
-  var meta = FX_OPS[op];
-  var aKey = FX_MENU.querySelector(".fxm-a").value;
-  var bKey = meta.needsB ? FX_MENU.querySelector(".fxm-b").value : "";
+  var meta = FX_OPS[op] || FX_OPS.value;
   var decimals = parseInt(FX_MENU.querySelector(".fxm-decimals").value, 10);
   if (isNaN(decimals) || decimals < 0) decimals = 0;
   var comma = FX_MENU.querySelector(".fxm-comma").checked;
-  var field = FX_MENU_FIELD;
-  var before = field.innerHTML;
-
-  if (FX_MENU_CHIP) {
-    var chip = FX_MENU_CHIP;
-    chip.dataset.fxOp = op;
-    chip.dataset.fxA = aKey;
-    if (bKey) chip.dataset.fxB = bKey; else delete chip.dataset.fxB;
-    chip.dataset.fxDecimals = String(decimals);
-    if (comma) chip.dataset.fxComma = "1"; else delete chip.dataset.fxComma;
-    /* still mid-edit (the menu only ever opens on a chip already inside a
-       field that's .editing), so this shows the chip's own {Name:flags}
-       notation, same as every other chip in the field right now - not the
-       resolved value repaintFormulaChips() will swap it back to on blur */
-    chip.textContent = formulaChipEditText(chip);
+  var expr;
+  if (meta.custom) {
+    expr = FX_MENU.querySelector(".fxm-expr").value.trim();
   } else {
-    field.focus();
-    var sel = window.getSelection();
-    sel.removeAllRanges();
-    if (FX_MENU_RANGE) {
-      sel.addRange(FX_MENU_RANGE);
-    } else {
-      var r = document.createRange();
-      r.selectNodeContents(field);
-      r.collapse(false);
-      sel.addRange(r);
-    }
-    document.execCommand("insertHTML", false, buildFormulaChipHtml(op, aKey, bKey, decimals, comma));
-    /* buildFormulaChipHtml() baked in the RESOLVED text (its default, for
-       every other caller, eg a freshly loaded page); flip it back to its
-       edit-mode notation immediately since the field is still mid-edit
-       right now, same repaint every other chip in an editing field gets */
-    repaintFormulaChips();
+    var aTok = variableNotationToken(variableByKey(FX_MENU.querySelector(".fxm-a").value));
+    var bTok = meta.needsB ? variableNotationToken(variableByKey(FX_MENU.querySelector(".fxm-b").value)) : "";
+    if (!aTok || (meta.needsB && !bTok)) return; /* nothing pickable on this page yet */
+    expr = meta.build(aTok, bTok);
   }
-
-  var after = field.innerHTML;
-  closeFormulaMenu();
-  commitTextFieldChange(field, before, after);
-  field.focus();
+  if (!expr) return;
+  writeFormulaMenuToken("{" + expr + formulaFlagString(decimals, comma) + "}");
 }
 
-/** Deletes the chip being edited and commits the change. */
-function removeFormulaMenuChip() {
-  if (!FX_MENU_FIELD || !FX_MENU_CHIP) return;
-  var field = FX_MENU_FIELD;
-  var before = field.innerHTML;
-  FX_MENU_CHIP.remove();
-  var after = field.innerHTML;
-  closeFormulaMenu();
-  commitTextFieldChange(field, before, after);
-  field.focus();
-}
-
-/**
- * Makes sure every .fx-chip in a field about to become editable has a real
- * text node on both sides of it, inserting an invisible one where one's
- * missing. Without this, a field whose entire content is a single chip (the
- * common case for a day tile's title before a ta has typed anything around
- * it, see buildDaysChipHtml()) gives the browser nowhere to put the caret at
- * all: EVERY click lands on the chip itself (contenteditable="false"), and
- * the only available action becomes reconfiguring/deleting it wholesale -
- * there's no way to click beside it and add surrounding text. A chip that
- * already has real text next to it is left untouched.
- *
- * Uses a zero-width space ("​") rather than a genuinely empty text
- * node: an empty text node is exactly the kind of thing a browser is free
- * to normalize/collapse back out before a click ever reaches it, which
- * would silently undo this. Being zero-width, it never changes what the
- * field visibly shows, and (being real, non-empty text) never gets
- * normalized away itself.
- * @param field the field about to become contentEditable
- */
-function ensureChipCaretSentinels(field) {
-  var ZWSP = "​";
-  field.querySelectorAll(".fx-chip").forEach(function (chip) {
-    var prev = chip.previousSibling;
-    if (!prev || prev.nodeType !== 3 || !prev.nodeValue) chip.parentNode.insertBefore(document.createTextNode(ZWSP), chip);
-    var next = chip.nextSibling;
-    if (!next || next.nodeType !== 3 || !next.nodeValue) chip.parentNode.insertBefore(document.createTextNode(ZWSP), chip.nextSibling);
-  });
+/** Deletes the reference the menu opened on. */
+function removeFormulaMenuToken() {
+  if (!FX_MENU_FIELD || !FX_MENU_TOKEN) return;
+  writeFormulaMenuToken("");
 }
 
 /**
@@ -15655,24 +16120,12 @@ function wireTextField(el) {
 
   var beforeEdit = "";
   el.addEventListener("click", function (e) {
-    if (el.isContentEditable) {
-      /* a click on a FORMULA chip (data-fx-op: op/operand(s) a ta can
-         actually reconfigure) while the field is already mid-edit opens the
-         menu to do that, instead of just placing the caret next to it
-         (contenteditable="false" makes chips atomic for caret navigation,
-         but they still receive normal click events). A LOCAL chip
-         (data-fx-local: a day tile's own ${Day1Header}, a filename, a
-         gallery pane's numbers) has nothing to reconfigure - openFormulaMenu()
-         is built entirely around FX_OPS/data-fx-a and doesn't know what a
-         local chip even is, so routing one there used to open a menu that
-         couldn't represent it and would silently turn it into a broken
-         formula chip on "Update". Falling through here instead lets the
-         click place a caret beside it like any other atomic node - the only
-         way, previously, to add text next to one without deleting it. */
-      var chip = e.target.closest && e.target.closest(".fx-chip");
-      if (chip && chip.dataset.fxOp) { e.preventDefault(); e.stopPropagation(); openFormulaMenu(el, chip); }
-      return; /* already editing, let the caret land normally otherwise */
-    }
+    /* nothing to intercept mid-edit any more: the field holds only text (see
+       chipsToNotation()), so every click just places a caret, including
+       inside a {...} reference. Reconfiguring one through the ƒx menu is the
+       toolbar button, which reads whichever reference the caret is in - see
+       tokenAtSelection(). */
+    if (el.isContentEditable) return;
     /* shift-click already toggled group-selection in the mousedown handler
        above (wireResizable(), which runs for every tracked element,
        text fields included, and fires before this click event does); this
@@ -15681,20 +16134,18 @@ function wireTextField(el) {
     if (e.shiftKey) { e.preventDefault(); e.stopPropagation(); return; }
     e.preventDefault();
     e.stopPropagation();
-    /* guarantees a real caret position on both sides of every chip, even
-       when a chip is the field's ENTIRE content (no other text to click
-       into at all) - see ensureChipCaretSentinels(). Runs before beforeEdit
-       is captured so a click-in/click-out with no actual typing still
-       diffs as no change - the sentinels themselves are never "the edit". */
-    ensureChipCaretSentinels(el);
+    /* captured BEFORE the chips are unpacked, so "before" is the field's
+       real committed markup: blur packs the notation straight back into
+       chips, and a click-in/click-out with no typing therefore diffs as no
+       change at all */
     beforeEdit = el.innerHTML;
     el.contentEditable = "true";
     el.classList.add("editing");
-    /* a local chip shows its ${variable} name for as long as the field is
-       being edited, its resolved value the rest of the time - see
-       localChipVarToken(). Runs after ".editing" lands, and its mirror image
-       runs on blur below, once the class is off again. */
-    repaintLocalTileContent();
+    /* every chip becomes the plain {variable} text it came from for as long
+       as the field is being edited - ordinary, selectable, retypable text
+       with no atomic nodes in the way - and blur turns it all back into
+       resolved chips, see chipsToNotation()/parseVariableTokens() */
+    chipsToNotation(el);
     showTextToolbar(el);
     el.focus();
     var range = document.createRange();
@@ -15726,12 +16177,12 @@ function wireTextField(el) {
     el.contentEditable = "false";
     el.classList.remove("editing");
     hideTextToolbar();
-    /* converts any {Name}/{Name:flags} the ta typed by hand into a real
-       chip - after ".editing" comes off, so a freshly-made chip bakes in
-       its resolved value (buildFormulaChipHtml()'s default) rather than
-       edit-mode notation it would otherwise immediately have to un-repaint,
-       see parseVariableTokens() */
+    /* packs every {...} the field now holds - the ones chipsToNotation()
+       unpacked on the way in, plus anything the ta typed or pasted - back
+       into live chips, see parseVariableTokens(). Notation that names
+       nothing simply stays the text it is. */
     parseVariableTokens(el);
+    repaintLocalTileContent();
     /* the edit may have changed el's own rendered size (more/less text),
        so the ring needs to catch up if it's sitting on this field */
     positionRing();
@@ -15745,11 +16196,14 @@ function wireTextField(el) {
 /**
  * Commits a text field's edit session: pushes an undo step (if anything
  * actually changed), persists, and syncs any duplicate elements sharing the
- * same data-edit-id. Shared by wireTextField()'s blur handler (a normal
- * typed edit) and the formula menu's insert/update/remove (see
- * commitFormulaMenu(), removeFormulaMenuChip()) - a formula chip is just
- * more of the field's own innerHTML, so both paths commit identically and
- * get full undo/redo for free, no separate action type needed.
+ * same data-edit-id. Called from wireTextField()'s blur handler for a normal
+ * typed edit, and from the right-click menu's own chip-restoring actions
+ * (insertDaysChip() and friends, which run on a field that ISN'T being
+ * edited) - a chip is just more of the field's own innerHTML, so both paths
+ * commit identically and get full undo/redo for free, no separate action
+ * type needed. The ƒx menu deliberately doesn't come through here: it writes
+ * notation into a field already mid-edit, and that field's own blur commits
+ * the lot as one step, see writeFormulaMenuToken().
  * @param el the data-edit-id field
  * @param before its innerHTML at the start of the edit session
  * @param after its innerHTML now

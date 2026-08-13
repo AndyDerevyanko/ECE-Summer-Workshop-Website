@@ -522,7 +522,7 @@ window.renderDays = renderDays;
  *   "Open"/"Download" label live students already see today)
  * @param varBase this tile's own variable-name scope, eg "Attachment1" or
  *   "Day3Attachment2" - the filename chip renders as ${varBase + "Name"}
- *   while a ta is editing the field (see js/main.js's localChipVarToken()).
+ *   while a ta is editing the field (see js/main.js's localChipToken()).
  *   These names are deliberately per-tile and never enter content.variables.
  * @param tileId the shared data-resize-id for the tile BOX itself, which is
  *   what a ta resizes to re-tile the container around it (see isTileBoxEl()/

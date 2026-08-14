@@ -141,6 +141,12 @@
           </button>
 
           <h2 id="dayPanels" style="font-size:1.4rem;margin-bottom:6px">Day panels</h2>
+          <p class="muted" style="margin-top:0;margin-bottom:14px">
+            How much of the workshop students see at once. Cards past the days you've opened are
+            shown locked; "Total days" above is the ceiling on both numbers.
+          </p>
+          <!-- filled in by ta.js's renderDaysDisplay() -->
+          <div class="ta-card ta-card-hl" id="daysDisplay" style="margin-bottom:18px"></div>
           <div id="panelList">
             <!-- filled in by ta.js -->
           </div>
@@ -351,6 +357,6 @@
 
   <script src="js/theme.js?v=4"></script>
   <script src="js/idle.js?v=3"></script>
-  <script src="js/ta.js?v=16"></script>
+  <script src="js/ta.js?v=18"></script>
 </body>
 </html>

@@ -182,6 +182,12 @@ DEFAULT_CONTENT = {
         {"day": 2, "date": "", "opens_at": "", "unlocked": False, "title": "", "blurb": "", "files": []},
     ],
     "extras": [],
+    # how many day tiles the student dashboard's grid draws at once: a floor on
+    # the total ("min_tiles") and a count of locked teasers on top of whatever
+    # is currently open ("extra_locked"), both capped by the "total_days"
+    # variable below. See DAYS_DISPLAY_DEFAULTS in js/dashboard.js for the full
+    # rule and the Day panels section in js/ta.js for the ta-facing controls.
+    "days_display": {"min_tiles": 0, "extra_locked": 1},
     # named, typed values a ta can bind editor elements to (right now just a
     # progress bar's Current/Total selects, on its right-click menu - see
     # renderCtxMenuProgressVars() in js/main.js) and reference from formula
@@ -2003,6 +2009,7 @@ def get_content():
         data.setdefault(key, value)
     _backfill_extras_ids(data)
     _backfill_days_ids(data)
+    _backfill_days_display(data)
     _backfill_gallery_video(data)
     _sanitize_variable_names(data)
     _refresh_computed_variables(data)
@@ -2037,6 +2044,29 @@ def _backfill_gallery_video(data):
     # existing clip and be wrong the moment anything is added.
     if not isinstance(gallery.get("video_opts"), dict):
         gallery["video_opts"] = {}
+
+
+def _backfill_days_display(data):
+    """fills in the day grid's tile-count settings for a blob saved before they
+    existed, or one where a hand-edit left a field missing or nonsensical. The
+    top-level setdefault() loop in get_content() can't be relied on for the
+    individual fields - a blob that already HAS a "days_display" key skips the
+    whole default - so each is defaulted on its own, same reasoning and shape
+    as _backfill_gallery_video() below. A saved 0 is a real answer ("no floor" /
+    "no teasers") and survives; anything negative or non-numeric doesn't.
+    @param data the content dict being read (mutated in place)
+    """
+    conf = data.get("days_display")
+    if not isinstance(conf, dict):
+        conf = {}
+    out = {}
+    for key, fallback in DEFAULT_CONTENT["days_display"].items():
+        try:
+            value = int(conf.get(key))
+        except (TypeError, ValueError):
+            value = fallback
+        out[key] = max(0, value)
+    data["days_display"] = out
 
 
 def _backfill_extras_ids(data):
@@ -2076,6 +2106,10 @@ def save_content(data):
     # browser last fetched, only self-correcting on the next GET.
     _sanitize_variable_names(data)
     _refresh_computed_variables(data)
+    # same on the way in as on the way out: a ta's browser is the only thing
+    # that writes these two counts, so a stale tab or an imported profile is
+    # exactly the case that would otherwise persist a negative/absent one
+    _backfill_days_display(data)
     conn = get_db()
     conn.execute(
         "UPDATE content SET data = ? WHERE id = 1", (json.dumps(data),)

@@ -9,6 +9,64 @@
    fallback if that's missing. */
 var TOTAL_DAYS = 10;
 
+/* how many day tiles the grid draws at once, on top of the days that are
+   actually open - the "don't show students an empty page on day one, and
+   don't show them all ten cards on day two either" control. Set site-wide in
+   the content manager's Day panels section (STATE.days_display, see
+   renderDaysDisplay() in js/ta.js) and read here on every render.
+
+   min_tiles is a floor on the total number of tiles ("always look like a
+   five-day workshop"); extra_locked is a count of teasers on top of whatever
+   is open right now ("always one card ahead"). Whichever of the two asks for
+   more wins - they're two ways to ask for the same thing, not two things that
+   add up - and TOTAL_DAYS caps both, since a workshop can't show more days
+   than it runs for.
+
+   Any tile past the open ones is drawn with the locked template whether or
+   not a real content.days[] entry exists behind it: a locked card shows a day
+   number and "available soon" and nothing else, so a still-locked panel and a
+   day that hasn't been written yet are the same card to a student. That's
+   also why capping is allowed to leave an authored-but-locked panel
+   unrendered - there is nothing in it to lose.
+
+   The defaults keep the one trailing "next day" card the grid has always
+   shown once every panel is open. What they change is that a still-locked
+   panel now renders only while there's budget for it, where before every one
+   of them always did. */
+var DAYS_DISPLAY_DEFAULTS = { min_tiles: 0, extra_locked: 1 };
+
+/**
+ * Coerces one of the two days_display numbers out of saved content.
+ * A missing key (an old blob, a hand-edited profile) falls back; a saved 0 is
+ * a real answer ("no floor" / "no teasers") and is kept.
+ * @param value whatever content.days_display held
+ * @param fallback the DAYS_DISPLAY_DEFAULTS entry for it
+ * @return a whole count >= 0
+ */
+function daysDisplayNum(value, fallback) {
+  var n = Math.floor(+value);
+  if (!isFinite(n) || n < 0) return fallback;
+  return n;
+}
+
+/**
+ * How many day tiles the grid shows in total right now.
+ * @param unlockedCount how many day panels are open
+ * @return the tile count, open ones included
+ */
+function visibleDayTileCount(unlockedCount) {
+  var conf = (DAYS_CONTENT && DAYS_CONTENT.days_display) || {};
+  var want = Math.max(
+    daysDisplayNum(conf.min_tiles, DAYS_DISPLAY_DEFAULTS.min_tiles),
+    unlockedCount + daysDisplayNum(conf.extra_locked, DAYS_DISPLAY_DEFAULTS.extra_locked)
+  );
+  if (TOTAL_DAYS > 0) want = Math.min(want, TOTAL_DAYS);
+  /* an open day is real content a student is already meant to have, so it
+     outranks both the cap and the settings: a workshop whose "Total days" was
+     typed too low still shows every day it has actually opened */
+  return Math.max(want, unlockedCount);
+}
+
 /* filled in by loadContent() before renderDays()/renderExtras() run */
 var DAYS = [];
 var EXTRAS = [];
@@ -256,8 +314,9 @@ var DEFAULT_DAYS_ATTACH_EMPTY_HTML = "<strong>No attachments yet.</strong>";
 
 /**
  * Builds one LOCKED day tile's markup: a shared template rendered once per
- * still-locked day (plus, per allOpen below, one trailing synthetic "next
- * day" instance with no backing content.days[] entry) - same "one style
+ * still-locked day the grid has room for, and once per padding card past
+ * those (a "next day" instance with no backing content.days[] entry at all -
+ * see planDayTiles()) - same "one style
  * edit applies to every instance" shared-template idea as
  * buildExtrasTileHtml(), using its own independent set of ids
  * ("days.locked.*") so restyling a locked tile never touches an open one
@@ -275,9 +334,12 @@ var DEFAULT_DAYS_ATTACH_EMPTY_HTML = "<strong>No attachments yet.</strong>";
  * @param blurbHtml content.text["days.locked.blurb"], or undefined for the
  *   shared default (see DEFAULT_DAYS_LOCKED_BLURB_HTML)
  * @param badgeHtml content.text["days.locked.badge"], or undefined for "Locked"
+ * @param slot which content.days[] entry this tile was rendered from, or -1
+ *   for a padding card standing for no entry at all (see stampFlowSlots() in
+ *   js/main.js, which reorder drags read this back out of)
  * @return an HTML string for one locked tile
  */
-function buildDayLockedTileHtml(dayId, dayNum, style, titleHtml, blurbHtml, badgeHtml) {
+function buildDayLockedTileHtml(dayId, dayNum, style, titleHtml, blurbHtml, badgeHtml, slot) {
   var rectStyle = "";
   if (style.rectColor || style.rectDarkColor) {
     rectStyle += "background-color:" + resolveThemedColor(style.rectColor, style.rectDarkColor) + ";";
@@ -288,6 +350,7 @@ function buildDayLockedTileHtml(dayId, dayNum, style, titleHtml, blurbHtml, badg
     '<div class="day-card soon" data-days-tile="1" data-resize-id="days.tile"' +
       ' data-days-id="' + escapeHtml(dayId) +
       '" data-days-locked="1" data-days-number="' + dayNum +
+      '" data-flow-slot="' + slot +
       '" data-days-var="Day' + dayNum + '">' +
       '<div class="day-tile-rect" data-resize-id="days.locked.rect" data-days-role="locked.rect" aria-hidden="true"' +
         (rectStyle ? ' style="' + rectStyle + '"' : "") + '></div>' +
@@ -337,9 +400,11 @@ function buildDayLockedTileHtml(dayId, dayNum, style, titleHtml, blurbHtml, badg
  * @param text the content.text map (read for every "days.open.*" id plus the
  *   shared "extras.tile.*" ones the attachment tiles below need)
  * @param extrasStyle see extrasTileStyleFrom() - shared with renderExtras()
+ * @param slot which content.days[] entry this tile was rendered from (see
+ *   buildDayLockedTileHtml()'s own @param)
  * @return an HTML string for one open tile
  */
-function buildDayOpenTileHtml(day, style, text, extrasStyle) {
+function buildDayOpenTileHtml(day, style, text, extrasStyle, slot) {
   var daytagHtml = text["days.open.daytag"];
   var badgeHtml = text["days.open.badge"];
   var titleHtml = text["days.open.title"];
@@ -357,6 +422,7 @@ function buildDayOpenTileHtml(day, style, text, extrasStyle) {
     '<div class="day-card" data-days-tile="1" data-resize-id="days.tile"' +
       ' data-days-id="' + escapeHtml(day.id || "") +
       '" data-days-locked="0" data-days-number="' + day.day +
+      '" data-flow-slot="' + slot +
       '" data-days-var="' + escapeHtml(varBase) +
       '" data-days-title="' + escapeHtml(day.title || "") +
       '" data-days-blurb="' + escapeHtml(day.blurb || "") +
@@ -405,11 +471,51 @@ function buildDayOpenTileHtml(day, style, text, extrasStyle) {
 }
 
 /**
- * Renders "The days" tile grid's live area: every day as either its locked
- * or open tile (see buildDayLockedTileHtml()/buildDayOpenTileHtml()), plus
- * one trailing locked card for the next day once everything so far is open
- * - same behavior as before this was a live editor area, just built through
- * the two shared templates now. Rebuilds the whole area's innerHTML from
+ * Decides which day tiles the grid should draw right now, in order.
+ *
+ * Every open day is always drawn, where it sits in content.days[]. The tiles
+ * left over (visibleDayTileCount() minus those) are locked ones, and they're
+ * filled from the still-locked panels first, in array order, before any
+ * padding card - a panel a ta has actually written is a better thing to put
+ * in a locked slot than a number with nothing behind it, even though the two
+ * render identically today.
+ *
+ * Padding cards number on from the highest day number in content.days[]
+ * rather than from how many entries it has, so a workshop whose panels are
+ * numbered 1, 2, 5 pads with 6 rather than with a second 5 - and a locked
+ * panel skipped by the cap doesn't hand its number to a padding card either.
+ * @return {tiles: [{day, num, slot}], unlockedCount} - day is null on a
+ *   padding card, and slot is its content.days[] index (-1 when there's none)
+ */
+function planDayTiles() {
+  var unlockedCount = 0;
+  var highestNum = 0;
+  DAYS.forEach(function (d) {
+    if (d.unlocked) unlockedCount++;
+    if ((+d.day || 0) > highestNum) highestNum = +d.day || 0;
+  });
+
+  var lockedBudget = visibleDayTileCount(unlockedCount) - unlockedCount;
+  var tiles = [];
+  DAYS.forEach(function (day, i) {
+    if (!day.unlocked) {
+      if (lockedBudget <= 0) return;
+      lockedBudget--;
+    }
+    tiles.push({ day: day, num: day.day, slot: i });
+  });
+
+  if (highestNum < DAYS.length) highestNum = DAYS.length;
+  for (var k = 0; k < lockedBudget; k++) {
+    tiles.push({ day: null, num: highestNum + 1 + k, slot: -1 });
+  }
+  return { tiles: tiles, unlockedCount: unlockedCount };
+}
+
+/**
+ * Renders "The days" tile grid's live area: the day tiles planDayTiles()
+ * asked for, each as either its locked or open template (see
+ * buildDayLockedTileHtml()/buildDayOpenTileHtml()). Rebuilds the whole area's innerHTML from
  * DAYS_CONTENT every time it runs, same "no incremental diffing, this
  * section is small" reasoning as renderExtras(). Called via the
  * window.renderDays hook from js/main.js's applySharedEditorOverrides() AND
@@ -434,27 +540,20 @@ function renderDays() {
   var text = data.text || {};
   var extrasStyle = extrasTileStyleFrom(data);
 
+  var plan = planDayTiles();
   var html = "";
-  var unlockedCount = 0;
-  var allOpen = true;
 
-  DAYS.forEach(function (day) {
-    if (!day.unlocked) {
-      allOpen = false;
-      html += buildDayLockedTileHtml(day.id || "", day.day, lockedStyle,
-        text["days.locked.title"], text["days.locked.blurb"], text["days.locked.badge"]);
+  plan.tiles.forEach(function (t) {
+    if (t.day && t.day.unlocked) {
+      html += buildDayOpenTileHtml(t.day, openStyle, text, extrasStyle, t.slot);
       return;
     }
-    unlockedCount++;
-    html += buildDayOpenTileHtml(day, openStyle, text, extrasStyle);
+    /* a padding card has no content.days[] entry, so no id and no bound
+       children of its own - same as the trailing "next day" card this grew
+       out of */
+    html += buildDayLockedTileHtml(t.day ? (t.day.id || "") : "", t.num, lockedStyle,
+      text["days.locked.title"], text["days.locked.blurb"], text["days.locked.badge"], t.slot);
   });
-
-  /* once every panel is open, one locked card trails for the next day - no
-     backing content.days[] entry, so no id/bound children, same as before */
-  if (allOpen && DAYS.length < TOTAL_DAYS) {
-    html += buildDayLockedTileHtml("", DAYS.length + 1, lockedStyle,
-      text["days.locked.title"], text["days.locked.blurb"], text["days.locked.badge"]);
-  }
 
   host.innerHTML = html;
 
@@ -500,7 +599,7 @@ function renderDays() {
   if (daysAnchorEl) daysAnchorEl.style.minHeight = host.offsetHeight + "px";
   if (window.applyElementAnchors) window.applyElementAnchors();
 
-  return unlockedCount;
+  return plan.unlockedCount;
 }
 window.renderDays = renderDays;
 

@@ -1337,9 +1337,11 @@ function flowTilesOf(area) {
  * Position-in-the-array rather than any id, because not every tile has one to
  * offer: a legacy attachment is a bare filename string with no id at all, and
  * the trailing synthetic "next day" card is rendered from no entry whatsoever.
- * Every render walks its array in order and emits one tile per entry (see
- * renderDays()/renderExtras()/renderDirs()), so the nth tile IS the nth entry,
- * which is the one fact that holds for all of them.
+ * renderExtras()/renderDirs() walk their array in order and emit one tile per
+ * entry, so the nth tile IS the nth entry there. The day grid doesn't - it can
+ * cap how many locked days it draws (planDayTiles() in js/dashboard.js) - so
+ * its tiles are stamped as they're built and already carry the right index by
+ * the time this sees them; only tiles with no stamp at all get one here.
  *
  * The stamp is re-written to the new running order the moment a reorder is
  * applied (see reorderFlowContent()), so it always describes where a tile's
@@ -1434,7 +1436,16 @@ function reorderFlowContent(area) {
   var tiles = stampFlowSlots(area);
   var owner = flowOrderOwner(area);
   if (owner) owner.apply(tiles.map(function (t) { return parseInt(t.dataset.flowSlot, 10); }));
-  tiles.forEach(function (t, i) { t.dataset.flowSlot = i; });
+  /* re-stamp each tile with where its entry sits in the array NOW. Not simply
+     its position among the tiles: reorderBySlots() puts every entry that HAD a
+     tile first, in the tiles' own order, and keeps the ones that didn't after
+     them - so it's the nth tile with an entry that is the nth entry. A tile
+     standing for no entry at all (a day-grid padding card, see planDayTiles()
+     in js/dashboard.js) keeps its -1 and is skipped by the count. */
+  var slot = 0;
+  tiles.forEach(function (t) {
+    t.dataset.flowSlot = t.dataset.flowSlot === "-1" ? -1 : slot++;
+  });
 }
 
 /**
@@ -5202,26 +5213,37 @@ function applyBorderOverrides(border, darkBorder) {
 }
 
 /* the width an empty progress bar is previewed at, as a percentage, and the
-   one element (if any) currently showing that preview.
+   two elements (if any) currently entitled to that preview: the selected one
+   and the hovered one.
 
    A bar whose bound variables come to zero paints no fill at all, so its fill
-   colour - very often the exact thing a ta selected it to look at or change -
-   is invisible precisely when they're looking at it. So while it's the
-   selected element in the visual editor, an empty bar is drawn part-filled.
+   colour - very often the exact thing a ta pointed at or selected it to look
+   at or change - is invisible precisely when they're looking at it. So while
+   it's under the pointer or carrying the selection ring in the visual editor,
+   an empty bar is drawn part-filled. Both halves are strictly momentary: the
+   bar is empty again the instant the pointer leaves and the selection moves
+   on, which is what keeps the preview readable as a preview rather than as
+   the bar's real value.
    Editor-only and never persisted, same deal as the style popover's own
    hover preview (see wireProgressFillHoverPreview(), which forces the same
    width so hovering the colour swatch doesn't make the bar jump): the real
    percentage stays on the fill bar's dataset throughout, and the moment the
-   selection moves on the bar is repainted from it. */
+   pointer and the selection are both elsewhere the bar is repainted from it. */
 var PROGRESS_PREVIEW_PCT = 60;
 var PROGRESS_PREVIEW_EL = null;
+var PROGRESS_HOVER_EL = null;
+/* wireProgressBarHoverPreview() is called from wireResizable(), which the
+   object canvas and each editor surface each run once - this keeps a second
+   call from stacking a duplicate pair of document listeners */
+var PROGRESS_HOVER_WIRED = false;
 
 /**
  * The width one progress bar's fill should actually be painted at: its real
- * percentage, or the preview width while it's selected and empty. Everything
- * that writes a fill width goes through this, so a repaint that lands
- * mid-preview - a colour edit, a theme flip, a rebind - can't quietly drop the
- * bar back to an invisible 0%.
+ * percentage, or the preview width while it's empty and either hovered or
+ * selected. Everything that writes a fill width goes through this, so a
+ * repaint that lands mid-preview - a colour edit, a theme flip, a rebind -
+ * can't quietly drop the bar back to an invisible 0%, and equally can't
+ * leave a preview width on a bar that no longer qualifies for one.
  * @param fillEl the bar's inner .progress-el-fill
  * @return the width to paint, as a percentage number
  */
@@ -5229,26 +5251,75 @@ function progressFillWidthFor(fillEl) {
   var pct = +(fillEl.dataset.pct || 0);
   /* only a genuinely empty bar is previewed: the moment its variables read
      anything at all, what a ta is looking at has to be the real figure */
-  if (pct > 0 || !PROGRESS_PREVIEW_EL || !PROGRESS_PREVIEW_EL.contains(fillEl)) return pct;
-  return PROGRESS_PREVIEW_PCT;
+  if (pct > 0) return pct;
+  if ((PROGRESS_PREVIEW_EL && PROGRESS_PREVIEW_EL.contains(fillEl)) ||
+      (PROGRESS_HOVER_EL && PROGRESS_HOVER_EL.contains(fillEl))) return PROGRESS_PREVIEW_PCT;
+  return pct;
+}
+
+/**
+ * Repaints each given progress bar's fill at whatever width it's entitled to
+ * right now - the shared tail of both preview switches below, since every
+ * change of either one has to repaint the bar losing the preview as well as
+ * the bar gaining it.
+ * @param bars an array of progress elements, nulls tolerated
+ */
+function repaintProgressFills(bars) {
+  bars.forEach(function (bar) {
+    var fillEl = bar && bar.querySelector(".progress-el-fill");
+    if (fillEl) fillEl.style.width = progressFillWidthFor(fillEl) + "%";
+  });
 }
 
 /**
  * Moves the empty-bar preview onto whatever the selection ring is on now
- * (nothing, if that isn't a progress element) and repaints the bar losing it
- * and the bar gaining it. Called from positionRing(), so every path that
- * changes the selection - a click, the links view's reveal, the ring's own
- * parent handle, a delete, clicking empty space - keeps this right for free.
+ * (nothing, if that isn't a progress element). Called from positionRing(), so
+ * every path that changes the selection - a click, the links view's reveal,
+ * the ring's own parent handle, a delete, clicking empty space - keeps this
+ * right for free.
  */
 function syncProgressPreview() {
   var el = RING_EL && RING_EL.hasAttribute && RING_EL.hasAttribute("data-progress") ? RING_EL : null;
   if (el === PROGRESS_PREVIEW_EL) return;
   var prev = PROGRESS_PREVIEW_EL;
   PROGRESS_PREVIEW_EL = el;
-  [prev, el].forEach(function (bar) {
-    var fillEl = bar && bar.querySelector(".progress-el-fill");
-    if (fillEl) fillEl.style.width = progressFillWidthFor(fillEl) + "%";
+  repaintProgressFills([prev, el]);
+}
+
+/**
+ * The pointer's half of the same preview: moves it onto the bar under the
+ * cursor, or off everything when there isn't one.
+ * @param el the progress element under the pointer, or null
+ */
+function syncProgressHoverPreview(el) {
+  if (el === PROGRESS_HOVER_EL) return;
+  var prev = PROGRESS_HOVER_EL;
+  PROGRESS_HOVER_EL = el;
+  repaintProgressFills([prev, el]);
+}
+
+/**
+ * Wires the pointer half of the empty-bar preview. Delegated off the document
+ * (one pair of listeners, never per element) so bars that are placed,
+ * duplicated or rebuilt mid-session are covered with no re-wiring - the same
+ * reasoning wireStateColorHover()/wireTooltipHover() give.
+ *
+ * Called from wireResizable(), which is the visual editor's own setup and
+ * nothing else's: on the live site a student's empty bar has to read as
+ * empty, and painting 60% of it in under their cursor would be reporting
+ * progress nobody made.
+ */
+function wireProgressBarHoverPreview() {
+  if (PROGRESS_HOVER_WIRED) return;
+  PROGRESS_HOVER_WIRED = true;
+  document.addEventListener("mouseover", function (e) {
+    var t = e.target;
+    syncProgressHoverPreview(t && t.closest ? t.closest("[data-progress]") : null);
   });
+  /* the pointer leaving the document fires no mouseover at all, so nothing
+     above would ever take the last preview back off (same gap
+     wireTooltipHover() covers this same way) */
+  document.addEventListener("mouseleave", function () { syncProgressHoverPreview(null); });
 }
 
 /**
@@ -15181,6 +15252,11 @@ var JUST_DRAGGED = false;
  */
 function wireResizable() {
   buildRing();
+  /* here rather than at either page-init site: this is the one function
+     every editor surface (each page's preview frame, the object canvas) runs
+     and no live page ever does, which is exactly the preview's audience -
+     see wireProgressBarHoverPreview() */
+  wireProgressBarHoverPreview();
   window.addEventListener("scroll", positionRing, true);
   window.addEventListener("resize", positionRing);
   /* the snap guides are fixed to the viewport but held in document

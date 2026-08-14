@@ -45,6 +45,13 @@ function seed() {
       { day: 2, date: "", opens_at: "", unlocked: false, title: "", blurb: "", files: [] }
     ],
     extras: [],
+    /* how many day tiles the student dashboard's grid shows at once: a floor
+       on the total, and a count of locked teasers on top of whatever is open
+       right now, both capped by the "total_days" variable below. See
+       renderDaysDisplay() further down for the controls, and
+       DAYS_DISPLAY_DEFAULTS in js/dashboard.js for the rule they drive - the
+       defaults here have to match that file's own. */
+    days_display: { min_tiles: 0, extra_locked: 1 },
     /* named, typed values other elements (right now, just the student
        dashboard's progress bar) can bind to, see renderVariables() below
        and app/db.py's DEFAULT_CONTENT["variables"] (same shape). type is
@@ -301,6 +308,19 @@ function normalizeState() {
      than showing an empty one */
   if (!Array.isArray(STATE.days)) STATE.days = seed().days;
   if (!Array.isArray(STATE.extras)) STATE.extras = [];
+  /* both counts defaulted individually rather than as one object: a blob from
+     before either existed has no days_display at all, but one saved by a tab
+     running an older build can have the key with a field missing, and the
+     renderer below reads them straight into number inputs. Mirrors
+     _backfill_days_display() in app/db.py, which does the same on every
+     read/write - this covers the localStorage draft/import path that never
+     goes through the server. */
+  var daysDisplay = (STATE.days_display && typeof STATE.days_display === "object") ?
+    STATE.days_display : {};
+  STATE.days_display = {
+    min_tiles: daysDisplayNum(daysDisplay.min_tiles, seed().days_display.min_tiles),
+    extra_locked: daysDisplayNum(daysDisplay.extra_locked, seed().days_display.extra_locked)
+  };
   if (STATE.join_url === undefined) STATE.join_url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
   /* a blob saved before variables existed gets the full seeded pair; one
      that already has some (even just custom ones a ta added) still needs
@@ -728,6 +748,32 @@ function sanitizeVariableName(name) {
 }
 
 /**
+ * Recalculates every "computed" variable's value in place off the rest of
+ * STATE - the client-side mirror of _refresh_computed_variables() in
+ * app/db.py, deliberately the same one-key if-chain rather than a registry
+ * for the same reason (there is still only days_progressed).
+ *
+ * The server already does this on every load and every save, so the number is
+ * right either side of a round trip. Nothing did it in between, and a ta
+ * spends the whole session in between: opening or closing a day (a panel's
+ * Open/Close button, the Value box on this variable, a deleted panel) changes
+ * what days_progressed is worth right then, while STATE went on carrying
+ * whatever the server last worked out. Everything downstream reads that stale
+ * number - this section's own Value box, and, through writePreviewSnapshot(),
+ * every progress bar bound to it in the Visual editor and on the preview page
+ * (paintProgressElement() in js/main.js) - which is how the dashboard's bar
+ * came to sit part-filled with every day on the page locked.
+ */
+function refreshComputedVariables() {
+  (STATE.variables || []).forEach(function (v) {
+    if (!v.computed) return;
+    if (v.key === "days_progressed") {
+      v.value = (STATE.days || []).filter(function (d) { return d.unlocked; }).length;
+    }
+  });
+}
+
+/**
  * Renders every named variable into #variablesList and wires up its
  * controls - name/description/type/value all write straight back into the
  * matching STATE.variables[i] entry, same "the input already IS the state"
@@ -741,6 +787,10 @@ function sanitizeVariableName(name) {
 function renderVariables() {
   var list = document.getElementById("variablesList");
   if (!list) return;
+  /* so the computed card shows the day count as it stands now, not as it
+     stood when the page last loaded - this render is also what the Value box
+     below re-runs after opening/closing days 1..N in bulk */
+  refreshComputedVariables();
   var html = "";
 
   STATE.variables.forEach(function (v, i) {
@@ -834,6 +884,9 @@ function renderVariables() {
     if (valueInput) {
       valueInput.addEventListener("input", function () {
         v.value = v.type === "number" ? (+this.value || 0) : this.value;
+        /* "Total days" is the ceiling on how many day tiles show at once, so
+           the summary under the Day panels heading answers to this box too */
+        if (v.key === "total_days") updateDaysDisplaySummary();
       });
     }
     var daysProgressedInput = card.querySelector(".v-days-progressed");
@@ -884,8 +937,120 @@ function varFlag(name) {
     'variable &middot; string <code>${' + name + '}</code></span>';
 }
 
+/**
+ * Coerces one of the two days_display counts, so a half-typed or hand-edited
+ * value can never reach the dashboard's arithmetic. Same rule as
+ * daysDisplayNum() in js/dashboard.js and _backfill_days_display() in
+ * app/db.py - duplicated rather than shared because this page loads ta.js and
+ * nothing else (see the script tags in templates/instructor.html).
+ * @param value whatever was typed or saved
+ * @param fallback what to use if it isn't a count at all
+ * @return a whole number >= 0
+ */
+function daysDisplayNum(value, fallback) {
+  var n = Math.floor(+value);
+  if (!isFinite(n) || n < 0) return fallback;
+  return n;
+}
+
+/**
+ * @return the "Total days" variable's value - the ceiling on how many day
+ *   tiles can show at once - or 10 if it's somehow missing, matching the
+ *   TOTAL_DAYS fallback in js/dashboard.js
+ */
+function totalDaysValue() {
+  var v = (STATE.variables || []).filter(function (x) { return x.key === "total_days"; })[0];
+  return daysDisplayNum(v && v.value, 10);
+}
+
+/**
+ * What the student dashboard's day grid is showing as things stand.
+ * Mirrors visibleDayTileCount() in js/dashboard.js - which is the one that
+ * actually decides, this is only what the summary line below reports.
+ * @return {shown, open, locked, total, capped}
+ */
+function daysDisplayCounts() {
+  var conf = STATE.days_display || {};
+  var open = (STATE.days || []).filter(function (d) { return d.unlocked; }).length;
+  var total = totalDaysValue();
+  var want = Math.max(
+    daysDisplayNum(conf.min_tiles, 0),
+    open + daysDisplayNum(conf.extra_locked, 1)
+  );
+  var shown = total > 0 ? Math.min(want, total) : want;
+  shown = Math.max(shown, open);
+  return { shown: shown, open: open, locked: shown - open, total: total, capped: want > shown };
+}
+
+/**
+ * @return the "students see N tiles right now" line under the two controls,
+ *   written out rather than left for a ta to work out from two numbers and a
+ *   day list they'd have to count themselves
+ */
+function daysDisplaySummaryText() {
+  var c = daysDisplayCounts();
+  var out = "Students see " + c.shown + (c.shown === 1 ? " tile" : " tiles") +
+    " right now: " + c.open + " open and " + c.locked + " locked.";
+  if (c.capped) {
+    out += " Capped at the " + c.total + " days this workshop runs for (the “Total days” variable above).";
+  }
+  if (c.open > c.total) {
+    out += " More days are open than “Total days” says the workshop has - an open day is never hidden, " +
+      "so every one of them still shows.";
+  }
+  return out;
+}
+
+/** Re-writes the summary line in place, without rebuilding the two inputs. */
+function updateDaysDisplaySummary() {
+  var el = document.querySelector("#daysDisplay .dd-summary");
+  if (el) el.textContent = daysDisplaySummaryText();
+}
+
+/**
+ * Renders the two "how many day cards do students see" controls into
+ * #daysDisplay and wires them straight back into STATE.days_display, same
+ * "the input already IS the state" pattern as the panels below.
+ *
+ * These sit above the panel list rather than in the visual editor with the
+ * grid's spacing and stacking, because they aren't a layout choice: they
+ * decide how much of the workshop a student is shown, which is the same kind
+ * of decision as opening a day. The editor picks them up anyway - it renders
+ * the dashboard from this same content.
+ */
+function renderDaysDisplay() {
+  var host = document.getElementById("daysDisplay");
+  if (!host) return;
+  var conf = STATE.days_display || {};
+  host.innerHTML =
+    '<div class="ta-row">' +
+      '<div class="field"><label>Minimum tiles shown</label>' +
+        '<input type="number" min="0" class="dd-min" value="' + conf.min_tiles + '">' +
+        '<p class="muted" style="margin:6px 0 0">Never show fewer cards than this. ' +
+          'Set it to 5 and a workshop with one day open still shows five, the other four locked.</p></div>' +
+      '<div class="field"><label>Locked tiles shown ahead</label>' +
+        '<input type="number" min="0" class="dd-extra" value="' + conf.extra_locked + '">' +
+        '<p class="muted" style="margin:6px 0 0">How many locked cards trail the open ones. ' +
+          'Set it to 2 and four open days are followed by two locked ones.</p></div>' +
+    '</div>' +
+    '<p class="muted dd-summary" style="margin:10px 0 0">' + daysDisplaySummaryText() + '</p>';
+
+  host.querySelector(".dd-min").addEventListener("input", function () {
+    STATE.days_display.min_tiles = daysDisplayNum(this.value, 0);
+    updateDaysDisplaySummary();
+  });
+  host.querySelector(".dd-extra").addEventListener("input", function () {
+    STATE.days_display.extra_locked = daysDisplayNum(this.value, 0);
+    updateDaysDisplaySummary();
+  });
+}
+
 /** Renders every day panel editor into #panelList and wires up its controls. */
 function renderPanels() {
+  /* the tile-count summary above the list is read off the same days[], so it
+     goes stale the moment one is opened, closed, added or removed - all of
+     which come back through here */
+  renderDaysDisplay();
   var list = document.getElementById("panelList");
   if (!list) return;
   var html = "";
@@ -2061,6 +2226,12 @@ function clickEditRedo() {
  */
 function writePreviewSnapshot() {
   if (!STATE_LOADED) return false;
+  /* the editor frame and preview page read their variables straight out of
+     this snapshot (fetchContent() in js/main.js prefers it over /api/content
+     in preview mode), so a computed value that's gone stale since the last
+     load would be painted as if it were live - see
+     refreshComputedVariables() */
+  refreshComputedVariables();
   try {
     localStorage.setItem("preview_content", JSON.stringify(STATE));
     if (EDITING) localStorage.setItem("preview_editing", JSON.stringify(EDITING));

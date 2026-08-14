@@ -11,6 +11,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from app.db import (
+    DEFAULT_PROFILE_NAME,
     UPLOAD_DIR,
     create_custom_asset,
     create_object,
@@ -159,10 +160,10 @@ def api_create_profile(payload: dict[str, Any], ta=Depends(require_ta)):
 @app.post("/api/profiles/{profile_id}")
 def api_update_profile(profile_id: int, payload: dict[str, Any], ta=Depends(require_ta)):
     """partially updates a profile: name/shared are owner-only, data needs
-    ownership or sharing. the seeded "Default" profile (is_default) and a
-    ta's own "Most recently applied" profile (is_last_applied) both reject
-    every field, regardless of owner or shared: Default's data never
-    changes (see _seed_default_profile()), and Most recently applied's data
+    ownership or sharing. the seeded original-theme profile (is_default) and
+    a ta's own "Most recently applied" profile (is_last_applied) both reject
+    every field, regardless of owner or shared: the original theme's data and
+    name never change (see _seed_default_profile()), and Most recently applied's data
     is server-managed, overwritten on every Apply by the ta it belongs to
     (see snapshot_last_applied()), never by a direct edit. Sharing one is
     refused by the same blanket rule, which is what keeps "what I applied
@@ -174,7 +175,7 @@ def api_update_profile(profile_id: int, payload: dict[str, Any], ta=Depends(requ
     if not prof:
         raise HTTPException(status_code=404, detail="No such profile.")
     if prof["is_default"]:
-        raise HTTPException(status_code=403, detail="The Default profile can't be edited.")
+        raise HTTPException(status_code=403, detail=f'"{DEFAULT_PROFILE_NAME}" can\'t be edited.')
     if prof["is_last_applied"]:
         raise HTTPException(status_code=403, detail="This profile updates automatically and can't be edited directly.")
     is_owner = prof["owner"] == ta["username"]
@@ -198,20 +199,27 @@ def api_update_profile(profile_id: int, payload: dict[str, Any], ta=Depends(requ
 
 @app.delete("/api/profiles/{profile_id}")
 def api_delete_profile(profile_id: int, ta=Depends(require_ta)):
-    """deletes a profile. owner only, except the seeded "Default" profile
-    (is_default), which any ta can delete, see _seed_default_profile() in
-    app/db.py. A "Most recently applied" profile (is_last_applied) is the
-    opposite special case: not deletable at all, not even by the ta who owns
-    it, since it's their live safety net rather than a draft they keep - and
-    the next Apply would just recreate it anyway.
+    """deletes a profile. owner only, and two rows nobody can delete at all.
+
+    The seeded original-theme profile (is_default, see _seed_default_profile()
+    in app/db.py) is the site as it shipped, shared with every ta and the one
+    entry in the list that's always there to fall back to. It seeds exactly
+    once, ever - a delete would take it away from everyone, permanently, with
+    no way for anyone to seed it back - so it isn't any one ta's to remove.
+
+    A "Most recently applied" profile (is_last_applied) is the other one: not
+    deletable even by the ta who owns it, since it's their live safety net
+    rather than a draft they keep - and the next Apply would just recreate it.
     @param profile_id the profile to delete
     """
     prof = get_profile(profile_id)
     if not prof:
         raise HTTPException(status_code=404, detail="No such profile.")
+    if prof["is_default"]:
+        raise HTTPException(status_code=403, detail=f'"{DEFAULT_PROFILE_NAME}" can\'t be deleted.')
     if prof["is_last_applied"]:
         raise HTTPException(status_code=403, detail="This profile can't be deleted.")
-    if prof["owner"] != ta["username"] and not prof["is_default"]:
+    if prof["owner"] != ta["username"]:
         raise HTTPException(status_code=403, detail="Only the owner can delete a profile.")
     delete_profile(profile_id)
     return {"ok": True}

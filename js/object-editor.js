@@ -35,6 +35,7 @@ function authedFetch(url, opts) {
   opts.headers = Object.assign({}, opts.headers, { "Authorization": "Bearer " + (localStorage.getItem("token") || "") });
   return fetch(url, opts).then(function (res) {
     if (res.status === 401) {
+      if (window.IdleClock) window.IdleClock.flush();
       localStorage.removeItem("session");
       localStorage.removeItem("role");
       localStorage.removeItem("token");
@@ -89,6 +90,13 @@ function persistDraft() {
     localStorage.setItem(DRAFT_KEY, JSON.stringify({ id: CURRENT_ID, name: name, data: data }));
   } catch (e) {}
 }
+
+/* the rolling draft below is only ever a few seconds old, but "a few seconds"
+   is exactly the window a logout lands in, so take one more on the way out
+   (see flushAutosaves() in js/idle.js) */
+(window.IdleSaveHooks = window.IdleSaveHooks || []).push(function () {
+  if (DRAFT_INTERVAL) persistDraft(); /* only while there's really a canvas being edited */
+});
 
 /** Starts (or restarts) the periodic local draft autosave. */
 function startDraftAutosave() {

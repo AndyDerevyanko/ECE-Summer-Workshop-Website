@@ -174,6 +174,15 @@ _APPLY_TOOLTIP_SEED = {
     "pos": "bottom",
 }
 
+# what the one seeded is_default=1 profile is called in every ta's profile
+# list. Dated, because that's the honest description of it: it holds
+# DEFAULT_CONTENT, the site as it shipped, and DEFAULT_CONTENT is a python
+# literal a future edit can change - so the row is the theme of a particular
+# moment rather than "the" theme forever. Nobody can rename it (the server
+# refuses a name change on is_default), so _migrate_default_profile_name()
+# can carry an older db's row across to this without stepping on ta wording.
+DEFAULT_PROFILE_NAME = "Original Theme Aug 2026"
+
 # starting content, same shape as the old hardcoded DAYS/EXTRAS/timer vars.
 # only used the first time the content table is empty.
 DEFAULT_CONTENT = {
@@ -1011,11 +1020,12 @@ def init_db():
     )
     # saved drafts of the whole content blob, per ta. shared=1 makes a
     # profile visible (and editable) to every ta, not just its owner.
-    # is_default=1 marks the one seeded "Default" profile (see
-    # _seed_default_profile()): shared with everyone, its data can never be
-    # edited (api_update_profile in app/main.py 403s regardless of owner/
-    # shared), but any ta can still delete it, unlike an ordinary profile
-    # where only the owner can.
+    # is_default=1 marks the one seeded profile (DEFAULT_PROFILE_NAME, see
+    # _seed_default_profile()): shared with everyone, and neither editable nor
+    # deletable by anyone - api_update_profile()/api_delete_profile() in
+    # app/main.py both 403 on it regardless of owner or sharing. It's the
+    # site's original look, the one thing in the list that's always there to
+    # go back to, so it isn't any one ta's to remove.
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS profiles (
@@ -1042,9 +1052,9 @@ def init_db():
         pass
     # tiny flag table so _seed_default_profile() only ever inserts once,
     # ever: guarding it on "the profiles table happens to be empty" instead
-    # would reseed a fresh "Default" the moment a ta deletes the only
-    # profile that ever existed, on the server's very next restart, making
-    # a delete that's supposed to stick silently undo itself.
+    # would reseed a fresh original-theme profile the moment a ta deletes the
+    # only profile that ever existed, on the server's very next restart,
+    # making a delete that's supposed to stick silently undo itself.
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS meta (
@@ -1090,6 +1100,7 @@ def init_db():
     _backfill_plain(conn)
     _seed_content(conn)
     _seed_default_profile(conn)
+    _migrate_default_profile_name(conn)
     _unshare_seeded_last_applied(conn)
     _seed_default_objects(conn)
     _migrate_learn_reel(conn)
@@ -1283,11 +1294,12 @@ def _seed_content(conn):
 
 
 def _seed_default_profile(conn):
-    """inserts a shared, read-only "Default" profile holding DEFAULT_CONTENT
-    (the site exactly as it looks out of the box), exactly once, ever,
+    """inserts the shared, read-only DEFAULT_PROFILE_NAME profile holding
+    DEFAULT_CONTENT (the site exactly as it looks out of the box), once, ever,
     tracked by the meta table (not by "the profiles table is empty", which
-    would reseed a fresh one the moment a ta deletes it if it was the only
-    profile that ever existed, undoing a delete that's supposed to stick).
+    would reseed a fresh one behind anybody who clears this row out of the db
+    by hand, undoing a removal that's supposed to stick - no ta can delete it
+    through the portal any more, see api_delete_profile() in app/main.py).
     Claims the meta flag with INSERT OR IGNORE first and checks rowcount,
     rather than a separate SELECT-then-INSERT: a dev server can restart
     twice in quick succession (eg two --reload events off one save), and a
@@ -1307,7 +1319,26 @@ def _seed_default_profile(conn):
     conn.execute(
         "INSERT INTO profiles (owner, name, data, shared, is_default)"
         " VALUES (?, ?, ?, 1, 1)",
-        ("system", "Default", json.dumps(DEFAULT_CONTENT)),
+        ("system", DEFAULT_PROFILE_NAME, json.dumps(DEFAULT_CONTENT)),
+    )
+    conn.commit()
+
+
+def _migrate_default_profile_name(conn):
+    """renames an existing db's seeded profile from the old bare "Default" to
+    DEFAULT_PROFILE_NAME.
+
+    Unconditional and unflagged, unlike the migrations below: this row's name
+    is not something anyone can have changed - api_update_profile() in
+    app/main.py 403s every field on is_default - so there is no ta wording here
+    to preserve, and no need for a meta flag to stop it running twice. Written
+    against is_default rather than the old name so it keeps working if
+    DEFAULT_PROFILE_NAME changes again later.
+    @param conn an open db connection
+    """
+    conn.execute(
+        "UPDATE profiles SET name = ? WHERE is_default = 1 AND name != ?",
+        (DEFAULT_PROFILE_NAME, DEFAULT_PROFILE_NAME),
     )
     conn.commit()
 

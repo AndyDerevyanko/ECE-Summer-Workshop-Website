@@ -135,7 +135,15 @@
          see the BACKDROP_DEFAULT_BACK_IDS note in js/main.js. The ids are the
          ones the old synthetic table used, so a saved content.layers still
          resolves. -->
+    <!-- disablepictureinpicture/controlslist: the browser's own offers over a
+         clip (firefox's floating pip toggle, chromium's download entry) don't
+         belong on a backdrop that's anchored into the layout - see
+         hardenVideo() in js/main.js, which puts these on every clip built
+         after load and kills the matching right-click menu. Here in the
+         markup as well so the hero, which can be hovered on the first paint,
+         never shows the toggle even for the moment before that runs. -->
     <video class="hero-bg" src="assets/cover-video.mp4" autoplay muted loop playsinline
+      disablepictureinpicture controlslist="nodownload noplaybackrate noremoteplayback"
       data-resize-id="media.hero.video"></video>
     <div class="hero-scrim" data-resize-id="media.hero.scrim"></div>
     <div class="wrap">
@@ -251,12 +259,13 @@
     <div class="wrap reveal" id="learnReelAnchor" style="min-height:260px" aria-hidden="true"></div>
 
     <div class="wrap grid grid-3 vid-row reveal" style="margin-top:34px">
+      <!-- disablepictureinpicture/controlslist as on the hero above -->
       <video class="media video" data-resize-id="img.vid_1" src="assets/gallery/hand_crank_joule_thief_2025.MOV" autoplay muted loop playsinline
-        preload="auto"></video>
+        disablepictureinpicture controlslist="nodownload noplaybackrate noremoteplayback" preload="auto"></video>
       <video class="media video wide" data-resize-id="img.vid_wide" src="assets/gallery/working-hard.MOV" autoplay muted loop playsinline
-        preload="auto"></video>
+        disablepictureinpicture controlslist="nodownload noplaybackrate noremoteplayback" preload="auto"></video>
       <video class="media video" data-resize-id="img.vid_2" src="assets/gallery/robot_in_action_2025.MOV" autoplay muted loop playsinline
-        preload="auto"></video>
+        disablepictureinpicture controlslist="nodownload noplaybackrate noremoteplayback" preload="auto"></video>
     </div>
   </section>
 
@@ -450,7 +459,8 @@
   </footer>
 
   <script src="js/theme.js?v=4"></script>
-  <script src="js/main.js?v=35"></script>
+  <script src="js/idle.js?v=5"></script>
+  <script src="js/main.js?v=37"></script>
   <script src="js/learn-reel.js?v=7"></script>
 </body>
 

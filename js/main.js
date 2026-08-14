@@ -5525,6 +5525,59 @@ function wireVideoPauseClicks() {
   });
 }
 
+/* set once wireNativeVideoMenu() has installed its delegated listener */
+var VIDEO_NATIVE_MENU_WIRED = false;
+
+/**
+ * Takes the browser's own affordances off one clip: the floating
+ * picture-in-picture toggle firefox draws in a corner on hover, and the
+ * download/speed entries chromium tucks into its control bar's overflow menu
+ * when a ta switches "Show controls" on.
+ *
+ * None of it is the browser's to offer here. Every video on this site is
+ * something a ta placed and positioned - a hero background, a reel tile, a
+ * gallery clip - sized and anchored to sit exactly where it sits. Popping one
+ * out into a floating window pulls it out of that layout and leaves a hole in
+ * the page where it was, and the rest of the list hands a visitor switches
+ * over playback that the ta already decided for them through the "Autoplay"/
+ * "Show controls"/"Click to play/pause" toggles on the video's own right-click
+ * menu in the editor (see VIDEO_PLAYBACK_KEYS above).
+ *
+ * Written as attributes, not properties, for the same reason
+ * setVideoPlaybackOption() writes attributes: cloneNode() copies attributes
+ * and nothing else, so js/learn-reel.js's cloned tiles inherit this without
+ * being swept again.
+ * @param el the <video> element (anything else is ignored)
+ */
+function hardenVideo(el) {
+  if (!el || el.tagName !== "VIDEO") return;
+  el.setAttribute("disablepictureinpicture", "");
+  el.setAttribute("controlslist", "nodownload noplaybackrate noremoteplayback");
+}
+
+/**
+ * Hardens every clip on the page and closes the other way into the same
+ * offers: the native video context menu (Loop/Speed/Full Screen/"Watch in
+ * Picture-in-Picture"/Save Video As...), which firefox would still be showing
+ * with the corner toggle already hidden.
+ *
+ * The sweep runs on every call, since a clip can be built long after the
+ * first one (a video placed mid-session, a gallery pane switching to a
+ * different file); the listener is delegated and installed once, for the same
+ * reason wireVideoPauseClicks()'s is - nothing built later needs re-wiring.
+ * preventDefault() only, never stopPropagation(): inside the editor
+ * wireAddElementMenu()'s own contextmenu listener is what puts the "Add
+ * element" menu up over a video, and it has to keep seeing these.
+ */
+function wireNativeVideoMenu() {
+  document.querySelectorAll("video").forEach(hardenVideo);
+  if (VIDEO_NATIVE_MENU_WIRED) return;
+  VIDEO_NATIVE_MENU_WIRED = true;
+  document.addEventListener("contextmenu", function (e) {
+    if (e.target && e.target.tagName === "VIDEO") e.preventDefault();
+  });
+}
+
 /**
  * Applies the saved per-video playback switches on top of a placed video's
  * built-in default (autoplays, no controls, not click-pausable). Runs on
@@ -5537,6 +5590,11 @@ function wireVideoPauseClicks() {
  */
 function applyVideoPlaybackOverrides(noAutoplay, controls, pausable) {
   wireVideoPauseClicks();
+  /* here too rather than on load alone: this pass is the one that runs after
+     the content build has put every placed video on the page, and it's
+     deliberately ahead of initAllReels() - so a reel's clones are copied from
+     an original that's already hardened */
+  wireNativeVideoMenu();
   var lists = { video_no_autoplay: noAutoplay, video_controls: controls, video_pausable: pausable };
   VIDEO_PLAYBACK_KEYS.forEach(function (key) {
     (lists[key] || []).forEach(function (id) {
@@ -11487,6 +11545,7 @@ function buildCustomElementNode(d) {
     gpVid.setAttribute("playsinline", "");
     gpVid.setAttribute("data-gallery-media", "vid");
     gpVid.hidden = true;
+    hardenVideo(gpVid);
     el.appendChild(gpVid);
   } else if (d.kind === "loginField") {
     /* one of the login page's two credential boxes (see app/db.py's
@@ -11670,6 +11729,7 @@ function buildCustomElementNode(d) {
     el.style.objectFit = "cover";
     el.style.width = "320px";
     el.style.height = "200px";
+    hardenVideo(el);
   } else if (d.kind === "datetime") {
     /* a plain, styleable text element whose content is generated from its
        own target/format/strftime (renderDatetimeContent()), live-ticking
@@ -18708,6 +18768,19 @@ function toggleDashView() {
  * links with real hrefs (applyNavSessionState() points Dashboard at the right
  * one for the role), which is what makes ctrl-click and the status bar work.
  */
+/* An inline text edit isn't committed until the field blurs (see the "blur"
+   handler on el in the click-to-edit wiring above, which is what packs the
+   chips back up and writes the snapshot) - so a ta timed out mid-sentence
+   used to lose that sentence, even though every finished edit around it was
+   already safe in the snapshot. Blurring here runs that handler normally,
+   the same as clicking away would have. Registered on every page carrying
+   this file, live or framed: js/idle.js's flushAutosaves() reaches into the
+   editor's iframe, and this is the work that lives in there. */
+(window.IdleSaveHooks = window.IdleSaveHooks || []).push(function () {
+  var el = document.activeElement;
+  if (el && el.isContentEditable && el.blur) el.blur();
+});
+
 function wireNavButtons() {
   document.addEventListener("click", function (e) {
     var el = e.target.closest && e.target.closest("[data-nav-el]");
@@ -19033,6 +19106,12 @@ function initObjectCanvas() {
 }
 
 document.addEventListener("DOMContentLoaded", function () {
+  /* ahead of every return below (the object canvas has clips on it too), and
+     without waiting on the content fetch: the videos already in the markup
+     can be hovered the moment the page paints, which is all firefox needs to
+     put its pip toggle up over one */
+  wireNativeVideoMenu();
+
   /* the object mini editor (templates/object-editor.html, js/object-editor.js)
      first has to resolve which saved object (if any) this session is
      editing and stash its data into localStorage's "object_content" key

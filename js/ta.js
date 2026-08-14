@@ -475,6 +475,7 @@ function authHeaders() {
  * of quietly failing every button on the page.
  */
 function handleExpiredSession() {
+  if (window.IdleClock) window.IdleClock.flush();
   localStorage.removeItem("session");
   localStorage.removeItem("role");
   localStorage.removeItem("token");
@@ -2240,6 +2241,18 @@ function writePreviewSnapshot() {
   return true;
 }
 
+/* The manager keeps a ta's typing in STATE and nothing else - the fields
+   don't snapshot as you go, only whole actions do (mode switch, profile
+   ops, Preview) - so an idle logout used to take every unapplied edit with
+   it. This is the last thing to run before the session is torn down; see
+   flushAutosaves() in js/idle.js. In editor mode pull the frame's own work
+   in first, exactly as showMode() does, so the two halves land in one
+   snapshot and tryRestoreFromPreview() hands the lot back at next login. */
+(window.IdleSaveHooks = window.IdleSaveHooks || []).push(function () {
+  if (TA_MODE === "editor") pullStateFromEditor();
+  writePreviewSnapshot();
+});
+
 /**
  * Runs fn once STATE holds real content, immediately if it already does.
  * @param fn called with no args
@@ -2372,11 +2385,18 @@ function syncProfileBar() {
   if (EDITING) {
     txt.style.display = "block";
     back.style.display = "inline-flex";
-    txt.textContent = 'Editing "' + profileLabel(EDITING) + '". Students see none of this until you apply it.';
+    /* "Viewing", not "Editing", on the original theme: it's open the same way
+       any other profile is and Apply works on it exactly the same, but Save is
+       off, so anything typed into it is a scratch copy that goes when the ta
+       leaves - worth saying up front rather than letting them find out at the
+       Save button */
+    txt.textContent = EDITING.is_default
+      ? 'Viewing "' + profileLabel(EDITING) + '", the site\'s original look. It can\'t be changed, but you can apply it. Students see none of this until you do.'
+      : 'Editing "' + profileLabel(EDITING) + '". Students see none of this until you apply it.';
     apply.textContent = "Apply this profile";
     save.textContent = "Save profile";
     save.disabled = !!(EDITING.is_default || EDITING.is_last_applied);
-    save.title = EDITING.is_default ? "The Default profile can't be edited."
+    save.title = EDITING.is_default ? "The site's original look never changes. Apply it as it is, or go back to the live content and save your own profile."
       : EDITING.is_last_applied ? "This profile updates automatically and can't be edited directly." : "";
   } else {
     txt.style.display = "none";
@@ -2464,8 +2484,8 @@ function renderProfiles() {
       html += '<span class="rname">' + profileLabel(p) + '</span>';
     }
     if (p.is_default) {
-      html += '<span class="shared-flag" title="The site\'s original look out of the box. Can\'t be edited, but any staff member can delete it.">' +
-        SHARE_SVG_CHIP + 'default, shared with everyone</span>';
+      html += '<span class="shared-flag" title="The site\'s original look out of the box, shared with every staff member. Open it to look at it or to apply it, but it always stays as it is: it can\'t be renamed, edited or deleted by anyone, so there is always a way back to the original.">' +
+        SHARE_SVG_CHIP + 'original, shared with everyone</span>';
     } else if (p.is_last_applied) {
       html += '<span class="shared-flag" title="Your own copy of whatever you last hit Apply on, saved automatically. Nobody else can see it. If another staff member applies after you and overwrites your changes, this is how you get them back. Can\'t be renamed, shared, edited or deleted.">' +
         PRIVATE_SVG_CHIP + 'auto-updated, only you</span>';
@@ -2474,14 +2494,21 @@ function renderProfiles() {
         '<button class="btn btn-ghost pr-unshare" type="button">Unshare</button>';
     }
     html += '<span class="prof-btns">';
-    if (!p.is_default) {
-      html += '<button class="btn btn-ghost pr-edit" type="button"' + (open ? " disabled" : "") + '>' +
-        (open ? "Editing" : "Edit") + '</button>';
-    }
+    /* the original-theme row gets this button too, and it's the only way into
+       that profile: it can't be edited, but loading it is what puts the
+       original look on screen to compare against or to hit Apply on. Labelled
+       "Open" rather than "Edit" since nothing typed into it can be saved back
+       (Save is disabled for it, see syncProfileBar(), and the server refuses
+       the write anyway) - Apply is what it's there for. */
+    html += '<button class="btn btn-ghost pr-edit" type="button"' + (open ? " disabled" : "") + '>' +
+      (p.is_default ? (open ? "Opened" : "Open") : (open ? "Editing" : "Edit")) + '</button>';
+    /* no Delete on the original theme at any point: it seeds once ever, so
+       deleting it would take the site's original look away from every ta with
+       nothing able to bring it back. api_delete_profile() in app/main.py 403s
+       it as well - this just keeps the button off a row where it could only
+       ever come back as an error. */
     if (p.mine && !p.is_last_applied) {
       if (!p.shared) html += '<button class="btn btn-ghost pr-share" type="button">Share</button>';
-      html += '<button class="btn btn-ghost pr-del" type="button">Delete</button>';
-    } else if (p.is_default) {
       html += '<button class="btn btn-ghost pr-del" type="button">Delete</button>';
     }
     html += '</span></div>';
@@ -2652,7 +2679,7 @@ function applyContent() {
       else clearPreviewSnapshot();
       if (EDITING) {
         EDITING.data = JSON.parse(JSON.stringify(STATE));
-        /* the Default profile's own data never changes, and the "Most
+        /* the original theme profile's own data never changes, and the "Most
            recently applied" profile's data is server-managed (overwritten
            by snapshot_last_applied() on every apply, see app/db.py), never
            by a direct edit; the server rejects writes to either anyway, so

@@ -246,6 +246,13 @@ var DEFAULT_DAYS_OPEN_BLURB_HTML = buildDaysChipHtml("day-blurb", "Description")
    template's own copy - which is exactly why it's editable as one field for
    every locked tile at once, see buildDayLockedTileHtml(). */
 var DEFAULT_DAYS_LOCKED_BLURB_HTML = "This module will be available soon";
+/* the open tile's attachment sub-area's own empty-state line, the third copy
+   of the same placeholder the Extra attachments section and the gallery rail
+   already carry (.extras-empty, hidden the moment real content exists). It
+   exists because the sub-area itself now always renders - see
+   buildDayOpenTileHtml() - and a container with nothing in it and no line to
+   say so is a box a ta can't tell apart from empty space. */
+var DEFAULT_DAYS_ATTACH_EMPTY_HTML = "<strong>No attachments yet.</strong>";
 
 /**
  * Builds one LOCKED day tile's markup: a shared template rendered once per
@@ -314,6 +321,17 @@ function buildDayLockedTileHtml(dayId, dayNum, style, titleHtml, blurbHtml, badg
  * files[] too), so a day's attachments and the main Extra attachments
  * section's tiles restyle together as one shared template everywhere they
  * appear.
+ *
+ * The attachment sub-area is rendered UNCONDITIONALLY, empty days included. It
+ * used to appear only once a day actually had files, which meant a ta could
+ * neither see nor reach the container on any other day - there was no way to
+ * position, resize, restack or space a box that wasn't in the document, and no
+ * way to add one either, since it isn't a placeable element but a fixed piece
+ * of this template (data-days-fixed, like the Download button). Every layout
+ * edit made to it is keyed to the one shared id and so applies to every day
+ * card at once, which is exactly why it has to exist on all of them for those
+ * edits to mean anything. An empty one shows the placeholder line instead of
+ * being a silently invisible box, same as the other two containers.
  * @param day one DAYS entry (id, day, date, title, blurb, files, children)
  * @param style {rectColor, rectDarkColor, rectRadius} (reads "days.open.*" keys)
  * @param text the content.text map (read for every "days.open.*" id plus the
@@ -371,10 +389,17 @@ function buildDayOpenTileHtml(day, style, text, extrasStyle) {
          real attachments render, not decoration. Both axes are locked by
          default, so one day with eight files can't stretch its card past every
          other card in the row - it scrolls instead. */
-      (chips ? '<div class="tile-flow" style="margin-top:14px"' +
+      '<div class="tile-flow" style="margin-top:14px"' +
         ' data-resize-id="days.open.attachments" data-days-role="open.attachments"' +
         ' data-days-fixed="1" data-flow-area="1" data-tile-id="days.attach.tile">' +
-        chips + '</div>' : "") +
+        '<p class="muted extras-empty tile-flow-full' + (chips ? " has-attachments" : "") +
+          '" data-edit-id="days.open.attachments.empty" data-days-role="open.attachments.empty" ' +
+          'data-default-html="' + escapeHtml(DEFAULT_DAYS_ATTACH_EMPTY_HTML) + '">' +
+          (text["days.open.attachments.empty"] !== undefined
+            ? text["days.open.attachments.empty"] : DEFAULT_DAYS_ATTACH_EMPTY_HTML) +
+        '</p>' +
+        chips +
+      '</div>' +
     '</div>'
   );
 }

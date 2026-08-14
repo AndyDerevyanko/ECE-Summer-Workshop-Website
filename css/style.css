@@ -942,6 +942,18 @@ body.edit-mode .reel-tile { cursor: grab; }
 /* positioned but deliberately z-index:auto - see the same rule on .day-card
    below for why the number that used to be here broke the layer menu */
 .gv-year > *:not(.gv-year-rect) { position: relative; }
+/* the label fills its tile's content box rather than shrinking to fit the
+   directory's name. It's a <span>, so it used to be exactly as wide as its own
+   words - and since the words differ per directory while the SAVED position is
+   one shared {tx,ty} offset applied to every tile (see
+   mirrorTiledRoleGeometry() in js/main.js), two labels of different lengths
+   started at different places and stayed that far apart no matter where either
+   was dragged: nudge "2025" 12px right and "sussmaster9000" went 12px right
+   too, still 25px off it. One box for every tile makes the shared offset land
+   in the same place on all of them, which is what mirroring is supposed to
+   mean. The words themselves are still centred by .gv-year's text-align, so
+   nothing about the rail's default look changes. */
+.gv-year-label { display: block; width: 100%; }
 .gv-year:hover { color: var(--text); }
 .gv-year.active { color: #fff; }
 .gv-year.active .gv-year-rect { background: var(--accent); }
@@ -1737,9 +1749,18 @@ body.edit-mode .login-field-ph { pointer-events: auto; }
 /* the section's always-in-DOM (see the "always editable" requirement)
    "nothing here yet" text: a standalone callout, not a plain paragraph, so
    it reads as a special placeholder rather than ordinary body copy. Hidden
-   the moment real attachments exist for a real visitor, but kept visible
-   (dimmed) in the ta portal's edit mode so it stays selectable/editable
-   even then. */
+   the moment real content exists - in the editor as well as on the live page.
+
+   It used to stay on (dimmed) in edit mode, so that the copy for the empty
+   state could still be reached while the section wasn't in it. That cost more
+   than it bought: a placeholder is a full-width line in a tile flow container,
+   so on the gallery's rail it sat above the directories saying "No directories
+   yet." with two directories right underneath it, and pushed every tile 107px
+   down the page - the editor showing a layout the live page never has. The
+   copy is still editable in the state it belongs to (empty the section, or a
+   brand-new site, which is when a ta would be writing it anyway), and being
+   able to see what a visitor sees matters more than being able to type at
+   something they never will. */
 .extras-empty {
   display: block;
   border: 1px dashed color-mix(in srgb, var(--accent) 40%, var(--border));
@@ -1750,10 +1771,6 @@ body.edit-mode .login-field-ph { pointer-events: auto; }
   font-weight: 500;
 }
 .extras-empty.has-attachments { display: none; }
-body.edit-mode .extras-empty.has-attachments {
-  display: block;
-  opacity: .55;
-}
 
 /* gate banner if not "logged in" */
 .gate {

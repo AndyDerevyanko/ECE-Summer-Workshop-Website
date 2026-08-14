@@ -322,6 +322,19 @@ function renderDirs() {
     });
   });
 
+  /* whatever a ta has dropped onto a directory tile, rebuilt into EVERY tile:
+     the rail has no per-directory content entry to hang a child off, so these
+     are stored against the shared template and belong to all of them, exactly
+     like the rect and the label above (see TILE_CHILDREN in js/main.js).
+     Repainting their saved overrides is applyLiveAreaOverrides()'s job below,
+     same division of labour renderExtras()/renderDays() follow. */
+  if (window.renderTileChildren && window.tileChildrenFor) {
+    var dirChildren = window.tileChildrenFor("gallery.dir.tile");
+    host.querySelectorAll("[data-gallery-tile]").forEach(function (tileEl) {
+      window.renderTileChildren(tileEl, dirChildren);
+    });
+  }
+
   /* click-to-edit text wiring is a one-time, non-delegated pass (js/main.js's
      wireClickToEdit(), already run by the time the content fetch gets here),
      so these just-built tiles need wiring by hand, same as the dashboard's */
@@ -375,6 +388,35 @@ function initGalleryContent(gallery) {
   initGalleryVideoOpts(gallery);
   if (DIRS.indexOf(selectedDir) === -1) selectedDir = DIRS[0] || "";
 }
+
+/**
+ * Puts the directory rail into the order its tiles are now in, after a ta has
+ * dragged one to a different place in the visual editor (js/main.js's
+ * startFlowTileDrag()). The order IS content - it's what a visitor sees down
+ * the rail and what "the first directory" means to initGalleryContent() - so
+ * it's written back into content.gallery.years and saved.
+ *
+ * The tiles are already in their new order in the dom by the time this runs,
+ * so nothing re-renders: DIRS is brought into line with them and left there.
+ * @param slots each tile's original index in DIRS, in the tiles' new order
+ */
+function reorderGalleryDirs(slots) {
+  var out = [];
+  var taken = {};
+  slots.forEach(function (i) {
+    if (i >= 0 && i < DIRS.length && !taken[i]) { taken[i] = true; out.push(DIRS[i]); }
+  });
+  /* a directory the rail didn't account for keeps its place at the end rather
+     than being deleted by a reorder - same stance js/main.js's
+     reorderBySlots() takes for every other tile list */
+  DIRS.forEach(function (d, i) { if (!taken[i]) out.push(d); });
+  DIRS = out;
+  if (GALLERY_CONTENT && GALLERY_CONTENT.gallery) {
+    GALLERY_CONTENT.gallery.years = DIRS.slice();
+    if (window.saveGallery) window.saveGallery(GALLERY_CONTENT.gallery);
+  }
+}
+window.reorderGalleryDirs = reorderGalleryDirs;
 
 /**
  * Points the rail at a different directory. Only panes bound to "" move with

@@ -831,9 +831,15 @@ var AREA_FLOW_DEFAULTS = {
      it, or change which side it overflows to, from the same Container menu. */
   "seed.gallery.dirs.area": { x: "lock", y: "expand", dir: "column" }
 };
-/* content.area_flow, {id: {x, y, dir, wrap}} - only what a ta has actually
+/* content.area_flow, {id: {x, y, dir, wrap, gap}} - only what a ta has actually
    changed */
 var AREA_FLOW = {};
+
+/* how far apart a flow container's tiles sit when a ta hasn't said otherwise.
+   Matches the fallback baked into .tile-flow's own `gap: var(--tile-gap, 10px)`
+   in css/style.css, so a container nobody has touched keeps looking exactly as
+   it did before the slider existed. */
+var TILE_GAP_DEFAULT = 10;
 
 /**
  * The layout behaviour in force for one flow container, its saved override
@@ -849,17 +855,32 @@ var AREA_FLOW = {};
  * container defaults to row/normal, which is the grid layout that shipped
  * before this existed - see applyTileFlow()/.tile-flow in css/style.css for
  * why only that one combination stays on grid.
+ *
+ * "gap" is the space between one tile and the next, on both axes at once (it's
+ * the container's css `gap`, and a wrapping layout has rows as well as columns
+ * - one figure is what "how far apart are the tiles" actually means here,
+ * unlike a reel's strip, which has a genuine second axis with no tiles on it
+ * and so gets two sliders of its own, see reelGap()/reelPad()). It belongs to
+ * the container rather than to any one tile, exactly like the axis locks and
+ * the stacking above.
  * @param id the container's data-resize-id
- * @return {x, y} (each "lock" or "expand"), dir, wrap
+ * @return {x, y} (each "lock" or "expand"), dir, wrap, gap
  */
 function areaFlowFor(id) {
   var saved = AREA_FLOW[id] || {};
   var def = AREA_FLOW_DEFAULTS[id] || { x: "lock", y: "expand" };
+  /* 0 is a real, deliberate answer here ("tiles flush against each other"), so
+     the gap is tested for undefined rather than for falsiness the way the four
+     string fields can safely be */
+  var gap = saved.gap;
+  if (gap === undefined) gap = def.gap;
+  if (gap === undefined) gap = TILE_GAP_DEFAULT;
   return {
     x: saved.x || def.x,
     y: saved.y || def.y,
     dir: saved.dir || def.dir || "row",
-    wrap: saved.wrap || def.wrap || "normal"
+    wrap: saved.wrap || def.wrap || "normal",
+    gap: gap
   };
 }
 
@@ -885,6 +906,23 @@ function areaFlowIsFlex(flow) {
 function flowAreaOf(tile) {
   var p = tile && tile.parentElement;
   return p && isFlowAreaEl(p) ? p : null;
+}
+
+/**
+ * The flow container one element BELONGS to - itself if it is one, otherwise
+ * the innermost one it sits inside. The looser lookup flowAreaOf() can't do
+ * (that one is deliberately strict: a tile is a direct child of its container
+ * and nothing else counts), for the controls that act on a container from
+ * wherever a ta happens to have clicked - the style popover's spacing slider
+ * and, by the same reasoning, the right-click menu's Container section (see
+ * ctxFlowArea()). A container is almost entirely covered by its own tiles, so
+ * "whatever is selected" is nearly always something inside it.
+ * @param el any element
+ * @return the container, or null if el isn't in or of one
+ */
+function flowAreaForEl(el) {
+  if (!el || !el.closest) return null;
+  return isFlowAreaEl(el) ? el : el.closest("[data-flow-area]");
 }
 
 /**
@@ -962,78 +1000,111 @@ function flowAreaMinWidth(area) {
 }
 
 /**
- * The widest one tile may be dragged to: its container's own inner box, per
- * "resizing the tiles will CAP once one tile reaches the WIDTH of the
- * container". A container with an expanding x axis has no cap - it grows to
- * fit whatever the tile becomes - so Infinity stands in for "no limit".
+ * The largest one tile may be dragged to. Neither axis is capped anymore:
+ * whichever of them the container has locked, the CONTAINER takes the extra
+ * instead of the drag grinding to a halt, see growFlowAreaForTiles().
  *
- * HEIGHT is never capped. It used to be, symmetrically with the width, and
- * that made a tile in a height-locked container (a day card's own attachments
- * sub-area, which ships locked on both axes so one day with eight files can't
- * stretch every card in the row) simply refuse to be dragged taller at all -
- * the handle moved and the tile didn't. Growing a tile past the bottom of its
- * container is a request for more room, not an error, so the container takes
- * the extra height instead: see growFlowAreaForTiles(). Only ever downwards -
- * dragging the same tile back shorter leaves the container exactly where the
- * ta put it, since the height it was given is now its own size and not a
- * measurement of its contents.
+ * The height stopped being capped first, and for a reason that turned out to
+ * apply just as squarely to the width: a tile in a height-locked container (a
+ * day card's own attachments sub-area, which ships locked on both axes so one
+ * day with eight files can't stretch every card in the row) simply refused to
+ * be dragged taller - the handle moved and the tile didn't. The width did
+ * exactly that in every x-locked container, which is all of them by default,
+ * and it showed worst on the gallery's directory rail: the rail ships 120px
+ * wide, so a directory tile could never be made wider than 120px no matter how
+ * far the handle was dragged, and nothing on screen said why.
+ *
+ * Growing a tile past the edge of its container is a request for more room,
+ * not an error. Only ever outwards, on both axes: dragging the same tile back
+ * smaller leaves the container exactly where the ta put it, since the size it
+ * was given is now its own and not a measurement of its contents.
  * @param tile a tile box
  * @return {w, h} maximums in css px
  */
 function tileSizeCap(tile) {
-  var area = flowAreaOf(tile);
-  if (!area) return { w: Infinity, h: Infinity };
-  var flow = areaFlowFor(elId(area));
-  var cs = getComputedStyle(area);
-  var r = area.getBoundingClientRect();
-  var w = r.width - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0);
-  return {
-    w: flow.x === "expand" ? Infinity : Math.max(16, w),
-    h: Infinity
-  };
+  return { w: Infinity, h: Infinity };
 }
 
 /**
- * Grows a flow container downwards to hold tiles that have just been dragged
- * taller than it, and never shrinks it. The other half of tileSizeCap()'s
- * uncapped height: a tile can always be made taller, and whichever of the
- * three containers it lives in takes the extra height so nothing ends up
- * clipped or hidden behind a scrollbar.
+ * Grows a flow container outwards to hold tiles that have just been dragged
+ * bigger than it, and never shrinks it. The other half of tileSizeCap()'s two
+ * uncapped axes: a tile can always be made bigger, and whichever of the four
+ * containers it lives in takes the extra room so nothing ends up clipped or
+ * hidden behind a scrollbar. Per the ta's own "when changing width or height of
+ * boxes, they [should] cause the parent container to expand with it along with
+ * neighbours" - the neighbours follow for free, since a tile's size is its
+ * container's track size (see setTileTrackSize()).
  *
- * Only a HEIGHT-LOCKED container needs this. An expanding axis is sized by its
- * own content already (see areaFlowFor()), so both dashboard areas grow to fit
- * on their own by default and this does nothing to them; it's the day card's
- * attachments sub-area - locked on both axes - and any container a ta has
- * locked themselves that would otherwise hold a tile back. The whole id group
- * is grown together, same as applyTileFlow() does, so every day card in the
- * row keeps matching.
+ * Only a LOCKED axis needs this. An expanding one is sized by its own content
+ * already (see areaFlowFor()), so both dashboard areas already grow downwards
+ * on their own and this leaves their height alone; what it covers is their
+ * locked WIDTH, the day card's attachments sub-area (locked on both axes), the
+ * gallery's 120px-wide directory rail, and any axis a ta has locked themselves.
+ * The whole id group is grown together, same as applyTileFlow() does, so every
+ * day card in the row keeps matching.
+ *
+ * The width a tile NEEDS can't be read back off the layout the way its height
+ * can. Both .tile-flow rules cap a track at `min(--tile-w, 100%)` of the
+ * container, so a tile asked for more than the container has simply squeezes
+ * and the container's scrollWidth never grows to tell anyone about it - which
+ * is precisely what made an over-wide drag look like it did nothing. The figure
+ * asked for is read straight off the tiles' own saved track width instead.
  * @param tile the tile that just changed size
  * @param persist true once the drag has settled, to save the container's new
- *   height the same way any other resize is saved
+ *   size the same way any other resize is saved
  */
 function growFlowAreaForTiles(tile, persist) {
   var area = flowAreaOf(tile);
   var id = area && elId(area);
-  if (!id || areaFlowFor(id).y !== "lock") return;
+  if (!id) return;
+  var flow = areaFlowFor(id);
+  if (flow.x !== "lock" && flow.y !== "lock") return;
   var areas = flowAreasWithId(id);
   if (!areas.length) return;
-  /* scrollHeight is what the tiles actually need; on a locked container that's
-     exactly the figure the overflow is currently hiding */
-  var need = 0;
-  areas.forEach(function (a) { need = Math.max(need, a.scrollHeight); });
   var saved = EDIT_SIZES[id] || {};
-  if (!need || need <= (saved.h || 0)) return;
-  /* a width goes with it either way: a size record with no width is ignored
-     wholesale on the next load (see applySizeOverrides()), which would throw
-     the height straight back out - same reasoning as pinFlowAreaHeight() */
+  /* a width is always part of the record: one without it is ignored wholesale
+     on the next load (see applySizeOverrides()), which would throw any height
+     saved beside it straight back out - same reasoning as pinFlowAreaHeight() */
   var box = {
     w: saved.w === undefined ? Math.round(areas[0].getBoundingClientRect().width) : saved.w,
-    h: need
+    h: saved.h
   };
+  var grew = false;
+  if (flow.x === "lock") {
+    var tileSize = EDIT_SIZES[areas[0].getAttribute("data-tile-id")];
+    var wantTile = (tileSize && tileSize.w) || 0;
+    var needW = 0;
+    areas.forEach(function (a) {
+      var cs = getComputedStyle(a);
+      var chrome = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0) +
+        (parseFloat(cs.borderLeftWidth) || 0) + (parseFloat(cs.borderRightWidth) || 0);
+      needW = Math.max(needW, a.scrollWidth, wantTile ? wantTile + chrome : 0);
+    });
+    if (needW > (box.w || 0)) { box.w = Math.round(needW); grew = true; }
+  }
+  if (flow.y === "lock") {
+    /* scrollHeight is what the tiles actually need; on a locked container
+       that's exactly the figure the overflow is currently hiding */
+    var needH = 0;
+    areas.forEach(function (a) { needH = Math.max(needH, a.scrollHeight); });
+    if (needH > (box.h || 0)) { box.h = needH; grew = true; }
+  }
+  if (!grew) return;
   EDIT_SIZES[id] = box;
   areas.forEach(function (a) {
-    a.style.height = need + "px";
-    a.dataset.ovH = need;
+    /* no detachFromFlow() on either axis: the two dashboard areas and the
+       gallery rail are already out of flow (each is a placed element inside
+       its own .free-wrap), and the day card's attachments sub-area is a plain
+       in-flow child of the card that must stay one - pulling it out would drop
+       the card's own height to nothing underneath it */
+    if (flow.x === "lock") {
+      a.style.width = box.w + "px";
+      a.dataset.ovW = box.w;
+    }
+    if (flow.y === "lock" && box.h) {
+      a.style.height = box.h + "px";
+      a.dataset.ovH = box.h;
+    }
   });
   if (persist) saveEditedSize(id, box);
 }
@@ -1114,6 +1185,11 @@ function applyTileFlow() {
       area.classList.toggle("flow-dir-column", flow.dir === "column");
       area.classList.toggle("flow-dir-column-reverse", flow.dir === "column-reverse");
       area.classList.toggle("flow-wrap-reverse", flow.wrap === "reverse");
+      /* the container's own `gap`, read by .tile-flow on both the grid and the
+         flex path (see areaFlowFor()) - one property, so a ta's spacing
+         survives a stacking change instead of being a separate figure per
+         layout mode */
+      area.style.setProperty("--tile-gap", flow.gap + "px");
       area.style.setProperty("--tile-w", tw || defW);
       area.style.setProperty("--tile-wa", tw || (defW === "100%" ? "max-content" : defW));
       area.style.setProperty("--tile-h", th || "auto");
@@ -1159,18 +1235,70 @@ function applyAreaFlowOverrides(flow) {
   AREA_FLOW = flow && typeof flow === "object" ? flow : {};
 }
 
+/* content.tile_children, {tileId: [descriptors]} - elements a ta has placed
+   onto a tile whose backing content entry has nowhere to hold them.
+
+   Every other bound child hangs off the entry it was dropped onto (an
+   attachment's own children[], a day's, a reel tile's - see
+   findBoundTileOwner()), which is what makes it that ONE tile's content. A
+   gallery directory has no entry: content.gallery.years is a list of bare
+   strings, and every directory tile is one rendering of a single shared
+   template with a single shared id, exactly like the tile roles inside it. So
+   a child placed on one is stored against the TEMPLATE and rendered into every
+   tile - which is also the behaviour the shared-template rule already promises
+   everywhere else in these areas ("any edits we make to one tile should be
+   duplicated across the rest"). */
+var TILE_CHILDREN = {};
+
+/**
+ * Reads content.tile_children into TILE_CHILDREN. Runs on every load, live
+ * site included: an element a ta placed on a directory tile is real page
+ * content, not an editor affordance.
+ * @param map content.tile_children
+ */
+function applyTileChildrenOverrides(map) {
+  TILE_CHILDREN = map && typeof map === "object" ? map : {};
+}
+
+/**
+ * The shared children saved against one tile template.
+ * @param tileId the tile's data-resize-id, eg "gallery.dir.tile"
+ * @return an array of descriptors, possibly empty
+ */
+function tileChildrenFor(tileId) {
+  return TILE_CHILDREN[tileId] || [];
+}
+window.tileChildrenFor = tileChildrenFor;
+
+/**
+ * Persists one tile template's shared children into the preview snapshot, the
+ * same draft every other override here writes to.
+ * @param tileId the tile's data-resize-id
+ * @param children the descriptor array
+ */
+function saveTileChildren(tileId, children) {
+  TILE_CHILDREN[tileId] = children;
+  var raw;
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  if (!snapshot.tile_children || typeof snapshot.tile_children !== "object") snapshot.tile_children = {};
+  snapshot.tile_children[tileId] = children;
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
+}
+
 /**
  * Writes one field of one flow container's layout state and persists it (see
  * saveAreaFlow()). Always saves the COMPLETE resolved state, not just the
  * field that changed, so a container whose defaults later move doesn't
  * silently re-lay-out under a ta who had already arranged it.
  * @param id the container's data-resize-id
- * @param key "x", "y", "dir" or "wrap"
+ * @param key "x", "y", "dir", "wrap" or "gap"
  * @param value the new value for that key
  */
 function setAreaFlowProp(id, key, value) {
   var cur = areaFlowFor(id);
-  var next = { x: cur.x, y: cur.y, dir: cur.dir, wrap: cur.wrap };
+  var next = { x: cur.x, y: cur.y, dir: cur.dir, wrap: cur.wrap, gap: cur.gap };
   next[key] = value;
   AREA_FLOW[id] = next;
   saveAreaFlow(id, next);
@@ -1188,6 +1316,246 @@ function setAreaFlowProp(id, key, value) {
 function flowAreasWithId(id) {
   return [].slice.call(document.querySelectorAll("[data-flow-area]"))
     .filter(function (a) { return elId(a) === id; });
+}
+
+/**
+ * One flow container's tiles, in the order they currently sit in it. Direct
+ * children only, and only real tiles - the "nothing here yet" placeholder is a
+ * child of the container too but isn't one of the things being ordered.
+ * @param area a flow container
+ * @return an array of tile elements
+ */
+function flowTilesOf(area) {
+  return [].slice.call(area.querySelectorAll(":scope > [data-days-tile], " +
+    ":scope > [data-extras-tile], :scope > [data-gallery-tile]"));
+}
+
+/**
+ * Stamps every tile in a container with the index of the content entry it was
+ * rendered FROM, if it doesn't already carry one, and hands the tiles back.
+ *
+ * Position-in-the-array rather than any id, because not every tile has one to
+ * offer: a legacy attachment is a bare filename string with no id at all, and
+ * the trailing synthetic "next day" card is rendered from no entry whatsoever.
+ * Every render walks its array in order and emits one tile per entry (see
+ * renderDays()/renderExtras()/renderDirs()), so the nth tile IS the nth entry,
+ * which is the one fact that holds for all of them.
+ *
+ * The stamp is re-written to the new running order the moment a reorder is
+ * applied (see reorderFlowContent()), so it always describes where a tile's
+ * entry sits in the array RIGHT NOW - that's what lets two reorders in a row,
+ * or a reorder and then its undo, compose correctly.
+ * @param area a flow container
+ * @return its tiles, each carrying a data-flow-slot
+ */
+function stampFlowSlots(area) {
+  var tiles = flowTilesOf(area);
+  tiles.forEach(function (t, i) { if (t.dataset.flowSlot === undefined) t.dataset.flowSlot = i; });
+  return tiles;
+}
+
+/**
+ * Re-orders a list to match the running order the tiles are now in.
+ * @param list the content array being reordered
+ * @param slots each tile's data-flow-slot, in the tiles' new order
+ * @return a new array in that order
+ */
+function reorderBySlots(list, slots) {
+  var out = [];
+  var taken = {};
+  slots.forEach(function (i) {
+    if (i >= 0 && i < list.length && !taken[i]) { taken[i] = true; out.push(list[i]); }
+  });
+  /* anything the tiles didn't account for keeps its place at the end rather
+     than being dropped - an entry with no tile on this page (or one whose tile
+     is the synthetic trailing card, which stands for no entry at all) is not
+     something a reorder should be able to delete. Same stance saveReelOrder()
+     takes for a tiles[] entry with no element. */
+  list.forEach(function (item, i) { if (!taken[i]) out.push(item); });
+  return out;
+}
+
+/**
+ * Which content array one flow container's running order actually lives in,
+ * and how to write a new one back - the reorder counterpart of
+ * findBoundTileOwner(), and split out for the same reason: the four containers
+ * hold four different kinds of thing, and only the container knows which.
+ *
+ * The attachments template renders in two places from two different arrays
+ * (the Extra attachments section's content.extras[], and one day's own
+ * files[]), so which one is being reordered is decided by whether this
+ * container sits inside a day card - the tile itself can't say.
+ * @param area a flow container
+ * @return {apply(slots)}, or null if nothing owns this container's order
+ */
+function flowOrderOwner(area) {
+  var tiles = flowTilesOf(area);
+  if (!tiles.length) return null;
+  var first = tiles[0];
+  if (first.hasAttribute("data-gallery-tile")) {
+    if (!window.reorderGalleryDirs) return null;
+    return { apply: function (slots) { window.reorderGalleryDirs(slots); } };
+  }
+  if (first.hasAttribute("data-days-tile")) {
+    if (!window.DAYS) return null;
+    return { apply: function (slots) {
+      window.DAYS = reorderBySlots(window.DAYS, slots);
+      saveDays(window.DAYS);
+    } };
+  }
+  if (first.hasAttribute("data-extras-tile")) {
+    var dayCard = area.closest("[data-days-tile]");
+    if (dayCard) {
+      var did = dayCard.getAttribute("data-days-id");
+      var day = (window.DAYS || []).filter(function (d) { return d.id === did; })[0];
+      if (!day) return null;
+      return { apply: function (slots) {
+        day.files = reorderBySlots(day.files || [], slots);
+        saveDays(window.DAYS);
+      } };
+    }
+    if (!window.EXTRAS) return null;
+    return { apply: function (slots) {
+      window.EXTRAS = reorderBySlots(window.EXTRAS, slots);
+      saveExtras(window.EXTRAS);
+    } };
+  }
+  return null;
+}
+
+/**
+ * Writes the running order the tiles are currently in back to the content
+ * array behind them, and re-stamps the slots to match (see stampFlowSlots()).
+ * The dom is already in the new order by the time this runs - the drag moved
+ * the nodes as it went - so nothing here re-renders anything.
+ * @param area a flow container
+ */
+function reorderFlowContent(area) {
+  var tiles = stampFlowSlots(area);
+  var owner = flowOrderOwner(area);
+  if (owner) owner.apply(tiles.map(function (t) { return parseInt(t.dataset.flowSlot, 10); }));
+  tiles.forEach(function (t, i) { t.dataset.flowSlot = i; });
+}
+
+/**
+ * Puts a flow container's tiles into an exact order, dom and content together:
+ * what undo/redo replays for a reorder drag (see startFlowTileDrag()).
+ *
+ * Takes the tile ELEMENTS rather than a list of keys the way applyReelOrder()
+ * does, because a tile has no key of its own worth naming (see
+ * stampFlowSlots()). The undo stack only ever lives in memory, so holding the
+ * nodes directly is safe; a stale entry pointing at tiles a re-render has since
+ * replaced is detected and skipped rather than half-applied.
+ * @param area a flow container
+ * @param tiles its tiles in the wanted order
+ */
+function applyFlowTileOrder(area, tiles) {
+  if (!area || !tiles.every(function (t) { return t.parentElement === area; })) return;
+  tiles.forEach(function (t) { area.appendChild(t); });
+  reorderFlowContent(area);
+}
+
+/**
+ * One flow-container tile's drag: grab it anywhere on its background (or by the
+ * ring's move handle) and carry it to a different place among its siblings.
+ *
+ * The same edit startReelTileDrag() makes on a reel, for the containers that
+ * grew out of the same idea later: a tile can't be given a free position (where
+ * it sits IS its place in its container's running order, which is why
+ * isMoveLockedTileRole() refuses it a saved {tx,ty}), so the drag reorders
+ * instead, and the tiles rearrange live under the cursor rather than only
+ * settling on drop.
+ *
+ * Unlike a reel's single strip these containers wrap, on either axis, in either
+ * direction (see areaFlowFor()), so the "which slot is this?" test is a
+ * two-part one: the cross axis decides which line the cursor is on, and only
+ * within a line does the main axis decide where in it. Both are read off the
+ * container's own current stacking, so the answer follows a ta who has flipped
+ * it to a column or reversed it.
+ * @param e the mousedown that started it
+ * @param tile the tile being dragged
+ */
+function startFlowTileDrag(e, tile) {
+  var area = flowAreaOf(tile);
+  if (!area) return;
+  var flow = areaFlowFor(elId(area));
+  var isCol = flow.dir.indexOf("column") === 0;
+  var rev = flow.dir.indexOf("-reverse") !== -1;
+  var wrapRev = flow.wrap === "reverse";
+  var startX = e.clientX, startY = e.clientY;
+  var before = stampFlowSlots(area);
+  var moving = false;
+  var grabX = 0, grabY = 0;
+
+  /** @return true if a tile whose rect is r should sit AFTER the cursor. */
+  function insertsBefore(cx, cy, r) {
+    /* the cross axis first: a cursor on an earlier line goes before everything
+       on this one no matter where along the line it is */
+    if (isCol) {
+      if (cx < r.left) return !wrapRev;
+      if (cx > r.right) return wrapRev;
+      return rev ? cy > r.top + r.height / 2 : cy < r.top + r.height / 2;
+    }
+    if (cy < r.top) return !wrapRev;
+    if (cy > r.bottom) return wrapRev;
+    return rev ? cx > r.left + r.width / 2 : cx < r.left + r.width / 2;
+  }
+
+  function onMove(ev) {
+    if (!moving) {
+      if (Math.abs(ev.clientX - startX) < 5 && Math.abs(ev.clientY - startY) < 5) return;
+      moving = true;
+      RING_DRAGGING = true;
+      document.body.style.userSelect = "none";
+      var r0 = tile.getBoundingClientRect();
+      grabX = startX - r0.left;
+      grabY = startY - r0.top;
+    }
+    ev.preventDefault();
+    /* re-derived against the tile's CURRENT slot every time rather than
+       accumulated from the drag's start: a swap moves the slot out from under
+       the tile, and an offset measured against where it used to be would jump
+       by a whole tile each time. Same reasoning as startReelTileDrag(). */
+    var wantX = ev.clientX - grabX, wantY = ev.clientY - grabY;
+    tile.style.transform = "";
+    var at = tile.getBoundingClientRect();
+    tile.style.transform = "translate(" + (wantX - at.left) + "px," + (wantY - at.top) + "px)";
+
+    var cx = wantX + at.width / 2, cy = wantY + at.height / 2;
+    var target = null;
+    flowTilesOf(area).forEach(function (other) {
+      if (other === tile || target) return;
+      if (insertsBefore(cx, cy, other.getBoundingClientRect())) target = other;
+    });
+    if (target !== tile.nextElementSibling) {
+      area.insertBefore(tile, target);
+      tile.style.transform = "";
+      var moved = tile.getBoundingClientRect();
+      tile.style.transform = "translate(" + (wantX - moved.left) + "px," + (wantY - moved.top) + "px)";
+    }
+    positionRing();
+  }
+  function onUp() {
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    if (!moving) return; /* a plain click: leave the selection it already made */
+    RING_DRAGGING = false;
+    document.body.style.userSelect = "";
+    /* the click the browser fires next must not open a text edit, same as
+       every other drag, see wireResizable() */
+    JUST_DRAGGED = true;
+    setTimeout(function () { JUST_DRAGGED = false; }, 0);
+    tile.style.transform = "";
+    positionRing();
+    var after = flowTilesOf(area);
+    if (after.length === before.length &&
+        after.every(function (t, i) { return t === before[i]; })) return;
+    reorderFlowContent(area);
+    EDIT_UNDO.push({ type: "flowOrder", area: area, before: before, after: after });
+    EDIT_REDO.length = 0;
+  }
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
 }
 
 /**
@@ -1354,6 +1722,28 @@ function isTiledRoleEl(el) {
   return !!(el && el.hasAttribute &&
     (el.hasAttribute("data-extras-role") || el.hasAttribute("data-days-role") ||
      el.hasAttribute("data-gallery-role")));
+}
+
+/**
+ * True for an element a ta placed onto a tile whose children are stored
+ * against the TEMPLATE rather than against one entry - a gallery directory
+ * tile's, see TILE_CHILDREN. One descriptor renders into every tile in the
+ * rail, all carrying the same id, so it wants exactly the same live geometry
+ * mirror a shared ROLE gets (see mirrorTiledRoleGeometry()): without it,
+ * nudging the copy in one tile would leave the others where they were until
+ * the next reload put them all back in step.
+ *
+ * A bound child is always the only element inside its own .free-wrap (see
+ * placeInTile()), which is what distinguishes it from the tile's own template
+ * markup.
+ * @param el the element
+ * @return true if el is a shared tile child
+ */
+function isSharedTileChild(el) {
+  var wrap = el && el.parentElement;
+  return !!(wrap && wrap.classList && wrap.classList.contains("free-wrap") &&
+    wrap.parentElement && wrap.parentElement.hasAttribute &&
+    wrap.parentElement.hasAttribute("data-gallery-tile"));
 }
 
 /**
@@ -2059,7 +2449,7 @@ function mirrorTiledRoleStyle(el) {
  * @param el a just-moved/resized element, any kind
  */
 function mirrorTiledRoleGeometry(el) {
-  if (!isTiledRoleEl(el)) return;
+  if (!isTiledRoleEl(el) && !isSharedTileChild(el)) return;
   var id = elId(el);
   if (!id) return;
   var w = el.dataset.ovW, h = el.dataset.ovH;
@@ -2150,15 +2540,15 @@ function pushMoveUndo(id, before, after) {
  * @param before {w, h, tx, ty} before the drag
  * @param after {w, h, tx, ty} after the drag
  * @param area optional {id, before, after} for the flow container a resized
- *   TILE took height from, each side a {w, h} or null for "had no saved size"
- *   (see growFlowAreaForTiles()/setFlowAreaSavedSize())
+ *   TILE took room from, on either axis, each side a {w, h} or null for "had no
+ *   saved size" (see growFlowAreaForTiles()/setFlowAreaSavedSize())
  */
 function pushResizeUndo(id, before, after, area) {
   if (before.w === after.w && before.h === after.h && before.tx === after.tx && before.ty === after.ty) return;
   var entry = { type: "resize", id: id, before: before, after: after };
-  /* only when the container's own saved size actually moved: a y-EXPANDING
-     container (the default for both dashboard areas) is sized by its content,
-     so it follows the tiles back on its own and has nothing to record */
+  /* only when the container's own saved size actually moved: an EXPANDING axis
+     (y on both dashboard areas by default) is sized by its content, so it
+     follows the tiles back on its own and has nothing to record */
   if (area && !sameSavedSize(area.before, area.after)) entry.area = area;
   EDIT_UNDO.push(entry);
   EDIT_REDO.length = 0;
@@ -2197,8 +2587,21 @@ function setFlowAreaSavedSize(id, size) {
       area.style.height = "";
       delete area.dataset.ovH;
     }
+    /* the width half, now that a tile drag can grow that axis too (see
+       growFlowAreaForTiles()). Clearing ovW rather than leaving it behind
+       matters here: it's what applyElementAnchors() reads as "a ta chose a
+       width for this", so a stale one would keep the container pinned to a
+       width the undo just took away. */
+    if (size && size.w !== undefined) {
+      area.style.width = size.w + "px";
+      area.dataset.ovW = size.w;
+    } else {
+      area.style.width = "";
+      delete area.dataset.ovW;
+    }
   });
   applyTileFlow();
+  if (window.applyElementAnchors) applyElementAnchors();
 }
 
 /* the last content.sizes seen by applySizeOverrides(), so applyTileFlow() can
@@ -5705,6 +6108,10 @@ var STYLE_ROTATE_BEFORE = "0";
 /* the reel spacing sliders' pre-drag values, one undo step each per drag -
    see buildStyleMenu()'s spacing rows and primeStyleMenuReelRows() */
 var STYLE_REEL_BEFORE = { gap: REEL_DEFAULT_GAP, pad: REEL_DEFAULT_PAD };
+
+/* the same "one undo step per slider session, not per pixel" latch for the
+   tile flow containers' spacing slider, see areaFlowFor()'s "gap" */
+var STYLE_TILE_GAP_BEFORE = TILE_GAP_DEFAULT;
 /* same "value right before this popover session's edit" convention as
    STYLE_COLOR_BEFORE etc. above, for each row's "dark mode color" sub-row */
 var STYLE_DARKCOLOR_BEFORE = "";
@@ -5924,6 +6331,16 @@ function buildStyleMenu() {
       '<label class="sm-reel-pad-label">Vertical spacing</label>' +
       '<input type="range" class="sm-reel-pad" min="0" max="160" step="1">' +
       '<span class="sm-reel-pad-val">0px</span>' +
+    '</div>' +
+    /* how far apart a tile flow container's tiles sit (see areaFlowFor()'s
+       "gap"). Shown for the container AND for anything inside one, the same
+       reachability rule the reel rows above follow and the right-click
+       Container section already follows: the container is almost entirely
+       covered by its own tiles, so what a ta clicks on is a tile. */
+    '<div class="sm-row sm-tile-gap-row">' +
+      '<label>Tile spacing</label>' +
+      '<input type="range" class="sm-tile-gap" min="0" max="120" step="1">' +
+      '<span class="sm-tile-gap-val">10px</span>' +
     '</div>' +
     '<div class="sm-row">' +
       '<label>Opacity</label>' +
@@ -6594,6 +7011,31 @@ function buildStyleMenu() {
       });
     });
 
+  /* the tile flow containers' own spacing slider, wired exactly like the reel
+     pair above (live on input, one undo step on change) and resolved to the
+     CONTAINER rather than to whatever's selected, for the same reason: a ta
+     clicks a tile, not the transparent box laying it out. */
+  var tileGapInput = STYLE_MENU.querySelector(".sm-tile-gap");
+  var tileGapOut = STYLE_MENU.querySelector(".sm-tile-gap-val");
+  tileGapInput.addEventListener("input", function () {
+    var area = styleMenuFlowArea();
+    if (!area) return;
+    var px = parseInt(tileGapInput.value, 10) || 0;
+    tileGapOut.textContent = px + "px";
+    setAreaFlowProp(elId(area), "gap", px);
+  });
+  tileGapInput.addEventListener("change", function () {
+    var area = styleMenuFlowArea();
+    if (!area) return;
+    var after = parseInt(tileGapInput.value, 10) || 0;
+    if (after !== STYLE_TILE_GAP_BEFORE) {
+      EDIT_UNDO.push({ type: "areaGap", id: elId(area),
+        before: STYLE_TILE_GAP_BEFORE, after: after });
+      EDIT_REDO.length = 0;
+    }
+    STYLE_TILE_GAP_BEFORE = after;
+  });
+
   radiusInput.addEventListener("input", function () {
     if (!STYLE_MENU_ID) return;
     var el = styleMenuEl();
@@ -6866,6 +7308,15 @@ function styleMenuEl() {
  */
 function styleMenuElById(id) {
   return document.querySelector(idSel(id));
+}
+
+/**
+ * The tile flow container the popover's spacing slider should act on: the one
+ * whatever it currently has selected belongs to (see flowAreaForEl()).
+ * @return the container, or null if the popover isn't on one
+ */
+function styleMenuFlowArea() {
+  return flowAreaForEl(STYLE_MENU_ID && styleMenuElById(STYLE_MENU_ID));
 }
 
 /**
@@ -7484,6 +7935,11 @@ function toggleStyleMenu(anchorEl) {
     row.style.display = reelPanel ? "" : "none";
   });
   if (reelPanel) primeStyleMenuReelRows(reelPanel);
+  /* the flow containers' equivalent, on the container and on everything inside
+     one alike - see flowAreaForEl() */
+  var gapArea = flowAreaForEl(el);
+  STYLE_MENU.querySelector(".sm-tile-gap-row").style.display = gapArea ? "" : "none";
+  if (gapArea) primeStyleMenuTileGapRow(gapArea);
 
   var tintInput = STYLE_MENU.querySelector(".sm-tint");
   var shadeInput = STYLE_MENU.querySelector(".sm-shade");
@@ -7590,6 +8046,20 @@ function primeStyleMenuReelRows(panel) {
   STYLE_MENU.querySelector(".sm-reel-pad").value = pad;
   STYLE_MENU.querySelector(".sm-reel-pad-val").textContent = pad + "px";
   STYLE_REEL_BEFORE = { gap: gap, pad: pad };
+}
+
+/**
+ * Fills the popover's tile spacing slider in from one flow container's current
+ * gap. Split out from toggleStyleMenu() for the same reason
+ * primeStyleMenuReelRows() is: undo/redo has to be able to refresh the slider
+ * while the popover is still open.
+ * @param area the flow container the popover is currently acting on
+ */
+function primeStyleMenuTileGapRow(area) {
+  var gap = areaFlowFor(elId(area)).gap;
+  STYLE_MENU.querySelector(".sm-tile-gap").value = gap;
+  STYLE_MENU.querySelector(".sm-tile-gap-val").textContent = gap + "px";
+  STYLE_TILE_GAP_BEFORE = gap;
 }
 
 /** Closes the style popover, if open. */
@@ -8324,6 +8794,14 @@ function startMoveDrag(e) {
     startReelTileDrag(e, RING_EL);
     return;
   }
+  /* and a flow container's tile moves the same way, through its container's
+     running order rather than to a free position, see startFlowTileDrag() */
+  if (isTileBoxEl(RING_EL) && flowAreaOf(RING_EL) && !isLocked(elId(RING_EL))) {
+    e.preventDefault();
+    e.stopPropagation();
+    startFlowTileDrag(e, RING_EL);
+    return;
+  }
   /* see isMoveLockedTileRole() */
   if (isLocked(elId(RING_EL)) || isMoveLockedTileRole(RING_EL)) return;
   e.preventDefault();
@@ -8893,6 +9371,8 @@ function variableByKey(key) {
   if (dv) return dv;
   var ev = extrasTileVariableFor(key);
   if (ev) return ev;
+  var gd = galleryDirVariableFor(key);
+  if (gd) return gd;
   for (var i = 0; i < VARIABLES.length; i++) {
     if (VARIABLES[i].key === key) return VARIABLES[i];
   }
@@ -8965,6 +9445,15 @@ function scopedPageLocalVariables(scopeEl) {
   if (xTile && xTile.dataset.extrasVar) {
     out.push(extrasTileVariableFor(TILE_VAR_PREFIX + "extras:" + xTile.dataset.extrasVar));
   }
+  /* a directory tile's own name, scoped to the tile the field sits in for
+     exactly the reason a day tile's locals are: the rail's label is one shared
+     template rendered per directory, so offering every OTHER directory's name
+     while editing it would be offering a binding that can't be what the ta
+     means (see galleryDirVariableFor()) */
+  var gTile = closest("[data-gallery-tile]");
+  if (gTile && gTile.dataset.galleryDir) {
+    out.push(galleryDirVariableFor(TILE_VAR_PREFIX + "gallerydir:" + gTile.dataset.galleryDir));
+  }
   if (currentPageKey() === "gallery") out = out.concat(galleryVariableInventory());
   return out;
 }
@@ -8986,7 +9475,8 @@ function scopedPageLocalVariables(scopeEl) {
  * @return an array of variable records, empty on a page with none
  */
 function pageLocalVariables() {
-  var out = dayTileVariableInventory().concat(extrasTileVariableInventory());
+  var out = dayTileVariableInventory().concat(extrasTileVariableInventory())
+    .concat(galleryDirVariableInventory());
   if (currentPageKey() === "gallery") out = out.concat(galleryVariableInventory());
   return out;
 }
@@ -10107,6 +10597,63 @@ function extrasTileVariableInventory() {
   return extrasTileScopes().map(function (s) { return extrasTileVariableFor(TILE_VAR_PREFIX + "extras:" + s.scope); });
 }
 
+/**
+ * Every directory tile currently in the gallery's rail, one entry per distinct
+ * directory - same dedupe idea as extrasTileScopes(), keyed by the directory
+ * name the tile is bound to.
+ * @return an array of {scope, tile}, scope being the directory name
+ */
+function galleryDirTileScopes() {
+  var seen = {};
+  var out = [];
+  document.querySelectorAll("[data-gallery-tile]").forEach(function (tile) {
+    var scope = tile.dataset.galleryDir;
+    if (!scope || seen[scope]) return;
+    seen[scope] = true;
+    out.push({ scope: scope, tile: tile });
+  });
+  return out;
+}
+
+/**
+ * Builds the variable-shaped record one directory tile's NAME resolves to -
+ * the rail's counterpart of extrasTileVariableFor(), and the record behind the
+ * ${Gallery2026Name} chip a directory tile's label ships with (see
+ * buildGalleryDirChipHtml()).
+ *
+ * It could always be typed and it always resolved (localChipHtmlForToken()
+ * has recognised the token since the chip existed), but nothing ever OFFERED
+ * it: the formula menu's picker is built from pageLocalVariables(), and the
+ * gallery only ever contributed its two per-pane numbers there. So the one
+ * variable a ta actually needs while editing a directory tile was the one
+ * variable they had to already know the name of.
+ * @param key a key built as TILE_VAR_PREFIX + "gallerydir:" + directory name
+ * @return a {key, name, type, value} record, or null if key isn't one
+ */
+function galleryDirVariableFor(key) {
+  var prefix = TILE_VAR_PREFIX + "gallerydir:";
+  if (typeof key !== "string" || key.indexOf(prefix) !== 0) return null;
+  var scope = key.slice(prefix.length);
+  if (!scope) return null;
+  var found = galleryDirTileScopes().filter(function (s) { return s.scope === scope; })[0];
+  /* derived - see variableNotationToken(). The token is the same bare
+     "Gallery2026Name" a directory label's own chip shows while mid-edit, see
+     localChipToken(). */
+  return { key: key, name: galleryVarScope(scope) + "Name", type: "string",
+    value: found ? (found.tile.dataset.galleryDir || "") : "",
+    derived: true, token: galleryVarScope(scope) + "Name" };
+}
+
+/**
+ * Every directory tile's own name variable, in rail order.
+ * @return an array of variable records
+ */
+function galleryDirVariableInventory() {
+  return galleryDirTileScopes().map(function (s) {
+    return galleryDirVariableFor(TILE_VAR_PREFIX + "gallerydir:" + s.scope);
+  });
+}
+
 /* ---------------------------------------------------------------------------
    THE GALLERY PAGE'S OWN VARIABLES AND ACTIONS
 
@@ -11181,6 +11728,15 @@ function buildCustomElementNode(d) {
 function placeInTile(tileEl, el, x, y) {
   var wrap = document.createElement("span");
   wrap.className = "free-wrap";
+  /* marks this wrap as holding a BOUND CHILD rather than one of the tile's own
+     template pieces. Both end up in a .free-wrap - detachFromFlow() wraps any
+     tile role that carries a saved size or position - and renderTileChildren()
+     clears the children out before rebuilding them, so without something to
+     tell the two apart it would take the tile's own rect and label with them.
+     Harmless where that function is called right after a fresh innerHTML (the
+     dashboard's two areas, where nothing has been detached yet); the gallery
+     rail's shared children are rebuilt into LIVE tiles, where it isn't. */
+  wrap.dataset.tileChild = "1";
   wrap.style.position = "absolute";
   wrap.style.left = x + "px";
   wrap.style.top = y + "px";
@@ -11601,6 +12157,25 @@ function saveDays(list) {
   snapshot.days = list;
   try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
 }
+
+/**
+ * Persists the whole gallery block into the shared snapshot, the gallery
+ * page's equivalent of saveExtras()/saveDays() - needed so a directory rail a
+ * ta has reordered from the visual editor (see startFlowTileDrag()) survives
+ * Apply/reload. Called from js/gallery.js, which owns the block; written
+ * wholesale rather than key-by-key because the caller always hands over the
+ * complete object it is itself rendering from.
+ * @param gallery content.gallery, {years, images, video, ...}
+ */
+function saveGallery(gallery) {
+  var raw;
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  snapshot.gallery = gallery;
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
+}
+window.saveGallery = saveGallery;
 
 /**
  * Looks up any element by its id, the page's own included (see idSel()),
@@ -12184,7 +12759,8 @@ var REEL_DEFAULT_TILE_COUNT = 4;
    ever needs one owner, and the more specific/innermost selector should
    generally come first). See addBoundElement() for how the owning content
    array is resolved once a tile element is found. */
-var BOUND_TILE_SELECTORS = ['[data-reel-tile="1"]', '[data-extras-tile="1"]', '[data-days-tile="1"]'];
+var BOUND_TILE_SELECTORS = ['[data-reel-tile="1"]', '[data-extras-tile="1"]', '[data-days-tile="1"]',
+  '[data-gallery-tile="1"]'];
 
 /**
  * Finds the tile (reel, attachments, or day - see BOUND_TILE_SELECTORS)
@@ -12475,6 +13051,25 @@ function findBoundTileOwner(tileEl) {
     if (!dEntry.children) dEntry.children = [];
     return { children: dEntry.children, persist: function () { saveDays(window.DAYS); } };
   }
+  /* a gallery directory tile's owner is the TEMPLATE, not the directory: there
+     is no per-directory entry to hang anything off (content.gallery.years is a
+     list of bare strings), and every tile in the rail is one rendering of one
+     shared template anyway - so what's placed on one is placed on all of them,
+     the same way the rect and the label already are. See TILE_CHILDREN. */
+  if (tileEl.hasAttribute("data-gallery-tile")) {
+    var gid = tileId || "gallery.dir.tile";
+    var gChildren = tileChildrenFor(gid).slice();
+    return { children: gChildren, persist: function () {
+      saveTileChildren(gid, gChildren);
+      /* the drop landed on one tile, but what was saved belongs to all of
+         them, so every sibling is given the same child right now rather than
+         only on the next render - the live half of the same mirror
+         mirrorTiledRoleGeometry() does for a role's geometry */
+      document.querySelectorAll('[data-gallery-tile]').forEach(function (other) {
+        if (other !== tileEl) renderTileChildren(other, gChildren);
+      });
+    } };
+  }
   return null;
 }
 
@@ -12555,7 +13150,9 @@ function addBoundElement(tileEl, kind, d, extra) {
  * @param children the tile's own saved children array (may be empty/undefined)
  */
 function renderTileChildren(tileEl, children) {
-  tileEl.querySelectorAll(":scope > .free-wrap").forEach(function (w) { w.remove(); });
+  /* only the wraps holding bound children, never the ones detachFromFlow() put
+     around the tile's own rect/icon/text/button - see placeInTile() */
+  tileEl.querySelectorAll(":scope > .free-wrap[data-tile-child]").forEach(function (w) { w.remove(); });
   (children || []).forEach(function (d) {
     var el = buildCustomElementNode(d);
     placeInTile(tileEl, el, d.left || 0, d.top || 0);
@@ -12588,6 +13185,7 @@ function applyLiveAreaOverrides(data) {
   if (!data) return;
   applyTextOverrides(data.text || {});
   applyAreaFlowOverrides(data.area_flow);
+  applyTileChildrenOverrides(data.tile_children);
   /* the tiles are tiled to their real track width BEFORE the size sweep, not
      just after it. applySizeOverrides() detaches every element that carries a
      saved size, and detachFromFlow() freezes that element's wrap at whatever it
@@ -14657,8 +15255,12 @@ function wireResizable() {
 
     /* locked: don't even start tracking a possible drag, see isLocked() */
     if (isLocked(elId(el))) return;
-    /* a tile selects (so its resize handles and style popover are reachable)
-       but never drags, see isMoveLockedTileRole() */
+    /* a flow container's tile is grabbed by its background and carried to a
+       new place in the running order, exactly like the reel tile just above -
+       see startFlowTileDrag() */
+    if (isTileBoxEl(el) && flowAreaOf(el)) { startFlowTileDrag(e, el); return; }
+    /* every other tile selects (so its resize handles and style popover are
+       reachable) but never drags, see isMoveLockedTileRole() */
     if (isMoveLockedTileRole(el)) return;
 
     var startX = e.clientX, startY = e.clientY;
@@ -16553,6 +17155,28 @@ function applyHistoryAction(action, side) {
     positionRing();
     return;
   }
+  /* a flow container's tile spacing (see areaFlowFor()'s "gap"), keyed by the
+     CONTAINER's id even though the popover that changed it was usually opened
+     on a tile - same "this belongs to the layout as a whole" reasoning as the
+     three reel-wide edits just above */
+  /* a flow container's running order (see startFlowTileDrag()). Both sides are
+     the tile ELEMENTS themselves rather than any id - see applyFlowTileOrder()
+     for why, and for what happens to an entry a re-render has invalidated */
+  if (action.type === "flowOrder") {
+    applyFlowTileOrder(action.area, val);
+    positionRing();
+    return;
+  }
+  if (action.type === "areaGap") {
+    setAreaFlowProp(action.id, "gap", val);
+    var gapEl = elByAnyId(action.id);
+    if (gapEl && STYLE_MENU_ID && STYLE_MENU && STYLE_MENU.classList.contains("show") &&
+        flowAreaForEl(styleMenuElById(STYLE_MENU_ID)) === gapEl) {
+      primeStyleMenuTileGapRow(gapEl);
+    }
+    positionRing();
+    return;
+  }
   if (action.type === "locked") {
     toggleLocked(action.id);
     return;
@@ -18104,6 +18728,7 @@ function applySharedOverridePasses(data, textMap) {
   /* before the renderExtras/renderDays hooks below, which build the tiles
      these containers lay out - see applyTileFlow() */
   applyAreaFlowOverrides(data.area_flow);
+  applyTileChildrenOverrides(data.tile_children);
   applyProgressBindings(data.progress_fill, data.dark_progress_fill, data.progress_track, data.dark_progress_track);
   repaintFormulaChips();
   applyShadowOverrides(data.shadow);

@@ -1191,6 +1191,28 @@ body.edit-mode #loginErrorAnchor { min-height: 50px; }
   font-size: .95rem;
 }
 .login-field-input:focus { outline: none; }
+/* chrome and edge paint their own opaque "this one was autofilled" background
+   directly onto the <input>, and that input fills .login-field-box edge to
+   edge - so a ta who recoloured the box watched their colour disappear behind
+   a pale yellow rectangle the moment the browser filled a saved username in,
+   on the live page and in the editor's own preview alike. The box is the
+   element the whole login field is designed to be styled through (see
+   .login-field-box above), so the browser's own fill has to stay out of it.
+   background-clip: text confines that background to the glyphs (ie nowhere
+   visible), and the absurd transition delay is the companion half of the same
+   well-worn trick - chrome ANIMATES the colour in rather than setting it, so a
+   delay it never reaches keeps it from arriving at all. -webkit-text-fill-color
+   is restated because clipping the background to the text would otherwise take
+   the text's own colour with it. */
+.login-field-input:-webkit-autofill,
+.login-field-input:-webkit-autofill:hover,
+.login-field-input:-webkit-autofill:focus,
+.login-field-input:-webkit-autofill:active {
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: currentColor;
+  transition: background-color 0s 100000s, color 0s 100000s;
+}
 /* the greyed placeholder as a real editable text field laid over the input
    rather than the input's own placeholder attribute - the only way it could
    be reworded, recoloured, resized and moved like any other text on the site.

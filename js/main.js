@@ -904,6 +904,23 @@ function flowAreaOf(tile) {
  * @return its min-content width in css px
  */
 function minContentWidthOf(el) {
+  /* every .free-wrap inside el is relaxed for the duration of the measurement.
+     A wrap carries a hard px width - the flow slot it froze open when the
+     element inside it was detached (see detachFromFlow()) - and a hard px width
+     on an in-flow block IS its parent's min-content width as far as css is
+     concerned. So one stale wrap answers this question on the whole tile's
+     behalf: a day card whose blurb froze at ~1030px (its width before the days
+     grid had tiled it down to ~340px) reported 1030px as the narrowest it could
+     ever be, and the first mousemove of ANY resize drag on that card - a pure
+     height drag included - snapped it straight out to full width, one column,
+     every day stacked down the page.
+     Relaxing them is also the honest answer rather than a workaround: what a
+     wrap holds is the slot of an element that is now position:absolute, and
+     out-of-flow content cannot bleed out of el no matter how narrow el gets,
+     which is the only thing this function is asking about. */
+  var wraps = [].slice.call(el.querySelectorAll(".free-wrap"));
+  var wrapW = wraps.map(function (wrap) { return wrap.style.width; });
+  wraps.forEach(function (wrap) { wrap.style.width = "auto"; });
   var w = el.style.width, mw = el.style.minWidth, xw = el.style.maxWidth;
   el.style.width = "min-content";
   el.style.minWidth = "min-content";
@@ -912,6 +929,7 @@ function minContentWidthOf(el) {
   el.style.width = w;
   el.style.minWidth = mw;
   el.style.maxWidth = xw;
+  wraps.forEach(function (wrap, i) { wrap.style.width = wrapW[i]; });
   return out;
 }
 
@@ -2079,6 +2097,25 @@ function applyMoveSide(el, pos) {
  * @param box {w, h, tx, ty}
  */
 function applyResizeSide(el, box) {
+  /* a tile has no box of its own to put back. "This tile is 340px wide" means
+     "this container's tracks are 340px wide" (see setTileTrackSize()), which is
+     why applySizeOverrides() skips tiles on load too. Replaying one through the
+     generic path below wrote a width onto a single grid item and left the
+     CONTAINER still tiled at whatever the drag ended on, so undoing a widened
+     day card put the card back to 340px inside a grid that was still one column
+     wide - the cards stayed stacked down the page, each one narrow again, which
+     is neither the state before the drag nor the state after it. Worse, the
+     detachFromFlow() below pulled the tile out of the grid it is laid out by. */
+  if (isTileBoxEl(el)) {
+    setTileTrackSize(el, box.w, box.h);
+    commitSize(el);
+    /* the container may have taken height to fit a taller tile mid-drag (see
+       growFlowAreaForTiles()); putting that back is the "area" half of the
+       history entry, replayed by applyHistoryAction() once every tile is done */
+    growFlowAreaForTiles(el, true);
+    positionRing();
+    return;
+  }
   detachFromFlow(el);
   setBox(el, box.w, box.h);
   setOwnPos(el, box.tx, box.ty);
@@ -2112,11 +2149,56 @@ function pushMoveUndo(id, before, after) {
  * @param id the element's data-edit-id or data-resize-id
  * @param before {w, h, tx, ty} before the drag
  * @param after {w, h, tx, ty} after the drag
+ * @param area optional {id, before, after} for the flow container a resized
+ *   TILE took height from, each side a {w, h} or null for "had no saved size"
+ *   (see growFlowAreaForTiles()/setFlowAreaSavedSize())
  */
-function pushResizeUndo(id, before, after) {
+function pushResizeUndo(id, before, after, area) {
   if (before.w === after.w && before.h === after.h && before.tx === after.tx && before.ty === after.ty) return;
-  EDIT_UNDO.push({ type: "resize", id: id, before: before, after: after });
+  var entry = { type: "resize", id: id, before: before, after: after };
+  /* only when the container's own saved size actually moved: a y-EXPANDING
+     container (the default for both dashboard areas) is sized by its content,
+     so it follows the tiles back on its own and has nothing to record */
+  if (area && !sameSavedSize(area.before, area.after)) entry.area = area;
+  EDIT_UNDO.push(entry);
   EDIT_REDO.length = 0;
+}
+
+/**
+ * Whether two content.sizes records describe the same box, either of them
+ * possibly absent ("no saved size at all", which is a state in its own right -
+ * see applySizeOverrides()).
+ * @param a a {w, h} or null/undefined
+ * @param b a {w, h} or null/undefined
+ * @return true if they mean the same thing
+ */
+function sameSavedSize(a, b) {
+  if (!a || !b) return !a && !b;
+  return a.w === b.w && a.h === b.h;
+}
+
+/**
+ * Puts one flow container's saved size back to an exact record (or to none at
+ * all), DOM and content.sizes together, and re-runs the layout that reads it.
+ * The counterpart of growFlowAreaForTiles(), which only ever grows a container
+ * and so can't be its own inverse: undoing the tile drag that grew it has to
+ * say the old height out loud.
+ * @param id the container's data-resize-id
+ * @param size a {w, h}, or null to go back to having no saved size
+ */
+function setFlowAreaSavedSize(id, size) {
+  if (!id) return;
+  saveEditedSize(id, size || null);
+  flowAreasWithId(id).forEach(function (area) {
+    if (size && size.h !== undefined) {
+      area.style.height = size.h + "px";
+      area.dataset.ovH = size.h;
+    } else {
+      area.style.height = "";
+      delete area.dataset.ovH;
+    }
+  });
+  applyTileFlow();
 }
 
 /* the last content.sizes seen by applySizeOverrides(), so applyTileFlow() can
@@ -8065,6 +8147,13 @@ function startResizeDrag(e) {
      container skips freezeDescendants() for the same reason it always has -
      reflowing its contents IS the point of resizing it, see freezeDescendants(). */
   var tileBox = isTileBoxEl(el);
+  /* a tile drag can take its container's saved height with it (see
+     growFlowAreaForTiles()), and that grow-only path is not its own inverse -
+     so the container's record is grabbed here, before the first mousemove
+     touches it, and rides along on the history entry */
+  var tileArea = tileBox ? flowAreaOf(el) : null;
+  var areaId = tileArea ? elId(tileArea) : null;
+  var areaBefore = areaId ? EDIT_SIZES[areaId] : null;
   var minW = 0, cap = null;
   if (tileBox) {
     cap = tileSizeCap(el);
@@ -8196,7 +8285,8 @@ function startResizeDrag(e) {
     if (tileBox) growFlowAreaForTiles(el, true);
     pushResizeUndo(elId(el),
       { w: start.w, h: start.h, tx: base.tx, ty: base.ty },
-      { w: s.w, h: s.h, tx: p.tx, ty: p.ty });
+      { w: s.w, h: s.h, tx: p.tx, ty: p.ty },
+      areaId ? { id: areaId, before: areaBefore, after: EDIT_SIZES[areaId] } : null);
   }
   document.addEventListener("mousemove", onMove);
   document.addEventListener("mouseup", onUp);
@@ -8467,6 +8557,24 @@ function resetSizeDbl(e) {
   if (isReelTileEl(el)) return;
   var before = getSize(el);
   var pos = getPos(el);
+  /* a tile's size isn't resetBox()'s to restore either, and for the same reason
+     applyResizeSide() has its own branch for one: the size lives on the
+     container's tracks (see setTileTrackSize()), so clearing it is a re-tile.
+     resetBox() would instead pin the template default onto this one grid item -
+     as a hard inline width, inside tracks still sized by the resize being reset
+     away from - and leave every sibling tile at the old size. */
+  if (isTileBoxEl(el)) {
+    var tileId = elId(el);
+    document.querySelectorAll('[data-resize-id="' + tileId + '"], [data-edit-id="' + tileId + '"]')
+      .forEach(function (t) { delete t.dataset.ovW; delete t.dataset.ovH; });
+    saveEditedSize(tileId, null);
+    applyTileFlow();
+    var reset = getSize(el);
+    pushResizeUndo(tileId, { w: before.w, h: before.h, tx: pos.tx, ty: pos.ty },
+      { w: reset.w, h: reset.h, tx: pos.tx, ty: pos.ty });
+    positionRing();
+    return;
+  }
   resetBox(el);
   saveEditedSize(elId(el), null);
   /* a flow container's box isn't resetBox()'s to restore: its height is
@@ -11403,6 +11511,19 @@ function applyElementAnchors() {
          is never seeded with one, see buildCustomElement()). */
       el.dataset.natW = colW;
       if (el.dataset.natH === undefined) el.dataset.natH = el.getBoundingClientRect().height;
+      /* a login field's input rectangle rides along. It's a plain block child,
+         so it fills the field for free RIGHT UP UNTIL something detaches it
+         (a saved position, a saved size, a nudge in the editor) - after which
+         it's absolutely positioned at a frozen px width and stops following the
+         field entirely, which is what left one credential box visibly narrower
+         than the other. Only while the ta hasn't dragged a width of their own:
+         an explicit choice wins here exactly as it does for the field. */
+      var lfBox = el.querySelector(":scope > .free-wrap > .login-field-box, :scope > .login-field-box");
+      if (lfBox && lfBox.dataset.ovW === undefined && getComputedStyle(lfBox).position === "absolute") {
+        lfBox.style.width = colW + "px";
+        lfBox.dataset.natW = colW;
+        if (lfBox.parentElement.classList.contains("free-wrap")) lfBox.parentElement.style.width = colW + "px";
+      }
     }
   });
 }
@@ -12466,8 +12587,23 @@ window.renderTileChildren = renderTileChildren;
 function applyLiveAreaOverrides(data) {
   if (!data) return;
   applyTextOverrides(data.text || {});
-  applySizeOverrides(data.sizes);
   applyAreaFlowOverrides(data.area_flow);
+  /* the tiles are tiled to their real track width BEFORE the size sweep, not
+     just after it. applySizeOverrides() detaches every element that carries a
+     saved size, and detachFromFlow() freezes that element's wrap at whatever it
+     measures AT THAT MOMENT - so running it first froze the wraps inside a day
+     card against a card that was still a full-width one-column grid item,
+     leaving ~1030px slots inside a card about to become ~340px wide. That stale
+     figure then became the card's own min-content width (see
+     minContentWidthOf(), which no longer trusts a wrap either) and snapped the
+     tile to full width on the first mousemove of any resize.
+     EDIT_SIZES is seeded by hand here because that's the one thing this pass
+     needs out of the sizes map - it's the map applyTileFlow() reads a tile's
+     track size back out of, and applySizeOverrides() assigns exactly the same
+     thing as its own first statement a line later. */
+  EDIT_SIZES = data.sizes || {};
+  applyTileFlow();
+  applySizeOverrides(data.sizes);
   /* between the size and position sweeps, not after both. It reads the tile
      and container sizes applySizeOverrides() has just loaded, and what it
      does with them - how many columns, therefore how wide a tile, therefore
@@ -16323,7 +16459,9 @@ function redoEdit() {
  *  - "delete": existed (before) vs hidden (after)
  *  - "move": {tx, ty}
  *  - "resize": {w, h, tx, ty} (a resize can also shift position, see
- *    startResizeDrag())
+ *    startResizeDrag()). A TILE resize carries an extra action.area,
+ *    {id, before, after}, for the container whose own saved height the drag
+ *    changed on the way past - see growFlowAreaForTiles()/pushResizeUndo()
  *  - "fontsize": css font-size, or "" for the template default
  *  - "align"/"letterspacing"/"texttransform": the css value, or "" for the
  *    template default
@@ -16449,6 +16587,10 @@ function applyHistoryAction(action, side) {
       if (action.type === "move") applyMoveSide(el, val);
       else applyResizeSide(el, val);
     });
+    /* after every tile, not before: applyResizeSide() re-runs
+       growFlowAreaForTiles() as it puts each one back, and that only ever grows
+       the container - so the recorded height has to be the last word */
+    if (action.area) setFlowAreaSavedSize(action.area.id, action.area[side]);
     return;
   }
   if (action.type === "groupmove") {
@@ -17932,6 +18074,18 @@ function applySharedOverridePasses(data, textMap) {
   repaintInlineTextColors();
   applyThemeIconOverrides(data.theme_icons);
   if (window.refreshThemeToggles) window.refreshThemeToggles();
+  /* a first anchor pass BEFORE the size/position sweeps, as well as the real
+     one at the end. Those two sweeps are what detach elements from flow, and
+     detachFromFlow() freezes an element at the width it measures right then -
+     while an anchored element is still sitting at the hand-measured seed width
+     from app/db.py, because widening it to the column it anchors into is
+     exactly what this pass does. That's how the login page's password box came
+     out 300px wide (the seeded _LOGIN_PASS_ENTRY figure) inside a 350px field:
+     the box has a saved position, applyPositionOverrides() detached it, and the
+     frozen 300px was then its width for good - on the live page as much as in
+     the editor. Idempotent and cheap (it re-reads each anchor's live rect), and
+     the closing pass still has the last word once every sweep has run. */
+  applyElementAnchors();
   applySizeOverrides(data.sizes);
   applyFontSizeOverrides(data.font_sizes);
   applyTextStyleOverrides(data.text_styles);

@@ -1,10 +1,7 @@
-/* preview page. shows the ta portal's unsaved STATE inside the real landing
-   page and dashboard by loading them in an iframe with ?preview=1, which
-   tells js/main.js and js/dashboard.js to read the "preview_content"
-   snapshot in localStorage (written by js/ta.js's Preview button) instead
-   of fetching /api/content. look-only: click-to-edit lives in the ta portal's
-   own Visual editor tab (instructor.html/js/ta.js), same engine
-   (js/main.js's wireClickToEdit()). */
+/* preview page. Loads the real landing page/dashboard in an iframe with
+   ?preview=1, which tells main.js and dashboard.js to read the
+   "preview_content" snapshot from localStorage instead of /api/content.
+   Look-only; click-to-edit lives in the portal's Visual editor tab. */
 
 /* only ta keys get in here */
 function gateCheck() {
@@ -20,12 +17,13 @@ var TAB_PAGES = {
   landing: "index.html?preview=1",
   dashboard: "dashboard.html?preview=1",
   login: "login.html?preview=1",
-  gallery: "gallery.html?preview=1"
+  gallery: "gallery.html?preview=1",
+  notfound: "404.html?preview=1"
 };
 
 /**
  * Points the iframe at the given tab's page and marks it active.
- * @param name "landing", "dashboard", "login", or "gallery"
+ * @param name "landing", "dashboard", "login", "gallery", or "notfound"
  */
 function showTab(name) {
   if (!TAB_PAGES[name]) name = "landing";

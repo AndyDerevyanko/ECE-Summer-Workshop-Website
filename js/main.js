@@ -16,17 +16,15 @@ var CHECK_ICON_SVG =
   'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12.5l5 5L20 6.5" /></svg>';
 
 /**
- * Builds one logistics tile ("2 weeks", "4 hours", "SFB520", certificate, etc).
- * Text is click-to-editable in the visual editor (see wireClickToEdit()), tagged
- * with the tile's index so an edit writes straight back into content.logistics
- * instead of a template-default override. Text only: the tiles render from
- * that array rather than from their own markup, which is why the right-click
- * menu leaves them out of Duplicate/Delete (see isSpecial in
- * renderCtxMenuRoot()) - so the array's LENGTH currently has no ui behind it
- * at all, now that the content manager's own "Info tiles" list is gone.
+ * Builds one logistics tile ("2 weeks", "4 hours", "SFB520", certificate).
  * @param t {big, lbl, icon} tile data
  * @param i the tile's index in the logistics array
  * @return the tile's card element
+ * @note Text is click-to-editable and tagged with the tile's index, so an
+ * edit writes back into content.logistics rather than a template-default
+ * override. Text only: the tiles render from that array, not from their own
+ * markup, which is why the right-click menu leaves them out of
+ * Duplicate/Delete - so the array's LENGTH has no ui behind it at all.
  */
 function logisticsTile(t, i) {
   var card = document.createElement("div");
@@ -97,26 +95,22 @@ function isPreviewMode() {
 }
 
 /**
- * Checks whether this page is the reusable-object mini editor's blank
- * canvas (templates/object-editor.html), rather than a real page or a page
- * preview. Same click-to-edit/resize/color/group/etc engine as the Visual
- * editor tab, just aimed at building one reusable bundle instead of editing
- * the live page, see initObjectCanvas()/snapshotKey().
+ * Checks whether this page is the reusable-object mini editor's blank canvas.
  * @return true if ?object=1 is set
+ * @note Same click-to-edit/resize/colour/group engine as the Visual editor
+ * tab, aimed at building one reusable bundle instead of the live page.
  */
 function isObjectMode() {
   return /[?&]object=1(&|$)/.test(window.location.search);
 }
 
 /**
- * The localStorage key every save*()/apply*Overrides() draft in this file
- * reads and writes: the shared "preview_content" snapshot on a real page/
- * preview (see js/ta.js's writePreviewSnapshot()), or the object mini
- * editor's own "object_content" scene when isObjectMode(). This one switch
- * is what lets the entire visual editor engine (resize, move, color, tint,
- * group, layers, undo, all of it) work unmodified against a blank object
- * canvas, exactly the same code path, just a different piece of storage.
+ * The localStorage key every save*()/apply*Overrides() draft here reads and
+ * writes: the shared "preview_content" snapshot, or the object editor's own
+ * "object_content" scene when isObjectMode().
  * @return the localStorage key to use
+ * @note This one switch is what lets the whole editor engine work unmodified
+ * against a blank object canvas - same code path, different storage.
  */
 function snapshotKey() {
   return isObjectMode() ? "object_content" : "preview_content";
@@ -129,12 +123,10 @@ function snapshotKey() {
    placeObject()/renderCtxMenuObjectPicker()). */
 var OBJECTS_LIBRARY = [];
 
-/* the object-editor.html tab opened from the right-click menu's own "New
-   object..." option, reused (not reopened) on repeat clicks, same
-   window.open(url, name) reuse pattern js/ta.js's openObjectEditor() uses
-   for the portal's "New object"/Edit buttons, and the same window NAME
-   ("ta_object_editor") so opening from either place reuses one tab rather
-   than juggling two. */
+/* the object-editor.html tab opened from the right-click menu's "New
+   object...", reused rather than reopened on repeat clicks. Same window NAME
+   as ta.js's openObjectEditor(), so opening from either place reuses one
+   tab. */
 var OBJECT_EDITOR_TAB = null;
 
 /**
@@ -154,12 +146,10 @@ function openNewObjectEditor() {
 
 /**
  * Fetches the shared reusable-objects library (ta-only, needs the bearer
- * token, same convention assetFetch() already uses for icons/videos/fonts
- * since this file never loads js/ta.js's own authedFetch()). Resolves to []
- * on any failure (not logged in, network error) rather than rejecting, so a
- * real visitor's page load (which never calls this) or a stale/expired
- * session just sees an empty picker instead of breaking anything.
+ * token, same convention as assetFetch()).
  * @return a promise resolving to the objects list
+ * @note Resolves to [] on any failure rather than rejecting, so a visitor's
+ * page load or an expired session sees an empty picker, not a broken page.
  */
 function fetchObjectsLibrary() {
   return assetFetch("/api/objects")
@@ -168,14 +158,12 @@ function fetchObjectsLibrary() {
 }
 
 /**
- * Loads whatever's in the object mini editor's own canvas (a blank scene
- * until something's placed in it, see templates/object-editor.html), plus
- * the shared objects library (see fetchObjectsLibrary(), so a saved object
- * is placeable inside another object too). Mirrors fetchContent()'s "read
- * the shared draft, mojibake-repair it" shape, but the scene itself is
- * never the server's /api/content, an object canvas has no page of its own
- * to fall back to.
+ * Loads whatever is in the object editor's canvas, plus the shared objects
+ * library - so a saved object is placeable inside another object too.
  * @return a promise resolving to the canvas's current content-shaped scene
+ * @note Mirrors fetchContent()'s "read the draft, mojibake-repair it" shape,
+ * but the scene is never /api/content: an object canvas has no page to fall
+ * back to.
  */
 function fetchObjectContent() {
   var raw;
@@ -197,15 +185,13 @@ var CP1252_C1 = [
 ];
 
 /**
- * Reverses "typed/pasted as utf-8, misread as windows-1252" mojibake (eg.
- * an en dash saved somewhere that reads bytes back as cp1252), without
- * touching genuinely accented text: only fires if every character maps to
- * a single cp1252 byte AND those bytes form valid utf-8, which plain
- * latin-1 text almost never does by chance. Loops so text corrupted more
- * than once unwraps fully in one call, capped so a weird string can't loop
- * forever.
+ * Reverses "typed as utf-8, misread as windows-1252" mojibake, without
+ * touching genuinely accented text.
  * @param str the string to check/repair
  * @return the repaired string, or the original untouched if it wasn't mojibake
+ * @note Only fires if every character maps to a single cp1252 byte AND those
+ * bytes form valid utf-8, which latin-1 text almost never does by chance.
+ * Loops so twice-corrupted text unwraps in one call, capped so it can't spin.
  */
 function repairMojibake(str) {
   if (typeof str !== "string" || !str.length) return str;
@@ -264,28 +250,22 @@ function repairMojibakeDeep(val) {
 }
 
 /**
- * Backfills any SEEDED custom element (app/db.py's _LOGIN_ENTRIES,
- * _DASH_*_ENTRY, _LEARN_REEL_ENTRY - every id the server owns rather than a
- * ta, marked by its "seed."/"learn." prefix) that the live content has but a
- * preview snapshot doesn't.
- *
- * A ta's snapshot is a full copy of content taken whenever they opened the
- * portal, and preview mode renders it INSTEAD of the live blob, not merged
- * over it. So the moment a new seeded element ships, every ta still carrying
- * an older draft previews a page missing it - which for the login page means
- * an empty card with no form at all, and, if they then hit Apply, that stale
- * list being written straight back over the live content, deleting the real
- * site's login form. This is the one thing in a snapshot that isn't the ta's
- * to be stale about.
- *
- * Only ever ADDS ids that are absent entirely, which is safe against a ta who
- * deliberately deleted one: deleting in the editor keeps the descriptor and
- * records the id in content.hidden (see setElementHidden()), so a missing
- * descriptor can only mean "this draft predates that element", never "I got
- * rid of it".
+ * Backfills any SEEDED custom element (every id the server owns rather than
+ * a ta, marked by its "seed."/"learn." prefix) that the live content has but
+ * a preview snapshot doesn't.
  * @param snapshot the parsed preview snapshot (mutated in place)
  * @param live the live content from /api/content
  * @return snapshot
+ * @note A snapshot is a full copy taken when the ta opened the portal, and
+ * preview renders it INSTEAD of the live blob. So the moment a new seeded
+ * element ships, a ta on an older draft previews a page missing it - for the
+ * login page, a card with no form - and hitting Apply writes that stale list
+ * back over live content. This is the one thing a snapshot isn't allowed to
+ * be stale about.
+ * @note Only ADDS ids that are absent entirely, which is safe against a
+ * deliberate delete: deleting keeps the descriptor and records the id in
+ * content.hidden, so a missing descriptor can only mean "this draft predates
+ * that element".
  */
 function mergeSeededElements(snapshot, live) {
   var have = {};
@@ -319,17 +299,14 @@ function mergeSeededElements(snapshot, live) {
 }
 
 /**
- * Resolves to the site content: the ta portal's unsaved snapshot in
- * preview mode, otherwise the live content from /api/content. Either way
- * runs it through repairMojibakeDeep() first, so a stale corrupted preview
- * snapshot or old saved blob never reaches a real visitor's screen.
- *
- * In preview mode the live blob is fetched as well, purely to top the
- * snapshot back up with any seeded element it's missing - see
- * mergeSeededElements() for why a draft is allowed to be stale about
- * everything except those. If that fetch fails the snapshot is used as-is,
- * exactly as it was before.
+ * Resolves to the site content: the portal's unsaved snapshot in preview
+ * mode, otherwise the live content from /api/content.
  * @return a promise resolving to the content object
+ * @note Everything goes through repairMojibakeDeep() first, so a corrupted
+ * snapshot or old blob never reaches a visitor's screen.
+ * @note In preview mode the live blob is fetched as well, purely to top the
+ * snapshot up with any seeded element it's missing (see
+ * mergeSeededElements()). If that fetch fails the snapshot is used as-is.
  */
 function fetchContent() {
   if (isPreviewMode()) {
@@ -345,12 +322,10 @@ function fetchContent() {
         .catch(function () { return snapshot; });
     }
     /* no draft yet, and this page is about to start writing one: every
-       save*() in this file merges its one override into whatever's in
-       localStorage, so starting from nothing leaves a blob holding ONLY
-       that override - which js/ta.js's Apply/Save then reads back as the
-       ta's whole content and saves over the real thing, day panels and all.
-       Seed the draft with the live content first so those writers always
-       have a full blob to merge into. */
+       save*() merges its one override into whatever is in localStorage, so
+       starting from nothing leaves a blob holding ONLY that override - which
+       Apply/Save then reads back as the ta's whole content and saves over the
+       real thing. Seed the draft with live content first. */
     if (isEditMode()) {
       return fetch("/api/content")
         .then(function (res) { return res.json(); })
@@ -379,13 +354,13 @@ function formatDateRange(start, end) {
 }
 
 /**
- * Returns the logistics tiles to render, migrating old-shaped content on
- * the fly. Content saved before the workshop-dates tile got folded into the
- * generic logistics list has no "logistics" key at all, just the old
- * date_mode/weeks_label fields; this builds a first tile out of those so
- * the real saved dates don't disappear on students until a ta re-saves.
+ * Returns the logistics tiles to render, migrating old-shaped content on the
+ * fly.
  * @param data the content blob from /api/content
  * @return an array of {big, lbl, icon} tiles
+ * @note Content saved before the workshop-dates tile was folded into this
+ * list has no "logistics" key, just the old date_mode/weeks_label fields, so
+ * a first tile is built from those rather than losing the saved dates.
  */
 function resolveLogistics(data) {
   if (data.logistics) return data.logistics;
@@ -444,14 +419,13 @@ var DT_DEFAULT_PATTERNS = {
 };
 
 /**
- * A small strftime for the static datetime formats (date/time/datetime),
- * enough tokens to cover the common cases without pulling in a date
- * library (vanilla JS only, see CLAUDE.md). "%-x" is the non-zero-padded
- * variant of "%x", "%%" is a literal percent, an unknown token is left as
- * written so a typo is visible rather than silently dropped.
+ * A small strftime for the static datetime formats, enough tokens for the
+ * common cases without pulling in a date library (vanilla JS only).
  * @param date the Date to format
  * @param pattern the strftime pattern string
  * @return the formatted string
+ * @note "%-x" is the non-zero-padded variant of "%x", "%%" a literal percent;
+ * an unknown token is left as written so a typo is visible.
  */
 function strftimeFormat(date, pattern) {
   var pad = function (n) { return (n < 10 ? "0" : "") + n; };
@@ -474,13 +448,13 @@ function strftimeFormat(date, pattern) {
 }
 
 /**
- * The countdown counterpart to strftimeFormat(): tokens are the remaining
- * duration (not a wall clock), %D total days, %H/%M/%S the hour/minute/
- * second remainders (zero-padded), %T total hours, "%-x" the non-padded
- * variant of each. A negative (already-past) diff clamps to zero.
+ * The countdown counterpart to strftimeFormat(), over a remaining duration
+ * rather than a wall clock.
  * @param diffMs milliseconds remaining until the target
  * @param pattern the pattern string
  * @return the formatted countdown string
+ * @note %D total days, %H/%M/%S the zero-padded remainders, %T total hours,
+ * "%-x" the non-padded variant of each. An already-past diff clamps to zero.
  */
 function countdownFormat(diffMs, pattern) {
   if (diffMs < 0) diffMs = 0;
@@ -501,14 +475,14 @@ function countdownFormat(diffMs, pattern) {
 }
 
 /**
- * Produces one datetime custom element's displayed string from its own
- * {target, format, strftime} data. A blank/absent strftime falls back to
- * that format's default pattern (DT_DEFAULT_PATTERNS). Countdown counts
- * toward the target from nowMs; every other format renders the target
- * timestamp itself (a fixed value, never ticks).
+ * Produces one datetime element's displayed string from its own {target,
+ * format, strftime} data.
  * @param d the element's custom_elements entry
  * @param nowMs current time in ms (only used by countdown)
  * @return the string to display, "" if the target doesn't parse
+ * @note A blank strftime falls back to that format's default pattern.
+ * Countdown counts toward the target; every other format renders the target
+ * timestamp itself and never ticks.
  */
 function datetimeText(d, nowMs) {
   var format = d.format || "countdown";
@@ -520,20 +494,19 @@ function datetimeText(d, nowMs) {
 }
 
 /**
- * Whether a datetime format needs a live ticking interval: only countdown
- * changes second to second, the static date/time formats render the fixed
- * target once and never move.
+ * Whether a datetime format needs a live ticking interval.
  * @param format the datetime element's format
  * @return true if it should tick
+ * @note Only countdown changes second to second; the static formats render
+ * their fixed target once.
  */
 function datetimeIsLive(format) {
   return (format || "countdown") === "countdown";
 }
 
 /**
- * Formats a Date as the local "YYYY-MM-DDTHH:mm" string a
- * `<input type="datetime-local">` expects for its value, in the visitor's
- * own local time (not UTC, unlike toISOString()).
+ * Formats a Date as the local "YYYY-MM-DDTHH:mm" string a datetime-local
+ * input expects - the visitor's own local time, not UTC.
  * @param d the Date
  * @return the datetime-local input value
  */
@@ -544,16 +517,15 @@ function toDatetimeLocalValue(d) {
 }
 
 /**
- * (Re)paints one datetime element's text from its own data and, for a live
- * (countdown) format, (re)starts its per-element ticking interval, clearing
- * any previous one first so calling this again (eg after a format/pattern
- * change in the style popover) never leaks a timer. The element is a plain
- * text element (styleable like any text field, see .dt-el / colorTarget()),
- * not the hero countdown's boxed clock: the standalone "Date/time" element
- * is deliberately just the reformattable time text, the "Countdown timer"
- * object is what composes it with a box and labels.
+ * (Re)paints one datetime element's text and, for a countdown, (re)starts its
+ * ticking interval - clearing any previous one first, so calling this again
+ * never leaks a timer.
  * @param el the datetime element (data-datetime already set)
  * @param d its custom_elements entry ({target, format, strftime})
+ * @note It's a plain text element, styleable like any text field, not the
+ * hero countdown's boxed clock: the standalone "Date/time" element is just
+ * the reformattable time text, and the "Countdown timer" object is what
+ * composes it with a box and labels.
  */
 function renderDatetimeContent(el, d) {
   if (el._dtInterval) { clearInterval(el._dtInterval); el._dtInterval = null; }
@@ -563,18 +535,14 @@ function renderDatetimeContent(el, d) {
 }
 
 /**
- * Remembers a template link's real href on the element itself before
- * anything strips it off (right now only neuterLink(), which every preview/
- * editor load runs over the nav's own links so a ta can't navigate the
- * iframe away). Without this the target is simply gone inside the editor,
- * which is exactly where the right-click "Links on this page" view (see
- * pageLinkInventory()) has to be able to READ it - a ta asking "where does
- * the brand logo go?" would otherwise see a blank next to every neutered
- * link. Never overwrites an existing stash, so a second neuterLink() pass
- * (js/dashboard.js and js/gallery.js both call it on their own nav, and both
- * pages load this file first) can't record the already-stripped "" over the
- * real value.
+ * Remembers a template link's real href on the element itself, before
+ * neuterLink() strips it off.
  * @param el the link about to lose its href
+ * @note Without this the target is simply gone inside the editor - which is
+ * exactly where "Links on this page" has to READ it, so a ta asking where the
+ * brand logo goes would see a blank beside every neutered link.
+ * @note Never overwrites an existing stash, so a second neuterLink() pass
+ * can't record the already-stripped "" over the real value.
  */
 function stashBuiltinHref(el) {
   var href = el.getAttribute && el.getAttribute("href");
@@ -598,12 +566,11 @@ function neuterLink(el, dim) {
     el.style.opacity = ".5";
     el.style.cursor = "default";
   }
-  /* at most one swallowing listener per element, however many times this runs
-     - applyNavSessionState() neuters the landing page's nav buttons on every
-     override pass, and a second identical listener would be pure waste. A JS
-     property rather than an attribute, so a cloneNode()d duplicate (see
-     duplicateElement(), which copies attributes but never properties or
-     listeners) correctly reads as not-yet-wired and gets its own. */
+  /* at most one swallowing listener per element however often this runs -
+     applyNavSessionState() neuters the nav on every override pass. A JS
+     property rather than an attribute, so a cloneNode()d duplicate (which
+     copies attributes but never properties) correctly reads as not-yet-wired
+     and gets its own. */
   if (el._hrNeutered) return;
   el._hrNeutered = true;
   el.addEventListener("click", function (e) { e.preventDefault(); });
@@ -620,20 +587,15 @@ function isEditMode() {
 
 /**
  * Identifies which real page this document is, regardless of the shared
- * ?preview=1/?edit=1 query params: "dashboard" if the student dashboard's
- * own progress-bar anchor is present, "login" if the login page's own auth
- * card is, "gallery" if the gallery's own year-picker marker is present,
- * else "index" (the landing page - also the
- * default for the reusable-object mini editor's blank canvas, since a saved
- * object has no page of its own until it's actually dropped somewhere, see
- * placeObject()).
- * content.custom_elements is one shared, unscoped list across the whole
- * site - every entry now carries a "page" it was created on (see
- * addCustomElement()/placeObject()) so renderCustomElements() can build only
- * the ones that belong here, instead of every page rendering every other
- * page's placed elements too (a landing-page-only element, eg the reel,
- * showing up on the dashboard at its raw landing-page pixel offset).
- * @return "index", "dashboard", "login", or "gallery"
+ * ?preview=1/?edit=1 params: "dashboard" if the progress-bar anchor is
+ * present, "login" if the auth card is, "gallery" if the year-picker marker
+ * is, else "index" - which is also the object editor's blank canvas, since a
+ * saved object has no page of its own until it's dropped somewhere.
+ * @return "index", "dashboard", "login", "gallery", or "notfound"
+ * @note content.custom_elements is one unscoped list across the whole site,
+ * so every entry carries the page it was created on and renderCustomElements()
+ * builds only the ones belonging here - otherwise a landing-page element like
+ * the reel would show up on the dashboard at its raw landing-page offset.
  */
 function currentPageKey() {
   if (document.getElementById("dashProgressAnchor")) return "dashboard";
@@ -647,29 +609,23 @@ function currentPageKey() {
      the placed elements that anchor to it, so a ta deleting the rail can't
      take the page's own identity down with it */
   if (document.getElementById("galleryDirsAnchor")) return "gallery";
+  /* the not-found page (templates/404.html), same kind of reserved marker: it
+     is served for any url that matches nothing, so it's the one page a visitor
+     reaches by accident rather than on purpose - and a ta can lay it out here
+     like any other */
+  if (document.getElementById("notFoundAnchor")) return "notfound";
   return "index";
 }
 
 /**
  * Applies saved text overrides on top of the page's own hardcoded copy.
- * Every element carrying a data-edit-id keeps the template's default text
- * until a ta overrides it via click-to-edit; stashes that default in a
- * data attribute first so a later edit can tell if it's back to the
- * original wording (see wireClickToEdit()'s blur handler).
- *
- * #portalLink used to need a special case here - it rewrote its own text to
- * "Dashboard"/"Staff Portal" for a signed-in visitor, so this pass would
- * capture that swapped wording as the field's "default", or overwrite it with
- * a saved override that was only ever meant for signed-out visitors. It
- * doesn't rewrite itself anymore: the signed-in navbar is a separate navbar
- * with its own separate button (see applyNavSessionState()), so both are
- * ordinary fields with one wording each and the special case is gone.
- * Stamps data-overridden on every field (cleared if there's no saved
- * override), so a theme-toggle's ".tic-label" (see buildCustomElement()'s
- * "theme" kind) can tell refreshThemeToggles() (js/theme.js) apart from a
- * plain default: only a field with no override left has its text kept in
- * sync with the live theme instead of whatever a ta typed over it.
  * @param textMap {id: overrideHtml}, from content.text
+ * @note Every data-edit-id keeps the template's default text until a ta
+ * overrides it; that default is stashed in a data attribute first, so a later
+ * edit can tell whether it's back to the original wording.
+ * @note Stamps data-overridden on every field (cleared when there's no saved
+ * override), so a theme toggle's label can be told apart from a plain
+ * default: only an un-overridden field is kept in sync with the live theme.
  */
 function applyTextOverrides(textMap) {
   document.querySelectorAll("[data-edit-id]").forEach(function (el) {
@@ -690,58 +646,43 @@ function applyTextOverrides(textMap) {
 var RESIZABLE_SEL = "[data-edit-id], [data-resize-id]";
 
 /**
- * True for any element whose position is dictated entirely by shared
- * template CSS/markup, never individually placed: a reel tile, which breaks
- * its flex track if detached (see buildReelElement()).
- *
- * An attachments/day tile ROLE (rect/icon/text/badge/button) used to be in
- * here too, back when nothing inside a tile could move at all. It isn't
- * anymore: per the spec everything inside a tile - text, icons, rectangles,
- * buttons - moves freely, just clamped to its own tile's box (see
- * clampOwnPos()). What made that safe is that a role's saved {tx,ty} is
- * keyed by an id every sibling tile SHARES, so applying it to all of them on
- * load is now the intended behavior, not the bug it once was: one drag moves
- * that piece on every tile at once, which is exactly the "any edits we make
- * to one tile should be duplicated across the rest" rule (mirrored live by
- * mirrorTiledRoleGeometry(), and on reload by applyPositionOverrides()
- * matching every element carrying the id).
- *
- * The tiles THEMSELVES are the other entry, and they DO need the check now:
- * a tile carries a real data-resize-id these days (so a ta can resize one and
- * re-tile the container around it, see isTileBoxEl()), which used to be the
- * only reason it couldn't be dragged. Its position isn't its own to set - it
- * is whatever its container's packing order puts it at - so moving stays off
- * while resizing is on. The transparent flow container around the tiles is
- * what moves, and everything inside rides along with it (see ancestorPos()).
+ * True for any element whose position is dictated entirely by shared template
+ * CSS, never individually placed: a reel tile, which breaks its flex track if
+ * detached, and a tile box itself.
  * @param el the element
  * @return true if el must never carry a position override
+ * @note A tile ROLE (rect/icon/text/badge/button) used to be here too, back
+ * when nothing inside a tile could move. Everything inside one moves freely
+ * now, clamped to its own tile's box - safe because a role's saved {tx,ty} is
+ * keyed by an id every sibling tile SHARES, so applying it to all of them is
+ * the intended mirroring rather than the bug it once was.
+ * @note A tile itself does need the check: its position isn't its own to set,
+ * it's whatever its container's packing order gives it, so moving stays off
+ * while resizing is on. The flow container around the tiles is what moves.
  */
 function isMoveLockedTileRole(el) {
   return el.hasAttribute("data-reel-tile") || isTileBoxEl(el);
 }
 
 /**
- * True for one of a reel's content tiles (see buildReelElement()). A tile has
- * no position/size of its own the override maps can carry - where it sits is
- * its order in the track (see startReelTileDrag()) and how big it is belongs
- * to the reel as a whole (d.tileW/d.tileH, shared by every tile, see
- * startReelTileResize()) - which is why it stays move/resize-locked as far as
- * the generic overrides are concerned while being fully draggable/resizable
- * in the editor through those two reel-specific paths.
+ * True for one of a reel's content tiles.
  * @param el the element
  * @return true if el is a reel tile
+ * @note A tile has no position or size of its own for the override maps to
+ * carry - where it sits is its order in the track, and how big it is belongs
+ * to the reel as a whole - so it stays move/resize-locked to the generic
+ * overrides while being fully draggable through the two reel-specific paths.
  */
 function isReelTileEl(el) {
   return !!(el && el.hasAttribute && el.hasAttribute("data-reel-tile"));
 }
 
 /**
- * The reel panel el belongs to (itself, if el IS one), or null. Used wherever
- * an edit made on a tile has to be applied to the whole reel - tile size,
- * tile order and the two spacing sliders are all properties of the reel
- * entry, not of the one tile that happened to be selected.
+ * The reel panel el belongs to (itself, if el IS one), or null.
  * @param el any element
  * @return the .reel panel, or null
+ * @note Used wherever an edit on a tile applies to the whole reel: tile size,
+ * tile order and both spacing sliders belong to the reel entry, not the tile.
  */
 function reelPanelOf(el) {
   return el && el.closest ? el.closest(".reel") : null;
@@ -756,20 +697,16 @@ var REEL_DEFAULT_GAP = 20;
 var REEL_DEFAULT_PAD = 0;
 
 /**
- * True for one of the student dashboard's LIVE AREA containers - the "Extra
- * attachments" tile list and "The days" tile grid (buildCustomElement()'s
- * "extrasArea"/"daysArea" kinds, filled in by js/dashboard.js's renderExtras()/
- * renderDays()), plus the attachments sub-area inside each open day tile,
- * which is a flow container in every way that matters here (see
- * isFlowAreaEl()). Unlike every other tracked element, a live area isn't a
- * piece of content in its own right: it's the transparent box the tiles lie
- * in, so it's always background-less in the style popover (see
- * toggleStyleMenu()), sized on each axis by its own lock rather than by a
- * stored box (see areaFlowFor()/applySizeOverrides()), and everything inside
- * it belongs TO it rather than merely sitting on top of it (see
- * ancestorPos()/freezeDescendants()).
+ * True for one of the dashboard's LIVE AREA containers - the attachments tile
+ * list and the days tile grid, plus the attachments sub-area inside each open
+ * day tile.
  * @param el the element
  * @return true if el is one of the tile containers
+ * @note Unlike every other tracked element, a live area isn't content in its
+ * own right: it's the transparent box the tiles lie in. So it's always
+ * background-less in the style popover, sized on each axis by its own lock
+ * rather than a stored box, and everything inside belongs TO it rather than
+ * merely sitting on top of it.
  */
 function isLiveAreaEl(el) {
   return !!(el.hasAttribute && (el.hasAttribute("data-extras-area") ||
@@ -777,20 +714,15 @@ function isLiveAreaEl(el) {
 }
 
 /**
- * True for one of the three TILE FLOW CONTAINERS - the "Extra attachments"
- * area, "The days" area, and the attachments sub-area embedded in each open
- * day tile (js/dashboard.js's buildDayOpenTileHtml()). All three carry
- * data-flow-area plus a data-tile-id naming the shared id of the tiles they
- * lay out, and all three are laid out by applyTileFlow() through the one
- * .tile-flow rule in css/style.css.
- *
- * A superset of isLiveAreaEl()'s original two: the day-embedded sub-area is a
- * plain role element inside a tile rather than a placed custom element, but
- * it wants every one of the same exceptions (contents belong TO it, no
- * generic Color row, no descendant pinning on resize), so isLiveAreaEl() now
- * matches it too.
+ * True for one of the three TILE FLOW CONTAINERS - the attachments area, the
+ * days area, and the sub-area embedded in each open day tile.
  * @param el the element
  * @return true if el is a tile flow container
+ * @note All three carry data-flow-area plus a data-tile-id naming the shared
+ * id of the tiles they lay out, and all three go through applyTileFlow().
+ * @note A superset of isLiveAreaEl()'s original two: the day-embedded
+ * sub-area is a role element rather than a placed one, but it wants every
+ * same exception, so isLiveAreaEl() matches it too.
  */
 function isFlowAreaEl(el) {
   return !!(el && el.hasAttribute && el.hasAttribute("data-flow-area"));
@@ -798,13 +730,12 @@ function isFlowAreaEl(el) {
 
 /**
  * True for one TILE inside a flow container: a day card, or an attachment
- * tile (in the Extra attachments area or in a day's own sub-area). Resizable
- * - that's how a ta decides how many fit per row, see startResizeDrag() - but
- * never movable (isMoveLockedTileRole()) and never deletable (deleteElement()),
- * since a tile isn't decoration a ta placed, it's one rendering of a piece of
- * real content.
+ * tile.
  * @param el the element
  * @return true if el is a tile box
+ * @note Resizable - that's how a ta decides how many fit per row - but never
+ * movable and never deletable, since a tile isn't decoration a ta placed but
+ * one rendering of a piece of real content.
  */
 function isTileBoxEl(el) {
   return !!(el && el.hasAttribute &&
@@ -812,23 +743,19 @@ function isTileBoxEl(el) {
      el.hasAttribute("data-gallery-tile")));
 }
 
-/* how each flow container behaves on each axis when a ta hasn't said
-   otherwise, per the spec's "default behaviour right now" list: the two
-   top-level areas grow downwards to fit however many tiles exist, while a day
-   tile's attachment sub-area is pinned on both axes (a day card can't be
-   allowed to grow without limit just because one day has eight files, so that
-   one scrolls instead). "lock" = keep the container's size and scroll/squeeze
-   the tiles to fit; "expand" = size the container to its content. */
+/* how each flow container behaves per axis when a ta hasn't said otherwise:
+   the two top-level areas grow downwards to fit their tiles, while a day
+   tile's attachment sub-area is pinned on both axes, so one day with eight
+   files scrolls rather than stretching the card. "lock" = keep the
+   container's size and squeeze the tiles; "expand" = size it to its content. */
 var AREA_FLOW_DEFAULTS = {
   "seed.dashboard.extras.area": { x: "lock", y: "expand" },
   "seed.dashboard.days.area": { x: "lock", y: "expand" },
   "days.open.attachments": { x: "lock", y: "lock" },
   /* the gallery's directory rail is the one container that ships STACKED
-     rather than side by side - it's a narrow column down the left of the
-     photo, which is exactly what the stacking controls express - so its
-     default names a dir the way the others name their axis locks. Everything
-     else about it works identically: a ta can flip it back to a row, reverse
-     it, or change which side it overflows to, from the same Container menu. */
+     rather than side by side - a narrow column beside the photo - so its
+     default names a dir where the others name their axis locks. Everything
+     else about it works identically. */
   "seed.gallery.dirs.area": { x: "lock", y: "expand", dir: "column" }
 };
 /* content.area_flow, {id: {x, y, dir, wrap, gap}} - only what a ta has actually
@@ -842,29 +769,19 @@ var AREA_FLOW = {};
 var TILE_GAP_DEFAULT = 10;
 
 /**
- * The layout behaviour in force for one flow container, its saved override
- * over its default (see AREA_FLOW_DEFAULTS). A container with no default
- * listed falls back to the shape the two top-level areas have always had.
- *
- * "dir"/"wrap" are the tile STACKING controls, the flexbox model a ta already
- * has an intuition for: "dir" picks the axis tiles run along and which way
- * along it ("row" = left to right, "column" = top to bottom, plus their
- * -reverse pair), and "wrap" picks which side the overflow goes to when a
- * line fills up (for a row: below by default, above when reversed; for a
- * column: to the right by default, to the left when reversed). Every
- * container defaults to row/normal, which is the grid layout that shipped
- * before this existed - see applyTileFlow()/.tile-flow in css/style.css for
- * why only that one combination stays on grid.
- *
- * "gap" is the space between one tile and the next, on both axes at once (it's
- * the container's css `gap`, and a wrapping layout has rows as well as columns
- * - one figure is what "how far apart are the tiles" actually means here,
- * unlike a reel's strip, which has a genuine second axis with no tiles on it
- * and so gets two sliders of its own, see reelGap()/reelPad()). It belongs to
- * the container rather than to any one tile, exactly like the axis locks and
- * the stacking above.
+ * The layout behaviour in force for one flow container: its saved override
+ * over its default.
  * @param id the container's data-resize-id
  * @return {x, y} (each "lock" or "expand"), dir, wrap, gap
+ * @note "dir"/"wrap" are the tile stacking controls, the flexbox model a ta
+ * already has an intuition for: dir picks the axis tiles run along and which
+ * way, wrap picks which side the overflow goes to. Every container defaults
+ * to row/normal, the grid layout that shipped before this existed - see
+ * .tile-flow in css/style.css for why only that combination stays on grid.
+ * @note "gap" is the space between tiles on both axes at once, since a
+ * wrapping layout has rows as well as columns. It belongs to the container,
+ * like the axis locks. (A reel's strip has a genuine empty second axis, which
+ * is why that gets two sliders instead.)
  */
 function areaFlowFor(id) {
   var saved = AREA_FLOW[id] || {};
@@ -885,12 +802,12 @@ function areaFlowFor(id) {
 }
 
 /**
- * True if this container's stacking is anything other than the shipped
- * default (tiles left-to-right, overflowing downwards). Only that one
- * combination is laid out by css grid - see the .tile-flex block in
- * css/style.css for why the other seven switch to flexbox instead.
+ * True if this container's stacking is anything but the shipped default
+ * (tiles left-to-right, overflowing downwards).
  * @param flow an areaFlowFor() result
  * @return true if the flex path applies
+ * @note Only that one combination is laid out by css grid; the other seven
+ * switch to flexbox - see the .tile-flex block in css/style.css.
  */
 function areaFlowIsFlex(flow) {
   return flow.dir !== "row" || flow.wrap !== "normal";
@@ -898,8 +815,7 @@ function areaFlowIsFlex(flow) {
 
 /**
  * The flow container that lays out one tile: its own parent, which is always
- * the container itself (a tile is a direct grid item, never wrapped - see
- * renderExtras()/renderDays()/buildDayOpenTileHtml() in js/dashboard.js).
+ * the container itself - a tile is a direct grid item, never wrapped.
  * @param tile a tile box
  * @return the container, or null
  */
@@ -910,15 +826,13 @@ function flowAreaOf(tile) {
 
 /**
  * The flow container one element BELONGS to - itself if it is one, otherwise
- * the innermost one it sits inside. The looser lookup flowAreaOf() can't do
- * (that one is deliberately strict: a tile is a direct child of its container
- * and nothing else counts), for the controls that act on a container from
- * wherever a ta happens to have clicked - the style popover's spacing slider
- * and, by the same reasoning, the right-click menu's Container section (see
- * ctxFlowArea()). A container is almost entirely covered by its own tiles, so
- * "whatever is selected" is nearly always something inside it.
+ * the innermost one it sits inside.
  * @param el any element
  * @return the container, or null if el isn't in or of one
+ * @note The looser lookup flowAreaOf() deliberately won't do, for controls
+ * that act on a container from wherever a ta happened to click (the spacing
+ * slider, the right-click Container section). A container is almost entirely
+ * covered by its tiles, so the selection is nearly always something inside it.
  */
 function flowAreaForEl(el) {
   if (!el || !el.closest) return null;
@@ -926,36 +840,27 @@ function flowAreaForEl(el) {
 }
 
 /**
- * Measures how narrow an element can get before its own contents start
- * bleeding out of it: css's `min-content` width, which for an attachment tile
- * is icon + gaps + button + padding (its filename column is minmax(0, 1fr),
- * the one part allowed to shrink to nothing) and for a day card is whatever
- * its widest unshrinkable child needs.
- *
- * Measured by actually laying el out at min-content and reading the result
- * back, rather than adding up its parts here: the parts differ per template
- * (and change whenever either template does), while `min-content` is the
- * browser's own answer to the exact question being asked. The write/read/
- * restore is a synchronous forced reflow, so callers do this ONCE at the top
- * of a resize drag, never per mousemove.
+ * Measures how narrow an element can get before its contents bleed out: css's
+ * `min-content` width.
  * @param el the element to measure
  * @return its min-content width in css px
+ * @note Measured by laying el out at min-content and reading the result back,
+ * rather than adding up its parts here: the parts differ per template and
+ * change whenever either does, while `min-content` is the browser's own
+ * answer to the exact question. That write/read/restore is a synchronous
+ * forced reflow, so callers do it ONCE per resize drag, never per mousemove.
  */
 function minContentWidthOf(el) {
-  /* every .free-wrap inside el is relaxed for the duration of the measurement.
-     A wrap carries a hard px width - the flow slot it froze open when the
-     element inside it was detached (see detachFromFlow()) - and a hard px width
-     on an in-flow block IS its parent's min-content width as far as css is
-     concerned. So one stale wrap answers this question on the whole tile's
-     behalf: a day card whose blurb froze at ~1030px (its width before the days
-     grid had tiled it down to ~340px) reported 1030px as the narrowest it could
-     ever be, and the first mousemove of ANY resize drag on that card - a pure
-     height drag included - snapped it straight out to full width, one column,
-     every day stacked down the page.
-     Relaxing them is also the honest answer rather than a workaround: what a
-     wrap holds is the slot of an element that is now position:absolute, and
-     out-of-flow content cannot bleed out of el no matter how narrow el gets,
-     which is the only thing this function is asking about. */
+  /* every .free-wrap inside el is relaxed for the measurement. A wrap carries
+     a hard px width - the flow slot it froze open when its element was
+     detached - and a hard px width on an in-flow block IS its parent's
+     min-content width as far as css is concerned. So one stale wrap answered
+     this on the whole tile's behalf: a day card whose blurb froze at ~1030px
+     reported that as its narrowest, and the first mousemove of ANY resize on
+     that card snapped it to full width, one column, every day stacked.
+     Relaxing them is also the honest answer: what a wrap holds is the slot of
+     an element that is now absolutely positioned, and out-of-flow content
+     can't bleed out of el however narrow el gets. */
   var wraps = [].slice.call(el.querySelectorAll(".free-wrap"));
   var wrapW = wraps.map(function (wrap) { return wrap.style.width; });
   wraps.forEach(function (wrap) { wrap.style.width = "auto"; });
@@ -973,18 +878,14 @@ function minContentWidthOf(el) {
 
 /**
  * The narrowest a flow container can be dragged: wide enough for its widest
- * tile's own min-content width (see minContentWidthOf()) plus whatever the
- * container itself spends on padding/border. This is the spec's hard stop -
- * "if that is impossible because the elements within them would BLEED over
- * the edges of the tile, then the resizing is STOPPED at that point, where
- * the thing physically refuses to move its edges beyond that". Everything
- * looser than that (a tile squeezing rather than bleeding) is already handled
- * by the grid itself, see the .tile-flow rule in css/style.css.
- *
- * An empty container has no tiles to protect, so it gets a small floor
- * instead of collapsing to nothing and becoming ungrabbable.
+ * tile's min-content width plus the container's own padding and border.
  * @param area a flow container
  * @return its minimum width in css px
+ * @note This is the spec's hard stop - resizing physically refuses to move
+ * the edges past the point where tiles would bleed out. Anything looser (a
+ * tile squeezing rather than bleeding) is already handled by the grid itself.
+ * @note An empty container has no tiles to protect, so it gets a small floor
+ * rather than collapsing to nothing and becoming ungrabbable.
  */
 function flowAreaMinWidth(area) {
   var min = 0;
@@ -1000,58 +901,40 @@ function flowAreaMinWidth(area) {
 }
 
 /**
- * The largest one tile may be dragged to. Neither axis is capped anymore:
- * whichever of them the container has locked, the CONTAINER takes the extra
- * instead of the drag grinding to a halt, see growFlowAreaForTiles().
- *
- * The height stopped being capped first, and for a reason that turned out to
- * apply just as squarely to the width: a tile in a height-locked container (a
- * day card's own attachments sub-area, which ships locked on both axes so one
- * day with eight files can't stretch every card in the row) simply refused to
- * be dragged taller - the handle moved and the tile didn't. The width did
- * exactly that in every x-locked container, which is all of them by default,
- * and it showed worst on the gallery's directory rail: the rail ships 120px
- * wide, so a directory tile could never be made wider than 120px no matter how
- * far the handle was dragged, and nothing on screen said why.
- *
- * Growing a tile past the edge of its container is a request for more room,
- * not an error. Only ever outwards, on both axes: dragging the same tile back
- * smaller leaves the container exactly where the ta put it, since the size it
- * was given is now its own and not a measurement of its contents.
+ * The largest one tile may be dragged to.
  * @param tile a tile box
  * @return {w, h} maximums in css px
+ * @note Neither axis is capped any more: whichever the container has locked,
+ * the CONTAINER takes the extra instead of the drag grinding to a halt.
+ * A tile in a height-locked container simply refused to be dragged taller -
+ * the handle moved and the tile didn't - and width did the same in every
+ * x-locked container, worst on the gallery's 120px rail, where a tile could
+ * never exceed 120px and nothing said why.
+ * @note Growing a tile past its container is a request for more room, not an
+ * error. Outwards only: dragging back smaller leaves the container where the
+ * ta put it, since that size is now its own and not a measurement.
  */
 function tileSizeCap(tile) {
   return { w: Infinity, h: Infinity };
 }
 
 /**
- * Grows a flow container outwards to hold tiles that have just been dragged
- * bigger than it, and never shrinks it. The other half of tileSizeCap()'s two
- * uncapped axes: a tile can always be made bigger, and whichever of the four
- * containers it lives in takes the extra room so nothing ends up clipped or
- * hidden behind a scrollbar. Per the ta's own "when changing width or height of
- * boxes, they [should] cause the parent container to expand with it along with
- * neighbours" - the neighbours follow for free, since a tile's size is its
- * container's track size (see setTileTrackSize()).
- *
- * Only a LOCKED axis needs this. An expanding one is sized by its own content
- * already (see areaFlowFor()), so both dashboard areas already grow downwards
- * on their own and this leaves their height alone; what it covers is their
- * locked WIDTH, the day card's attachments sub-area (locked on both axes), the
- * gallery's 120px-wide directory rail, and any axis a ta has locked themselves.
- * The whole id group is grown together, same as applyTileFlow() does, so every
- * day card in the row keeps matching.
- *
- * The width a tile NEEDS can't be read back off the layout the way its height
- * can. Both .tile-flow rules cap a track at `min(--tile-w, 100%)` of the
- * container, so a tile asked for more than the container has simply squeezes
- * and the container's scrollWidth never grows to tell anyone about it - which
- * is precisely what made an over-wide drag look like it did nothing. The figure
- * asked for is read straight off the tiles' own saved track width instead.
+ * Grows a flow container outwards to hold tiles just dragged bigger than it,
+ * and never shrinks it - the other half of tileSizeCap()'s uncapped axes.
  * @param tile the tile that just changed size
  * @param persist true once the drag has settled, to save the container's new
- *   size the same way any other resize is saved
+ *   size the way any other resize is saved
+ * @note Neighbours follow for free, since a tile's size is its container's
+ * track size (see setTileTrackSize()).
+ * @note Only a LOCKED axis needs this - an expanding one is already sized by
+ * its content. So this covers the dashboard areas' locked WIDTH, the day
+ * card's sub-area, the gallery's 120px rail, and any axis a ta locked. The
+ * whole id group grows together, so every day card in the row keeps matching.
+ * @note The width a tile NEEDS can't be read back off the layout the way its
+ * height can: both .tile-flow rules cap a track at min(--tile-w, 100%), so an
+ * over-wide tile just squeezes and scrollWidth never grows to say so - which
+ * is what made an over-wide drag look like it did nothing. The figure is read
+ * off the tiles' own saved track width instead.
  */
 function growFlowAreaForTiles(tile, persist) {
   var area = flowAreaOf(tile);
@@ -1110,19 +993,17 @@ function growFlowAreaForTiles(tile, persist) {
 }
 
 /**
- * Applies one tile's size by re-tiling its CONTAINER rather than by writing a
- * box onto the tile: a tile is a grid item, so what "this tile is 200px wide"
- * actually means is "this container's tracks are 200px wide", which is also
- * precisely why one tile's resize re-tiles every sibling at once - the shared-
- * template mirroring rule, for free, with no second code path.
- *
- * The size is still recorded on the tile's own dataset under the id every
- * tile of that kind shares, so commitSize()/getSize()/applySizeOverrides()
- * keep working on it exactly as they do for any other tracked element, and it
- * reloads through the same content.sizes map.
+ * Applies one tile's size by re-tiling its CONTAINER rather than writing a
+ * box onto the tile.
  * @param tile the tile being resized
  * @param w new tile width in css px
  * @param h new tile height in css px
+ * @note A tile is a grid item, so "this tile is 200px wide" means "this
+ * container's tracks are 200px wide" - which is also exactly why one tile's
+ * resize re-tiles every sibling, giving the shared-template mirroring for
+ * free with no second code path.
+ * @note The size is still recorded on the tile's dataset under the shared id,
+ * so commitSize()/getSize()/applySizeOverrides() work on it unchanged.
  */
 function setTileTrackSize(tile, w, h) {
   tile.dataset.ovW = w;
@@ -1137,18 +1018,14 @@ function setTileTrackSize(tile, w, h) {
 }
 
 /**
- * Lays out all three tile flow containers from the current saved state: each
- * one's axis locks (see areaFlowFor()) and the tile size its tiles share (see
- * setTileTrackSize()). Idempotent and cheap enough to re-run after any edit
- * that could change either.
- *
- * Containers are handled in ID GROUPS, not one at a time, because a day tile's
- * attachment sub-area renders once per day - same id, many elements - and the
- * spec wants them to agree: "the parent container size is mirrored across all
- * in that row, so all tiles in the row become taller (mirror one another)".
- * With the y axis locked and no explicit height saved, that shared height is
- * the TALLEST of their natural heights, so locking by default clips nobody and
- * every day card in a row still lines up.
+ * Lays out all three tile flow containers from current saved state: each
+ * one's axis locks and the tile size its tiles share. Idempotent and cheap
+ * enough to re-run after any edit that could change either.
+ * @note Containers are handled in ID GROUPS, not one at a time, because a day
+ * tile's sub-area renders once per day - same id, many elements - and they're
+ * meant to agree, so every card in the row becomes taller together. With y
+ * locked and no explicit height saved, that shared height is the TALLEST of
+ * their natural heights, so locking by default clips nobody.
  */
 function applyTileFlow() {
   var byId = {};
@@ -1193,16 +1070,12 @@ function applyTileFlow() {
       area.style.setProperty("--tile-w", tw || defW);
       area.style.setProperty("--tile-wa", tw || (defW === "100%" ? "max-content" : defW));
       area.style.setProperty("--tile-h", th || "auto");
-      /* an expanding axis is sized by its content, so any px the container is
-         still carrying from a previous lock has to come back off. ovH goes
-         with it: a stored height on an axis whose px have just been thrown
-         away describes a box the container isn't in (getSize() ignores it
-         anyway now, but leaving a phantom figure lying around for the next
-         reader to trust is how this bug worked in the first place). ovW is
-         deliberately left alone - it means something else besides "the current
-         box" over in applyElementAnchors(), where it's the record that a ta
-         chose a width at all, and clearing it would hand an x-expanding
-         container back to the anchor column on the next window resize. */
+      /* an expanding axis is sized by its content, so any px still carried
+         from a previous lock has to come off. ovH goes with it: a stored
+         height on an axis whose px were just thrown away describes a box the
+         container isn't in. ovW is deliberately left alone - over in
+         applyElementAnchors() it means "a ta chose a width at all", and
+         clearing it would hand the container back to the anchor column. */
       if (flow.x === "expand") area.style.width = "";
       if (flow.y === "expand") { area.style.height = ""; delete area.dataset.ovH; }
     });
@@ -1226,34 +1099,29 @@ window.applyTileFlow = applyTileFlow;
 
 /**
  * Reads content.area_flow into AREA_FLOW, so areaFlowFor()/applyTileFlow()
- * see whichever axes a ta has locked or unlocked. Runs on every load, live
- * site included: a locked axis is a real layout decision students see, not an
- * editor affordance.
+ * see whichever axes a ta has locked.
  * @param flow content.area_flow, {id: {x, y}}
+ * @note Runs on every load, live site included: a locked axis is a real
+ * layout decision students see, not an editor affordance.
  */
 function applyAreaFlowOverrides(flow) {
   AREA_FLOW = flow && typeof flow === "object" ? flow : {};
 }
 
-/* content.tile_children, {tileId: [descriptors]} - elements a ta has placed
-   onto a tile whose backing content entry has nowhere to hold them.
+/* content.tile_children, {tileId: [descriptors]} - elements a ta placed onto
+   a tile whose backing content entry has nowhere to hold them.
 
-   Every other bound child hangs off the entry it was dropped onto (an
-   attachment's own children[], a day's, a reel tile's - see
-   findBoundTileOwner()), which is what makes it that ONE tile's content. A
-   gallery directory has no entry: content.gallery.years is a list of bare
-   strings, and every directory tile is one rendering of a single shared
-   template with a single shared id, exactly like the tile roles inside it. So
-   a child placed on one is stored against the TEMPLATE and rendered into every
-   tile - which is also the behaviour the shared-template rule already promises
-   everywhere else in these areas ("any edits we make to one tile should be
-   duplicated across the rest"). */
+   Every other bound child hangs off the entry it was dropped onto, which is
+   what makes it that ONE tile's content. A gallery directory has no entry:
+   years is a list of bare strings, and every directory tile is one rendering
+   of a single shared template. So a child placed on one is stored against the
+   TEMPLATE and rendered into every tile - the same shared-template rule these
+   areas already promise everywhere else. */
 var TILE_CHILDREN = {};
 
 /**
- * Reads content.tile_children into TILE_CHILDREN. Runs on every load, live
- * site included: an element a ta placed on a directory tile is real page
- * content, not an editor affordance.
+ * Reads content.tile_children into TILE_CHILDREN. Runs on every load: an
+ * element placed on a directory tile is real page content.
  * @param map content.tile_children
  */
 function applyTileChildrenOverrides(map) {
@@ -1288,13 +1156,12 @@ function saveTileChildren(tileId, children) {
 }
 
 /**
- * Writes one field of one flow container's layout state and persists it (see
- * saveAreaFlow()). Always saves the COMPLETE resolved state, not just the
- * field that changed, so a container whose defaults later move doesn't
- * silently re-lay-out under a ta who had already arranged it.
+ * Writes one field of one flow container's layout state and persists it.
  * @param id the container's data-resize-id
  * @param key "x", "y", "dir", "wrap" or "gap"
  * @param value the new value for that key
+ * @note Always saves the COMPLETE resolved state, not just the changed field,
+ * so a container whose defaults later move doesn't silently re-lay-out.
  */
 function setAreaFlowProp(id, key, value) {
   var cur = areaFlowFor(id);
@@ -1307,9 +1174,8 @@ function setAreaFlowProp(id, key, value) {
 }
 
 /**
- * Every rendered copy of one flow container. Usually one, but a container
- * embedded in a tile template exists once per tile and shares its id with all
- * the others (see applyTileFlow()).
+ * Every rendered copy of one flow container - usually one, but a container
+ * embedded in a tile template exists once per tile and shares its id.
  * @param id the container's data-resize-id
  * @return an array of elements, possibly empty
  */
@@ -1319,11 +1185,11 @@ function flowAreasWithId(id) {
 }
 
 /**
- * One flow container's tiles, in the order they currently sit in it. Direct
- * children only, and only real tiles - the "nothing here yet" placeholder is a
- * child of the container too but isn't one of the things being ordered.
+ * One flow container's tiles, in the order they currently sit in it.
  * @param area a flow container
  * @return an array of tile elements
+ * @note Direct children only, and only real tiles - the "nothing here yet"
+ * placeholder is a child too but isn't one of the things being ordered.
  */
 function flowTilesOf(area) {
   return [].slice.call(area.querySelectorAll(":scope > [data-days-tile], " +
@@ -1331,24 +1197,19 @@ function flowTilesOf(area) {
 }
 
 /**
- * Stamps every tile in a container with the index of the content entry it was
- * rendered FROM, if it doesn't already carry one, and hands the tiles back.
- *
- * Position-in-the-array rather than any id, because not every tile has one to
- * offer: a legacy attachment is a bare filename string with no id at all, and
- * the trailing synthetic "next day" card is rendered from no entry whatsoever.
- * renderExtras()/renderDirs() walk their array in order and emit one tile per
- * entry, so the nth tile IS the nth entry there. The day grid doesn't - it can
- * cap how many locked days it draws (planDayTiles() in js/dashboard.js) - so
- * its tiles are stamped as they're built and already carry the right index by
- * the time this sees them; only tiles with no stamp at all get one here.
- *
- * The stamp is re-written to the new running order the moment a reorder is
- * applied (see reorderFlowContent()), so it always describes where a tile's
- * entry sits in the array RIGHT NOW - that's what lets two reorders in a row,
- * or a reorder and then its undo, compose correctly.
+ * Stamps every tile with the index of the content entry it was rendered FROM,
+ * if it doesn't already carry one, and hands the tiles back.
  * @param area a flow container
  * @return its tiles, each carrying a data-flow-slot
+ * @note Position-in-the-array rather than an id, because not every tile has
+ * one: a legacy attachment is a bare string, and the synthetic "next day"
+ * card is rendered from no entry at all. The attachments and gallery
+ * renderers emit one tile per entry in order, so the nth tile IS the nth
+ * entry; the day grid can cap how many it draws, so its tiles are stamped as
+ * they're built and only unstamped ones get one here.
+ * @note Re-written the moment a reorder is applied, so it always describes
+ * where a tile's entry sits RIGHT NOW - that's what lets two reorders in a
+ * row, or a reorder and its undo, compose correctly.
  */
 function stampFlowSlots(area) {
   var tiles = flowTilesOf(area);
@@ -1378,17 +1239,15 @@ function reorderBySlots(list, slots) {
 }
 
 /**
- * Which content array one flow container's running order actually lives in,
- * and how to write a new one back - the reorder counterpart of
- * findBoundTileOwner(), and split out for the same reason: the four containers
- * hold four different kinds of thing, and only the container knows which.
- *
- * The attachments template renders in two places from two different arrays
- * (the Extra attachments section's content.extras[], and one day's own
- * files[]), so which one is being reordered is decided by whether this
- * container sits inside a day card - the tile itself can't say.
+ * Which content array one flow container's running order lives in, and how to
+ * write a new one back - the reorder counterpart of findBoundTileOwner(),
+ * split out for the same reason: the four containers hold four different
+ * kinds of thing and only the container knows which.
  * @param area a flow container
  * @return {apply(slots)}, or null if nothing owns this container's order
+ * @note The attachments template renders from two different arrays, so which
+ * is being reordered is decided by whether the container sits inside a day
+ * card - the tile itself can't say.
  */
 function flowOrderOwner(area) {
   var tiles = flowTilesOf(area);
@@ -1426,22 +1285,20 @@ function flowOrderOwner(area) {
 }
 
 /**
- * Writes the running order the tiles are currently in back to the content
- * array behind them, and re-stamps the slots to match (see stampFlowSlots()).
- * The dom is already in the new order by the time this runs - the drag moved
- * the nodes as it went - so nothing here re-renders anything.
+ * Writes the running order the tiles are in back to the content array behind
+ * them, and re-stamps the slots to match.
  * @param area a flow container
+ * @note The dom is already in the new order - the drag moved the nodes as it
+ * went - so nothing here re-renders.
  */
 function reorderFlowContent(area) {
   var tiles = stampFlowSlots(area);
   var owner = flowOrderOwner(area);
   if (owner) owner.apply(tiles.map(function (t) { return parseInt(t.dataset.flowSlot, 10); }));
-  /* re-stamp each tile with where its entry sits in the array NOW. Not simply
-     its position among the tiles: reorderBySlots() puts every entry that HAD a
-     tile first, in the tiles' own order, and keeps the ones that didn't after
-     them - so it's the nth tile with an entry that is the nth entry. A tile
-     standing for no entry at all (a day-grid padding card, see planDayTiles()
-     in js/dashboard.js) keeps its -1 and is skipped by the count. */
+  /* re-stamp each tile with where its entry sits NOW, not simply its position
+     among the tiles: reorderBySlots() puts every entry that HAD a tile first,
+     so it's the nth tile with an entry that is the nth entry. A tile standing
+     for no entry keeps its -1 and is skipped by the count. */
   var slot = 0;
   tiles.forEach(function (t) {
     t.dataset.flowSlot = t.dataset.flowSlot === "-1" ? -1 : slot++;
@@ -1449,16 +1306,14 @@ function reorderFlowContent(area) {
 }
 
 /**
- * Puts a flow container's tiles into an exact order, dom and content together:
- * what undo/redo replays for a reorder drag (see startFlowTileDrag()).
- *
- * Takes the tile ELEMENTS rather than a list of keys the way applyReelOrder()
- * does, because a tile has no key of its own worth naming (see
- * stampFlowSlots()). The undo stack only ever lives in memory, so holding the
- * nodes directly is safe; a stale entry pointing at tiles a re-render has since
- * replaced is detected and skipped rather than half-applied.
+ * Puts a flow container's tiles into an exact order, dom and content
+ * together - what undo/redo replays for a reorder drag.
  * @param area a flow container
  * @param tiles its tiles in the wanted order
+ * @note Takes the ELEMENTS rather than keys the way applyReelOrder() does,
+ * since a tile has no key worth naming. The undo stack only lives in memory,
+ * so holding nodes is safe; a stale entry pointing at tiles a re-render has
+ * replaced is detected and skipped rather than half-applied.
  */
 function applyFlowTileOrder(area, tiles) {
   if (!area || !tiles.every(function (t) { return t.parentElement === area; })) return;
@@ -1467,24 +1322,17 @@ function applyFlowTileOrder(area, tiles) {
 }
 
 /**
- * One flow-container tile's drag: grab it anywhere on its background (or by the
- * ring's move handle) and carry it to a different place among its siblings.
- *
- * The same edit startReelTileDrag() makes on a reel, for the containers that
- * grew out of the same idea later: a tile can't be given a free position (where
- * it sits IS its place in its container's running order, which is why
- * isMoveLockedTileRole() refuses it a saved {tx,ty}), so the drag reorders
- * instead, and the tiles rearrange live under the cursor rather than only
- * settling on drop.
- *
- * Unlike a reel's single strip these containers wrap, on either axis, in either
- * direction (see areaFlowFor()), so the "which slot is this?" test is a
- * two-part one: the cross axis decides which line the cursor is on, and only
- * within a line does the main axis decide where in it. Both are read off the
- * container's own current stacking, so the answer follows a ta who has flipped
- * it to a column or reversed it.
+ * One flow-container tile's drag: grab it anywhere on its background and
+ * carry it to a different place among its siblings.
  * @param e the mousedown that started it
  * @param tile the tile being dragged
+ * @note The same edit startReelTileDrag() makes on a reel. A tile can't be
+ * given a free position - where it sits IS its place in the running order -
+ * so the drag reorders instead, rearranging live under the cursor.
+ * @note Unlike a reel's single strip these containers wrap, on either axis in
+ * either direction, so "which slot is this?" is two tests: the cross axis
+ * picks the line, the main axis picks the place in it. Both read the
+ * container's current stacking, so the answer follows a ta who flipped it.
  */
 function startFlowTileDrag(e, tile) {
   var area = flowAreaOf(tile);
@@ -1570,26 +1418,19 @@ function startFlowTileDrag(e, tile) {
 }
 
 /**
- * Records the height a flow container is painting at right now as its saved
- * height, the moment a ta locks that axis - exactly as if they had dragged it
- * to there - and forgets it again when they unlock.
- *
- * Without this, a y lock would be a promise the container doesn't keep. A
- * y-locked container with no saved height is re-measured against its own
- * content by applyTileFlow() (the path that makes every day card's attachment
- * sub-area match the tallest of the group), so the first stacking change after
- * the lock would grow the very box the ta asked to hold still: a column of
- * tiles is several times taller than a grid of the same tiles, and the
- * container would follow it down the page instead of scrolling inside itself.
- *
- * The x axis needs no equivalent - nothing ever re-measures a container's
- * width, so locking it simply puts back the width it was last given (its
- * saved resize, or the column it's anchored to) and unlocking hands the axis
- * to `width: max-content`. Nor is a container that's y-locked purely by
- * AREA_FLOW_DEFAULTS pinned: never having been clicked, it still auto-mirrors
- * to the tallest of its group, which is what that default is for.
+ * Records the height a flow container is painting at as its saved height the
+ * moment a ta locks that axis - as if they had dragged it there - and forgets
+ * it again on unlock.
  * @param id the container's data-resize-id
- * @param lock true if the y axis is being locked, false if it's being unlocked
+ * @param lock true if the y axis is being locked, false if unlocked
+ * @note Without this a y lock would be a promise the container doesn't keep:
+ * a y-locked container with no saved height is re-measured against its own
+ * content, so the first stacking change after the lock would grow the very
+ * box the ta asked to hold still - a column of tiles is several times taller
+ * than a grid of them, and it would follow that down the page.
+ * @note The x axis needs no equivalent, since nothing re-measures a width.
+ * Nor is a container y-locked purely by default pinned: never having been
+ * clicked, it still auto-mirrors to the tallest of its group.
  */
 function pinFlowAreaHeight(id, lock) {
   var areas = flowAreasWithId(id);
@@ -1631,25 +1472,17 @@ function toggleAreaFlowAxis(id, axis) {
 
 /**
  * Hands a flow container whichever axes a ta has just dragged an edge on.
- *
- * An axis set to "expand" is sized by its CONTENT (see areaFlowFor()), so a
- * size dragged along it is a figure nothing will ever paint: applyTileFlow()
- * clears that axis' px straight back off again. That's why dragging the
- * "Extra attachments"/"The days" containers taller - both ship y: expand -
- * looked like it did nothing, springing back to the tiles' own height the
- * moment the mouse came up. Dragging an edge IS the ta claiming that axis, so
- * the drag flips it to "lock" and the dragged size becomes the one the
- * container keeps; the Container menu's own lock toggle is the way back, and
- * reads as locked afterwards so the state is never a secret.
- *
- * Only axes whose size actually changed are claimed, so a pure width drag
- * never quietly pins a height the ta never touched (and a drag that grinds to
- * a stop against a min/cap, changing nothing, claims nothing). "Changed" means
- * the box the drag WROTE, not the box the container ended up measuring - see
- * startResizeDrag()'s `dragged`.
  * @param el the flow container just resized
  * @param before its size at mousedown, {w, h}
  * @param after the last box the drag wrote, {w, h}
+ * @note An "expand" axis is sized by its CONTENT, so a size dragged along it
+ * is a figure nothing will ever paint - which is why dragging the dashboard
+ * containers taller looked like it did nothing, springing back on mouseup.
+ * Dragging an edge IS claiming that axis, so it flips to "lock"; the
+ * Container menu's toggle is the way back, and reads as locked afterwards.
+ * @note Only axes whose size actually changed are claimed, so a pure width
+ * drag never pins a height nobody touched. "Changed" means the box the drag
+ * WROTE, not the box the container ended up measuring.
  */
 function lockDraggedFlowAxes(el, before, after) {
   var id = elId(el);
@@ -1664,9 +1497,8 @@ function lockDraggedFlowAxes(el, before, after) {
 }
 
 /**
- * Flips which axis one flow container's tiles run along - left-to-right
- * (row) or top-to-bottom (column) - keeping whichever direction along that
- * axis is currently in force. See areaFlowFor() for the whole model.
+ * Flips which axis one flow container's tiles run along - row or column -
+ * keeping whichever direction along it is in force. See areaFlowFor().
  * @param id the container's data-resize-id
  */
 function toggleAreaFlowAxisDir(id) {
@@ -1702,18 +1534,14 @@ function toggleAreaFlowWrap(id) {
 /**
  * True for an element that can't carry a size override of its OWN: a reel
  * tile, whose width/height is one figure shared by every tile in the reel
- * (d.tileW/d.tileH on the reel's entry, see setReelTileSize()) rather than
- * anything per-tile that content.sizes could hold. Dragging a tile's resize
- * handles still works - it just resizes all of them at once, through the reel
- * entry, see startReelTileResize(). Attachments/day tile roles
- * used to be listed here as well (the rect fills its tile via inset:0, the
- * text sizes itself from its content) but the spec is explicit that a ta can
- * resize the rectangle around a tile, its text and its button, so they're
- * all freely resizable now - a size saved under a shared role id resizes
- * that piece on every sibling tile at once, the same shared-template
- * mirroring a move gets (see mirrorTiledRoleGeometry()).
+ * rather than anything per-tile content.sizes could hold.
  * @param el the element
  * @return true if el must never carry a size override
+ * @note Dragging a tile's handles still works - it resizes all of them at
+ * once, through the reel entry.
+ * @note Tile roles used to be listed here as well, but a ta can resize a
+ * tile's rectangle, text and button, so they're all freely resizable now: a
+ * size under a shared role id resizes that piece on every sibling tile.
  */
 function isResizeLockedTileRole(el) {
   return el.hasAttribute("data-reel-tile");
@@ -1721,13 +1549,11 @@ function isResizeLockedTileRole(el) {
 
 /**
  * True for one piece of an attachments/day tile's shared template - the
- * rect/icon/text/badge/button roles js/dashboard.js's buildExtrasTileHtml()/
- * buildDayOpenTileHtml()/buildDayLockedTileHtml() stamp onto every rendered
- * tile with the same id. Every geometry/style edit to one of these is meant
- * to apply to all of them at once, see mirrorTiledRoleGeometry()/
- * mirrorTiledRoleStyle().
+ * rect/icon/text/badge/button roles stamped onto every rendered tile with the
+ * same id.
  * @param el the element
  * @return true if el is a tiled role element
+ * @note Every geometry or style edit to one of these applies to all of them.
  */
 function isTiledRoleEl(el) {
   return !!(el && el.hasAttribute &&
@@ -1737,18 +1563,14 @@ function isTiledRoleEl(el) {
 
 /**
  * True for an element a ta placed onto a tile whose children are stored
- * against the TEMPLATE rather than against one entry - a gallery directory
- * tile's, see TILE_CHILDREN. One descriptor renders into every tile in the
- * rail, all carrying the same id, so it wants exactly the same live geometry
- * mirror a shared ROLE gets (see mirrorTiledRoleGeometry()): without it,
- * nudging the copy in one tile would leave the others where they were until
- * the next reload put them all back in step.
- *
- * A bound child is always the only element inside its own .free-wrap (see
- * placeInTile()), which is what distinguishes it from the tile's own template
- * markup.
+ * against the TEMPLATE rather than one entry - a gallery directory tile's.
  * @param el the element
  * @return true if el is a shared tile child
+ * @note One descriptor renders into every tile in the rail under the same id,
+ * so it wants the same live geometry mirror a shared ROLE gets: without it,
+ * nudging one copy would leave the others behind until the next reload.
+ * @note A bound child is always the only element inside its own .free-wrap,
+ * which is what distinguishes it from the tile's own template markup.
  */
 function isSharedTileChild(el) {
   var wrap = el && el.parentElement;
@@ -1758,75 +1580,58 @@ function isSharedTileChild(el) {
 }
 
 /**
- * The box an element is not allowed to be dragged out of: its own tile if
- * it's inside one (a tile role, or anything a ta has bound onto that tile),
- * otherwise the live-area container if it's inside one (the "nothing here
- * yet" placeholder, or an element dropped onto the area's empty space).
- * Everything else on the page is unconstrained, exactly as before - only
- * these live sections have the "stops at the edge and grinds against it"
- * rule, per the spec.
- *
- * A tile wins over the area because tiles nest: a day's attachment tile sits
- * inside the day tile, which sits inside the days area, and an element on an
- * attachment tile belongs to the attachment tile alone. closest() naturally
- * gives the innermost of the three.
+ * The box an element may not be dragged out of: its own tile if it's inside
+ * one, otherwise the live-area container if it's inside one.
  * @param el the element about to move
  * @return the bounding element, or null if el isn't inside one
+ * @note Everything else on the page is unconstrained - only these live
+ * sections have the "stops at the edge and grinds against it" rule.
+ * @note A tile wins over the area because tiles nest: an element on an
+ * attachment tile belongs to that tile alone, and closest() naturally gives
+ * the innermost of the three.
  */
 function moveBoundsContainer(el) {
   if (!el || !el.closest) return null;
-  /* a reel tile bounds its contents for the same reason, one step more
-     literally: what a ta drops onto one is absolutely positioned against
-     THAT tile (see placeInTile()), and its saved left/top are tile-relative,
-     so a child dragged past the tile's edge doesn't move to the tile it looks
-     like it landed on - it stays this tile's child at a huge offset, and
-     rides away over the others the moment the reel scrolls or drifts. */
+  /* a reel tile bounds its contents one step more literally: what a ta drops
+     on one is absolutely positioned against THAT tile, so a child dragged
+     past the edge doesn't move to the tile it looks like it landed on - it
+     stays this tile's child at a huge offset and rides away on the drift */
   var tile = el.closest("[data-extras-tile], [data-days-tile], [data-gallery-tile], [data-reel-tile]");
   if (tile) return tile;
   /* a login field/button/error line is the same kind of little container: its
-     label, its input rectangle and its placeholder text all move freely
-     inside it and grind to a stop at its edge rather than escaping onto the
-     card. Looked up from the PARENT so the container itself isn't its own
-     bounds (a login element is freely placeable, unlike a tile) - the tile
-     branch above doesn't need that because a tile can't be moved at all, see
-     isMoveLockedTileRole().
+     label, input rectangle and placeholder all move freely inside it and stop
+     at its edge. Looked up from the PARENT so the container isn't its own
+     bounds (a login element is freely placeable, unlike a tile).
 
-     Matched on the input rectangle too, not just the outer login element: a
+     Matched on the input rectangle too, not just the outer element: a
      placeholder belongs to the BOX it's painted into, and once that box can
-     be dragged out of its wrapper (see just below) clamping the placeholder
-     to the wrapper would drag it back off the box on the first nudge. */
+     be dragged out of its wrapper, clamping to the wrapper would drag the
+     placeholder off the box on the first nudge. */
   var loginBox = el.parentElement &&
     el.parentElement.closest("[data-login-el], [data-login-fixed]");
-  /* the credential rectangle itself is the exception: it IS its field's body,
-     filling the wrapper edge to edge with nothing else in there, so bounding
-     it to that wrapper bounds it to itself and every drag clamps to exactly
-     zero pixels. It was the one thing on the login page that couldn't be
-     moved at all - and since it covers the wrapper completely, every click on
-     a credential box lands on it, so the field looked immovable too, the same
-     way the failure line did before resolveSelectableTarget() started
-     redirecting its message string. Free like any other placed element
-     instead; the wrapper left behind paints nothing of its own. */
+  /* the credential rectangle is the exception: it IS its field's body,
+     filling the wrapper edge to edge, so bounding it to that wrapper bounds
+     it to itself and every drag clamps to zero pixels. It was the one thing
+     on the login page that couldn't be moved at all - and since it covers the
+     wrapper, every click on a box lands on it, so the field looked immovable
+     too. Free like any other placed element instead. */
   if (loginBox && !el.hasAttribute("data-login-fixed")) return loginBox;
   var area = el.parentElement && el.parentElement.closest("[data-extras-area], [data-days-area]");
   return area || null;
 }
 
 /**
- * Clamps a proposed move offset so el's own box stays inside whichever
- * container bounds it (see moveBoundsContainer()). Returns the offset
- * unchanged for everything not inside one.
- *
- * Works in deltas against el's CURRENT rendered rect rather than absolute
- * coordinates, so it needs to know nothing about how that rect was arrived
- * at (flow position, an ancestor's transform, a stylesheet transform of its
- * own, whatever) - the same reason paintPos() composes rather than replaces.
- * An element bigger than its container on an axis pins to the container's
- * top/left edge on that axis instead of jittering between two impossible
- * constraints.
+ * Clamps a proposed move offset so el's box stays inside whichever container
+ * bounds it. Returns the offset unchanged for anything not inside one.
  * @param el the element being moved
  * @param tx proposed own x offset
  * @param ty proposed own y offset
  * @return {tx, ty}, clamped
+ * @note Works in deltas against el's CURRENT rendered rect rather than
+ * absolute coordinates, so it needs to know nothing about how that rect came
+ * about - the same reason paintPos() composes rather than replaces.
+ * @note An element bigger than its container pins to the top/left edge on
+ * that axis instead of jittering between two impossible constraints.
  */
 function clampOwnPos(el, tx, ty) {
   var box = moveBoundsContainer(el);
@@ -1844,24 +1649,18 @@ function clampOwnPos(el, tx, ty) {
 
 /**
  * The largest box an element may be dragged to without leaving whichever
- * container bounds it (see moveBoundsContainer()): the resize half of
- * clampOwnPos()'s "stops at the edge and grinds against it" rule.
- *
- * Only a MOVE was ever clamped, so a resize handle was the one way left to get
- * a tile's own pieces out past the tile - the coloured rect being the obvious
- * one, since it starts out filling its tile exactly and so has nowhere legal
- * to grow, but the filename and the Download button could be dragged out over
- * the neighbouring tiles just as easily.
- *
- * Measured per HANDLE, because a resize pins the opposite edge: the right
- * handle grows away from the element's own left edge, so it may grow until it
- * meets the container's right edge, and mirrored for the other three. An axis
- * this handle doesn't pull gets no limit at all - its size isn't changing, and
- * a cap would shrink an element that's already overhanging on an axis nobody
- * touched.
+ * container bounds it - the resize half of clampOwnPos()'s rule.
  * @param el the element about to be resized
  * @param dir the handle's [x, y] direction, -1/0/+1 per axis (see RING_DIRS)
  * @return {w, h} maximums in css px, or null if el isn't inside a container
+ * @note Only a MOVE was ever clamped, so a resize handle was the one way left
+ * to get a tile's pieces out past it - obviously the rect, which starts out
+ * filling its tile, but the filename and button just as easily.
+ * @note Measured per HANDLE, because a resize pins the opposite edge: the
+ * right handle grows away from the left edge, so it may grow until it meets
+ * the container's right edge, and mirrored for the other three. An axis this
+ * handle doesn't pull gets no limit - its size isn't changing, and a cap
+ * would shrink an element already overhanging on an axis nobody touched.
  */
 function resizeBoundsCap(el, dir) {
   var box = moveBoundsContainer(el);
@@ -1881,22 +1680,17 @@ function resizeBoundsCap(el, dir) {
 
 /**
  * Reads the id an element's size/position overrides are keyed by.
- *
- * data-page-id is the page's own (see isPageEl()), and it is deliberately NOT
- * part of RESIZABLE_SEL: the page is styleable but not tracked. Carrying a
- * plain data-resize-id, `<body>` matched every `querySelectorAll(RESIZABLE_SEL)`
- * sweep in this file, which handed the whole geometry pipeline an element it
- * can't survive - one saved position was enough for applyPositionOverrides()
- * to call detachFromFlow() on the page, wrapping `<body>` in a `.free-wrap`
- * div. That takes it out of being `document.body` altogether (killing
- * background propagation, so the page stopped painting the browser canvas and
- * started painting a floating, separately-scrolling black rectangle instead),
- * pinned it to a px width, and left every later `document.body` lookup in this
- * file reading null. A second attribute keeps the id readable everywhere it's
- * genuinely wanted while leaving body out of every sweep by construction,
- * rather than by remembering to guard each one.
  * @param el the element
  * @return its data-edit-id, data-resize-id or data-page-id
+ * @note data-page-id is the page's own, and deliberately NOT part of
+ * RESIZABLE_SEL: the page is styleable but not tracked. With a plain
+ * data-resize-id, `<body>` matched every sweep in this file, and one saved
+ * position was enough to wrap it in a .free-wrap - which stops it being
+ * document.body at all (killing background propagation, so the page painted a
+ * floating black rectangle instead of the browser canvas), pins it to a px
+ * width, and leaves every later document.body lookup reading null. A second
+ * attribute keeps the id readable while leaving body out of every sweep by
+ * construction, rather than by remembering to guard each one.
  */
 function elId(el) {
   return el.getAttribute("data-edit-id") || el.getAttribute("data-resize-id") ||
@@ -1904,13 +1698,12 @@ function elId(el) {
 }
 
 /**
- * Every element the style popover's color/opacity rows can paint: each tracked
- * element, plus the page itself, which is styleable without being tracked (see
- * elId()). The colour appliers sweep this instead of RESIZABLE_SEL directly;
- * everything else - geometry, layering, selection, grouping, delete/duplicate -
- * keeps sweeping RESIZABLE_SEL, so the page is excluded from all of it by
- * default rather than by a guard per system.
+ * Every element the style popover's colour rows can paint: each tracked
+ * element, plus the page itself, which is styleable without being tracked.
  * @return an array of elements
+ * @note The colour appliers sweep this instead of RESIZABLE_SEL; everything
+ * else keeps sweeping RESIZABLE_SEL, so the page is excluded from geometry,
+ * layering, grouping and delete by default rather than by a guard per system.
  */
 function styleableEls() {
   var els = [].slice.call(document.querySelectorAll(RESIZABLE_SEL));
@@ -1920,8 +1713,7 @@ function styleableEls() {
 
 /**
  * The selector matching every element carrying one id - the page's own
- * attribute included, so a lookup by id finds it the same way the style
- * popover and undo/redo find anything else (see elByAnyId()).
+ * attribute included, so a lookup by id finds it like anything else.
  * @param id a data-edit-id, data-resize-id or data-page-id value
  * @return a css selector string
  */
@@ -1930,36 +1722,22 @@ function idSel(id) {
 }
 
 /**
- * Resolves the element a click actually selects (RING_EL, or a right-click's
- * context-menu target), starting from `target.closest(RESIZABLE_SEL)`. A
- * theme toggle is the one place in this codebase where a RESIZABLE_SEL match
- * (its own data-edit-id ".tic-label" span) sits nested inside ANOTHER
- * RESIZABLE_SEL element (the button's own data-resize-id) - every other
- * field is either the resizable unit itself (a plain text box) or a single
- * tagged `<a class="btn">`/`<button>` with no separately-tracked child, so
- * `closest()` landing on the nearest match is normally exactly right. Here
- * it isn't: the label has no resize handles or style controls of its own
- * (isButtonEl()/colorTarget()'s bg/icon/color rows all key off the outer
- * button), so a click landing on the label text - most of the button's
- * clickable area - would otherwise select just the label, hiding the
- * Background/Text color/Change icon rows entirely. Redirecting up to the
- * button leaves the label's own click-to-edit text entry untouched (see
- * wireTextField(), wired directly on the label and independent of
- * selection), it only changes what gets selected/right-clicked/styled.
- *
- * A live-area tile used to be a second such place, for the mirror-image
- * reason: a tile carried no id of its own, so a click on any of the untracked
- * markup filling most of its surface (a day card's <p> blurb, its padding)
- * walked straight past it and selected the whole area container, and the tile
- * had to be faked by redirecting to the rect role behind it. It carries a real
- * data-resize-id now (see isTileBoxEl()), so `closest()` lands on the tile
- * itself and that IS the right answer - the tile is the bounds everything
- * inside it is clamped to, and the thing a ta resizes to re-tile the
- * container. The rect stays reachable by clicking it directly (it fills the
- * tile behind the content, so most of a card's surface is still the rect),
- * and everything else by the ring's own parent handle, see parentSelectableOf().
+ * Resolves the element a click actually selects, starting from
+ * `target.closest(RESIZABLE_SEL)`.
  * @param target the event's target (e.g. e.target)
  * @return the element to select, or null
+ * @note A theme toggle is the one place where a RESIZABLE_SEL match (its
+ * label span) nests inside another (the button). The label has no handles or
+ * style rows of its own, so selecting it - which is most of the button's
+ * clickable area - would hide the Background/Text colour/Change icon rows
+ * entirely, hence the redirect up to the button. Its click-to-edit text entry
+ * is wired directly on the label and is untouched by this.
+ * @note A tile used to be a second such place, for the mirror-image reason:
+ * with no id of its own, a click on the untracked markup filling most of its
+ * surface selected the whole area container. It carries a real
+ * data-resize-id now, so closest() lands on the tile and that IS right - it's
+ * the bounds everything inside is clamped to. The rect stays reachable by
+ * clicking it directly, and everything else via the ring's parent handle.
  */
 function resolveSelectableTarget(target) {
   var el = target && target.closest ? target.closest(RESIZABLE_SEL) : null;
@@ -1967,44 +1745,33 @@ function resolveSelectableTarget(target) {
     var toggle = el.closest("[data-theme-toggle], #themeBtn");
     if (toggle) return toggle;
   }
-  /* a login failure line's message string, the second glued child (see
-     isGluedChild()) - and the one that made the problem visible: the string
-     fills its line edge to edge, so EVERY click on the line landed on the
-     string, which as a clamped child of the line (see moveBoundsContainer())
-     had nowhere to go. The line looked immovable and unresizable when in fact
-     nobody had ever managed to select it. */
+  /* a login failure line's message string, the second glued child - and the
+     one that made the problem visible: the string fills its line edge to
+     edge, so EVERY click landed on it, and as a clamped child it had nowhere
+     to go. The line looked immovable when nobody had ever selected it. */
   if (el && isLoginErrorMsg(el)) return el.parentElement;
   return el;
 }
 
 /**
- * True for a theme toggle's own ".tic-label" span: a RESIZABLE_SEL match
- * (its data-edit-id) that still isn't an independent element the way every
- * other tracked descendant is. It's permanently glued to its button (no UI
- * ever selects it on its own, see resolveSelectableTarget()), so unlike a
- * nav link sitting inside the tracked nav bar - which SHOULD stay exactly
- * where a ta put it if the nav itself is later moved/resized, per
- * ancestorPos()'s "no attachment between elements" rule - the label is
- * supposed to move and resize as one physical piece with its button,
- * exactly like the plain (untracked) sun/moon icon markup already sitting
- * right next to it. Used to opt the label out of that rule everywhere it's
- * enforced (ancestorPos(), freezeDescendants()), rather than opting out of
- * RESIZABLE_SEL matching altogether, which would also break its
- * data-edit-id-driven click-to-edit text (wireTextField()) and its saved
- * text override (applyTextOverrides()), neither of which cares about this
- * distinction.
+ * True for a theme toggle's own ".tic-label" span: a RESIZABLE_SEL match that
+ * still isn't an independent element the way every other tracked descendant
+ * is.
  * @param el the element
  * @return true if el is a theme toggle's label
+ * @note It's permanently glued to its button, so unlike a nav link inside the
+ * tracked nav bar - which should stay put if the nav moves - the label moves
+ * and resizes as one piece with its button, like the plain sun/moon markup
+ * beside it. Used to opt it out of that rule rather than out of
+ * RESIZABLE_SEL, which would also break its click-to-edit and saved text.
  */
 function isThemeToggleLabel(el) {
   return !!(el.classList && el.classList.contains("tic-label") && isThemeToggleEl(el.parentElement));
 }
 
 /**
- * True for a light/dark toggle button itself: the nav's own `#themeBtn` on
- * every page, or a "theme" custom element a ta has placed (see
- * buildCustomElementNode()), both tagged data-theme-toggle. One helper since
- * a handful of places need the exact same test and each was spelling it out.
+ * True for a light/dark toggle button itself: the nav's own #themeBtn, or a
+ * placed "theme" element - both tagged data-theme-toggle.
  * @param el the element
  * @return true if el is a theme toggle button
  */
@@ -2014,16 +1781,13 @@ function isThemeToggleEl(el) {
 }
 
 /**
- * True for one of the login failure line's two strings (see
- * buildCustomElementNode()'s "loginError" kind): the same "tracked, but not
- * an independent element" case isThemeToggleLabel() describes, one element
- * down. The line carries two alternative wordings and only ever shows one, so
- * the STRING isn't the thing a ta places, moves or resizes - the line is; the
- * string is just the line's own content, exactly like the sun/moon markup
- * inside a theme button. Being separately tracked at all is only so each
- * wording can be typed and styled on its own (data-edit-id).
+ * True for one of the login failure line's two strings - the same "tracked,
+ * but not an independent element" case as isThemeToggleLabel(), one down.
  * @param el the element
  * @return true if el is a failure line's message span
+ * @note The line carries two alternative wordings and shows one, so the
+ * STRING isn't what a ta places or resizes - the line is. Being separately
+ * tracked at all is only so each wording can be typed and styled on its own.
  */
 function isLoginErrorMsg(el) {
   return !!(el && el.hasAttribute && el.hasAttribute("data-login-msg") &&
@@ -2032,20 +1796,16 @@ function isLoginErrorMsg(el) {
 }
 
 /**
- * True for a login element's own text, rather than something a ta placed on
- * top of one: the submit button's label, a credential box's greyed
- * placeholder, and either of the failure line's two strings.
- *
- * Each of these is the content of the thing it sits in - a button IS its
- * label, a placeholder is painted onto the box it hints at - so none of them
- * can stay behind when that thing moves ("the login button is a button, the
- * text is supposed to move with it"). They're separately tracked purely so
- * each can be reworded and restyled on its own, exactly like a theme toggle's
- * ".tic-label", which is why they get the same treatment (see isGluedChild()).
- * Their own move offset still applies on top, so a ta can still nudge a label
- * off-centre inside its button - it just travels with the button afterwards.
+ * True for a login element's own text rather than something placed on top of
+ * one: the submit button's label, a box's greyed placeholder, either failure
+ * string.
  * @param el the element
  * @return true if el is a login element's own text
+ * @note Each is the content of the thing it sits in - a button IS its label -
+ * so none can stay behind when that thing moves. They're separately tracked
+ * purely so each can be reworded and restyled, like a theme toggle's label.
+ * Their own move offset still applies on top, so a label can be nudged
+ * off-centre and still travel with its button.
  */
 function isLoginOwnText(el) {
   if (!el || !el.classList) return false;
@@ -2055,14 +1815,13 @@ function isLoginOwnText(el) {
 }
 
 /**
- * True for any tracked element that's physically part of its parent rather
- * than an independent element that merely sits on top of it - a theme
- * toggle's label, a login element's own text. Both are exempt from the "no
- * attachment between elements" rule every other tracked descendant follows
- * (see ancestorPos(), freezeDescendants()): they move and reflow as one piece
- * with the element they belong to.
+ * True for any tracked element physically part of its parent rather than an
+ * independent one sitting on top of it - a theme toggle's label, a login
+ * element's own text.
  * @param el the element
  * @return true if el is glued to its parent
+ * @note Both are exempt from the "no attachment between elements" rule every
+ * other tracked descendant follows: they move and reflow as one piece.
  */
 function isGluedChild(el) {
   return isThemeToggleLabel(el) || isLoginOwnText(el);
@@ -2070,23 +1829,18 @@ function isGluedChild(el) {
 
 /**
  * True for the page itself: `<body data-page-id="box.page">`, the surface
- * every other element is painted onto rather than one more element painted
- * onto it.
- *
- * The page is STYLEABLE but not TRACKED (see elId()/styleableEls()), which is
- * the whole shape of it: a ta recolors it through the exact same machinery
- * every other surface uses - light/dark pair, hover and click colors, opacity,
- * its own undo entries - with no separate "page settings" pane to keep in sync
- * (see selectPage()), while everything that only makes sense for something ON
- * the page can't reach it at all. It never moves, resizes, is deleted,
- * duplicated, promoted to navbar or reordered, since there's nothing for any of
- * those to be relative to; leaving it out of RESIZABLE_SEL is what enforces
- * that, and this test is only for the few places that then have to recognise it
- * on purpose. Matched on its own attribute rather than the tag so it's false on
- * a page whose body isn't tagged at all (the ta portal's own object canvas, see
- * initObjectCanvas(), which wires the same editor).
+ * everything else is painted onto.
  * @param el the element
  * @return true if el is the page
+ * @note The page is STYLEABLE but not TRACKED, which is the whole shape of
+ * it: a ta recolours it through the same machinery as any other surface -
+ * light/dark pair, hover and click colours, opacity, undo - with no separate
+ * "page settings" pane, while everything that only makes sense for something
+ * ON the page can't reach it. It never moves, resizes, duplicates or
+ * reorders, since there's nothing for those to be relative to, and leaving it
+ * out of RESIZABLE_SEL is what enforces that.
+ * @note Matched on its own attribute rather than the tag, so it's false on a
+ * page whose body isn't tagged - the portal's object canvas.
  */
 function isPageEl(el) {
   return !!(el && el.hasAttribute && el.hasAttribute("data-page-id"));
@@ -2094,13 +1848,12 @@ function isPageEl(el) {
 
 /**
  * Classifies an element so a resize drag can pick the right aspect-ratio
- * rule: an icon never distorts no matter what (its box's own ratio always
- * locked); an image or video never distorts its pixels either (object-fit:
- * cover re-crops instead), but its box's ratio is only locked while shift is
- * held; everything else (text boxes, cards, sections, buttons) always
- * resizes its two axes independently.
+ * rule.
  * @param el the element
  * @return "icon", "img" or "box"
+ * @note An icon never distorts, whatever happens. An image or video never
+ * distorts its pixels either (object-fit: cover re-crops), but its box's
+ * ratio only locks while shift is held. Everything else resizes freely.
  */
 function elKind(el) {
   var tag = (el.tagName || "").toLowerCase();
@@ -2113,10 +1866,10 @@ function elKind(el) {
 
 /**
  * Reads an element's own move offset off its dataset, 0,0 if never moved.
- * This is the element's own offset only; what actually paints also cancels
- * out every tracked ancestor's offset, see paintPos().
  * @param el the element
  * @return {tx, ty}
+ * @note This is el's own offset only; what actually paints also cancels out
+ * every tracked ancestor's offset, see paintPos().
  */
 function getPos(el) {
   return {
@@ -2126,27 +1879,23 @@ function getPos(el) {
 }
 
 /**
- * Reads an element's current box size: its explicit override if it's been
- * resized, else the size it was detached from flow at, else its live
- * rendered size. Layout px, not visual px, so an element with its own
- * stylesheet transform (eg. the scaled-up brand logo) doesn't jump when a
- * resize starts. A tile flow container is the one element whose stored figures
- * are only half the answer - see the branch below.
+ * Reads an element's current box size: its explicit override if resized, else
+ * the size it was detached from flow at, else its live rendered size.
  * @param el the element
  * @return {w, h}
+ * @note Layout px, not visual px, so an element with its own stylesheet
+ * transform doesn't jump when a resize starts. A tile flow container is the
+ * one element whose stored figures are only half the answer - see below.
  */
 function getSize(el) {
   var w = parseFloat(el.dataset.ovW);
   var h = parseFloat(el.dataset.ovH);
-  /* a flow container only OWNS an axis it has locked (see areaFlowFor()): the
-     other one is however tall/wide its tiles currently come to, and no stored
-     figure is that number - not a saved override (applyTileFlow() throws that
-     axis' px away again) and not the natW/natH it was detached at, which is a
-     single snapshot taken before the tiles were even rendered (see
-     applyElementAnchors()). Both go stale the moment an attachment is added or
-     a tile is resized, and a resize drag starting from a stale figure jumps
-     the container to it on the first mousemove. So measure that axis instead;
-     the locked one still answers from the box it was given. */
+  /* a flow container only OWNS an axis it has locked: the other is however
+     tall its tiles come to, and no stored figure is that number - not a saved
+     override (applyTileFlow() throws that axis' px away) and not the natW/natH
+     it was detached at, a snapshot taken before the tiles even rendered. Both
+     go stale the moment a tile changes, and a drag starting from a stale
+     figure jumps the container to it on the first mousemove. */
   if (isFlowAreaEl(el)) {
     var flow = areaFlowFor(elId(el));
     /* offsetWidth/Height rather than a client rect, for this function's own
@@ -2159,56 +1908,35 @@ function getSize(el) {
   }
   if (!isNaN(w) && !isNaN(h)) return { w: w, h: h };
   var nw = parseFloat(el.dataset.natW), nh = parseFloat(el.dataset.natH);
-  /* both halves or neither: an element seeded with a natW but no natH (a
-     live area, whose height is never a stored figure - see
-     buildCustomElement()'s isAutoHeightArea branch) would otherwise start a
-     resize drag from {w: seed, h: NaN}, and the first mousemove would snap it
-     to that stale seed width. That's what put the extras/days containers -
-     and the progress bar before them - visibly past the right edge of the
-     page column the instant they were grabbed. */
+  /* both halves or neither: an element seeded with a natW but no natH would
+     start a resize drag from {w: seed, h: NaN}, and the first mousemove would
+     snap it to that stale width - which is what put the extras/days
+     containers visibly past the right edge the instant they were grabbed */
   if (!isNaN(nw) && !isNaN(nh)) return { w: nw, h: nh };
   var r = el.getBoundingClientRect();
   return { w: r.width, h: r.height };
 }
 
 /**
- * The move offset of el's NEAREST tracked ancestor only, not every tracked
- * ancestor above it. Used to cancel a container's translate back out of the
- * elements inside it: moving a section or a card slides only that box,
- * never the independent text/icons/images sitting in it (no attachment
- * between elements). Only the nearest one matters because css transforms
- * compound down the real dom chain on their own: a card nested in a moved
- * section already paints its own cancel-transform for the section's move,
- * and that cancellation carries down to everything inside the card for
- * free. A title two levels down (section > card > title) summing BOTH
- * the section's offset and the card's would cancel the section's move
- * twice, once via the card's own painted transform propagating down and
- * again via its own, landing it exactly backwards instead of standing
- * still.
- * A glued child (see isGluedChild(): a theme toggle's own ".tic-label", a
- * login element's own label/placeholder/message) is one exception: it isn't an
- * independent element at all, so its parent is never treated as a
- * cancel-worthy ancestor - it's supposed to move/resize as one piece with
- * the element it belongs to, exactly like the plain (untracked) icon markup
- * sitting right next to the theme label does.
- *
- * A live area container (see isLiveAreaEl()) is the OTHER exception, for the
- * same reason one step up: nothing inside it is an independent element that
- * merely happens to sit on top of it. Its whole contents - every tile's
- * rect/icon/text/badge/button role, every element a ta has bound onto a tile
- * (see renderTileChildren()), and the "nothing here yet" placeholder, which
- * the spec explicitly wants to "stay grouped to the section" - are the
- * area's own content, painted into it by renderDays()/renderExtras(). So the
- * area is never a cancel-worthy ancestor: cancelling it out counter-
- * translated every one of those pieces to its pre-drag SCREEN position while
- * the tiles they belong to slid away underneath, tearing each card's
- * background rect, day tag and attachment rows off the card itself and
- * leaving the strays clipped by .day-card's own overflow:hidden - the "the
- * second i move it, both tiles turn into nonsense" report. Returning zero
- * here means they simply ride along with the container, which is what
- * dragging a box of tiles is supposed to do.
+ * The move offset of el's NEAREST tracked ancestor only, used to cancel a
+ * container's translate back out of the elements inside it - moving a section
+ * slides only that box, never the independent text and icons sitting in it.
  * @param el the element
  * @return {tx, ty}
+ * @note Only the nearest matters because css transforms compound down the dom
+ * chain on their own. A title two levels down summing BOTH the section's and
+ * the card's offset would cancel the section's move twice - once via the
+ * card's own painted transform propagating down - landing it exactly
+ * backwards instead of standing still.
+ * @note A glued child is one exception: it isn't an independent element, so
+ * its parent is never cancel-worthy - it moves as one piece with what it
+ * belongs to, like the untracked icon markup beside a theme label.
+ * @note A live area container is the other, one step up: nothing inside it is
+ * independent. Every tile role, every bound child and the placeholder are the
+ * area's own content. Cancelling it out counter-translated all of them to
+ * their pre-drag screen position while the tiles slid away underneath,
+ * tearing each card apart and clipping the strays - "the second i move it,
+ * both tiles turn into nonsense". Returning zero lets them ride along.
  */
 function ancestorPos(el) {
   if (isGluedChild(el)) return { tx: 0, ty: 0 };
@@ -2225,12 +1953,11 @@ function ancestorPos(el) {
 
 /**
  * The id of el's nearest tracked ancestor - the box it belongs to - or "" if
- * el is top-level. Same walk as ancestorPos(), just returning the id instead
- * of the offset. Note this is NOT what decides el's stacking order: a tracked
- * container is deliberately never given a z-index, so it is never a stacking
- * context and never confines what it holds (see applyLayerOrder()).
+ * el is top-level. Same walk as ancestorPos(), returning the id.
  * @param el the element
  * @return the ancestor's data-edit-id/data-resize-id, or ""
+ * @note NOT what decides el's stacking order: a tracked container is never
+ * given a z-index, so it never confines what it holds.
  */
 function nearestTrackedAncestorId(el) {
   var p = el.parentElement;
@@ -2242,13 +1969,12 @@ function nearestTrackedAncestorId(el) {
 }
 
 /**
- * The style popover's Flip horizontal/Flip vertical/Rotate controls'
- * contribution to el's transform, read off its own dataset (el.dataset.
- * flipH/flipV/rotate - see applyFlipRotateOverrides()/toggleStyleMenu()),
- * never el.style.transform directly since paintPos() is the only place
- * allowed to write that (it composes this back in on every move/resize).
+ * The style popover's Flip/Rotate contribution to el's transform, read off
+ * its own dataset.
  * @param el the element
  * @return a transform fragment ("" if el has no flip/rotate override)
+ * @note Never read from el.style.transform: paintPos() is the only place
+ * allowed to write that, and it composes this back in on every move.
  */
 function flipRotateTransform(el) {
   var parts = [];
@@ -2262,11 +1988,9 @@ function flipRotateTransform(el) {
 
 /**
  * Writes el's painted transform: its own move offset minus its tracked
- * ancestors' (see ancestorPos()), then any style popover Flip/Rotate
- * override (see flipRotateTransform()), then whatever stylesheet transform
- * el already had of its own (the scaled brand logo, the flipped cta
- * arrow), composed after the first two - instead of having it silently
- * stomped by the inline style.
+ * ancestors' (see ancestorPos()), then any Flip/Rotate override, then
+ * whatever stylesheet transform el already had - composed after the first
+ * two rather than silently stomped by the inline style.
  * @param el the element
  */
 function paintPos(el) {
@@ -2281,18 +2005,13 @@ function paintPos(el) {
   var ovXf = flipRotateTransform(el);
   if (ovXf) xf = (xf ? xf + " " : "") + ovXf;
   if (el.dataset.baseXf) xf = (xf ? xf + " " : "") + el.dataset.baseXf;
-  /* a naturally *inline* element (a plain <span>, eg. the hero title text)
-     ignores transform entirely per spec until blockified, same reason a
-     move/resize of the span ITSELF already calls detachFromFlow() first
-     (see startMoveDrag()). This is the same problem one step removed: el's
-     OWN offset can be 0 (it was never individually touched) and it can
-     still need a non-empty transform here purely to cancel out a tracked
-     ANCESTOR's move (see ancestorPos()) - without this, the cancellation
-     is silently a no-op and el visually drags along with its ancestor,
-     exactly contradicting "no attachment between elements". Forcing
-     inline-block (not a full detachFromFlow: nothing here needs a frozen
-     size or position:absolute, only the ability to accept a transform) is
-     enough, and only applied once a transform is actually needed. */
+  /* a naturally inline element ignores transform entirely until blockified,
+     the same reason moving the span itself calls detachFromFlow() first. This
+     is that one step removed: el's OWN offset can be 0 and it can still need
+     a transform purely to cancel a tracked ANCESTOR's move - without this the
+     cancellation is a silent no-op and el drags along with its ancestor.
+     inline-block is enough (nothing here needs a frozen size), and only
+     applied once a transform is actually needed. */
   if (xf && getComputedStyle(el).display === "inline") el.style.display = "inline-block";
   el.style.transform = xf;
   /* a css transition on transform (eg. .card's) would make el lag behind
@@ -2301,9 +2020,9 @@ function paintPos(el) {
 }
 
 /**
- * Sets el's own move offset and repaints it plus every tracked element
- * inside it: their painted transforms cancel el's out (see ancestorPos()),
- * so they visually stay put while el's own box slides underneath them.
+ * Sets el's own move offset and repaints it plus every tracked element inside
+ * it, whose painted transforms cancel el's out so they visually stay put
+ * while el's box slides underneath them.
  * @param el the element
  * @param tx horizontal offset in css px
  * @param ty vertical offset in css px
@@ -2321,17 +2040,15 @@ function setOwnPos(el, tx, ty) {
 }
 
 /**
- * Writes a real width/height onto an element (already detached from flow
- * by detachFromFlow(), so this can never push, shrink, or otherwise reflow
- * anything else on the page). A real box size, not a `transform: scale()`,
- * is the whole point: the box only dictates how the content inside flows.
- * Text rewraps at its own unchanged character size (the A-/A+ buttons are
- * the only thing that changes the letters themselves), and an image keeps
- * its authored object-fit (cover) and re-crops to whatever shape the box
- * is, rather than stretching its pixels.
+ * Writes a real width/height onto an element, already detached from flow so
+ * this can never reflow anything else on the page.
  * @param el the element
  * @param w new width in css px
  * @param h new height in css px
+ * @note A real box rather than a transform: scale() is the whole point - the
+ * box only dictates how content flows inside it, so text rewraps at its own
+ * unchanged character size and an image re-crops to the new shape rather than
+ * stretching its pixels.
  */
 function setBox(el, w, h) {
   el.dataset.ovW = w;
@@ -2380,15 +2097,11 @@ function commitSize(el) {
 
 /* the inline style properties mirrorTiledRoleStyle() copies from one tile
    role onto its siblings: purely how the piece LOOKS. Deliberately not
-   width/height/transform/position/top/left (geometry, mirrored separately by
-   mirrorTiledRoleGeometry(), which keys off the id rather than the role) and
-   not the font/text properties either. That split is what makes the spec's
-   one explicit exception work: an attachments tile's Download button and a
-   link tile's Open button share one data-extras-role but carry two different
-   ids (see buildExtrasTileHtml() in js/dashboard.js), so restyling either
-   one recolours/rounds/shadows/borders both, while their text, size and
-   position stay independent - "the duplication logic DOES affect it, but NOT
-   TEXTWISE, SIZEWIZE, or MOVEWIZE". */
+   geometry (mirrored separately, keyed by id rather than role) and not the
+   font/text properties. That split is what makes the spec's one exception
+   work: a Download and an Open button share a role but carry different ids,
+   so restyling either recolours both, while their text, size and position
+   stay independent. */
 var TILE_STYLE_MIRROR_PROPS = [
   "background", "background-color", "background-image", "color",
   "border", "border-width", "border-style", "border-color", "border-radius",
@@ -2396,26 +2109,18 @@ var TILE_STYLE_MIRROR_PROPS = [
 ];
 
 /**
- * Mirrors an attachments/day tile's rect/icon/text/button role element's
- * live inline LOOK onto every other tile's same-role element (every rendered
- * tile shares one data-extras-role/data-days-role per piece, so a style edit
- * to any single tile is meant to apply to the shared template - see
- * js/dashboard.js's buildExtrasTileHtml()/renderDays()). Checks both
- * data-extras-role (attachments tiles) and data-days-role (day tiles, two
- * independent templates - locked and open never mirror into each other since
- * they carry different role values). applyColorOverrides()/
- * applyRadiusOverrides()/etc. already repaint every matching id from the
- * saved maps on the NEXT load; this only covers the live, same-session gap,
- * since those inputs otherwise only ever touch styleMenuEl()'s single match
- * (see buildStyleMenu()'s colorInput/radiusInput/etc. handlers). A no-op for
- * every element outside a tiled area.
- *
- * Copies one property at a time (see TILE_STYLE_MIRROR_PROPS) rather than
- * assigning style.cssText wholesale as it used to: cssText carries the
- * dragged element's width/height/transform too, which would drag every
- * sibling's geometry along with a pure colour change and, worse, leak one
- * button variant's size onto the other.
+ * Mirrors a tile role's live inline LOOK onto every other tile's same-role
+ * element, since every rendered tile shares one role per piece and a style
+ * edit to any tile is meant to apply to the shared template.
  * @param el a just-edited element, any kind
+ * @note Checks both data-extras-role and data-days-role; locked and open day
+ * tiles are separate templates and never mirror into each other.
+ * @note The override sweeps already repaint every matching id on the NEXT
+ * load; this only covers the live, same-session gap, since those inputs
+ * otherwise touch only the single selected element.
+ * @note Copies one property at a time rather than assigning cssText
+ * wholesale, which carried width/height/transform too - dragging every
+ * sibling's geometry along with a pure colour change.
  */
 function mirrorTiledRoleStyle(el) {
   var attr = el.hasAttribute("data-extras-role") ? "data-extras-role"
@@ -2438,26 +2143,19 @@ function mirrorTiledRoleStyle(el) {
 }
 
 /**
- * Mirrors a just-moved/just-resized tile role's geometry onto every OTHER
- * element sharing its id, so nudging the icon on one attachment tile nudges
- * it on all of them the instant it happens - "any edits we make to one tile
- * in this section should be duplicated across the rest in real time".
- *
- * Keyed by id rather than by role (unlike mirrorTiledRoleStyle()) because
- * geometry is exactly what the two Download/Open button variants are meant
- * NOT to share, and they differ by id while sharing a role. This is only the
- * live half: the saved override is already stored under that same shared id,
- * so applyPositionOverrides()/applySizeOverrides() reproduce the identical
- * result for free on the next load by matching every element carrying it.
- *
- * Each mirror target re-clamps against ITS OWN tile rather than copying the
- * offset blindly: the same role renders in tiles of very different widths (a
- * day card's attachment row is a third the width of the main Extra
- * attachments column), so an offset that's comfortably inside the tile being
- * dragged can be well past the edge of a narrower sibling. Clamping per tile
- * keeps every copy inside its own box, which is the rule the drag itself
- * follows - see clampOwnPos().
+ * Mirrors a just-moved or resized tile role's geometry onto every OTHER
+ * element sharing its id, so nudging the icon on one tile nudges it on all of
+ * them the instant it happens.
  * @param el a just-moved/resized element, any kind
+ * @note Keyed by id rather than role (unlike mirrorTiledRoleStyle()) because
+ * geometry is exactly what the Download/Open variants must NOT share, and
+ * they differ by id while sharing a role.
+ * @note The live half only: the saved override is stored under that same
+ * shared id, so the load-time sweeps reproduce it for free.
+ * @note Each target re-clamps against ITS OWN tile rather than copying the
+ * offset blindly - the same role renders in tiles of very different widths,
+ * so an offset comfortably inside one can be past the edge of a narrower
+ * sibling.
  */
 function mirrorTiledRoleGeometry(el) {
   if (!isTiledRoleEl(el) && !isSharedTileChild(el)) return;
@@ -2476,9 +2174,8 @@ function mirrorTiledRoleGeometry(el) {
 }
 
 /**
- * Moves el to an exact {tx, ty} and persists it: used by a move drag's
- * mouseup and by undo/redo replaying a "move" history entry, so both go
- * through the exact same code.
+ * Moves el to an exact {tx, ty} and persists it - used by a move drag's
+ * mouseup and by undo/redo, so both go through the same code.
  * @param el the element
  * @param pos {tx, ty}
  */
@@ -2490,23 +2187,19 @@ function applyMoveSide(el, pos) {
 }
 
 /**
- * Resizes (and, since a left/top-handle drag can shift position too,
- * repositions) el to an exact {w, h, tx, ty} and persists both: used by a
- * resize drag's mouseup, a double-click reset, and undo/redo replaying a
- * "resize" history entry, so all three go through the exact same code.
+ * Resizes and (since a left/top-handle drag can shift position too)
+ * repositions el to an exact {w, h, tx, ty} and persists both - used by a
+ * resize drag's mouseup, a double-click reset, and undo/redo alike.
  * @param el the element
  * @param box {w, h, tx, ty}
  */
 function applyResizeSide(el, box) {
-  /* a tile has no box of its own to put back. "This tile is 340px wide" means
-     "this container's tracks are 340px wide" (see setTileTrackSize()), which is
-     why applySizeOverrides() skips tiles on load too. Replaying one through the
-     generic path below wrote a width onto a single grid item and left the
-     CONTAINER still tiled at whatever the drag ended on, so undoing a widened
-     day card put the card back to 340px inside a grid that was still one column
-     wide - the cards stayed stacked down the page, each one narrow again, which
-     is neither the state before the drag nor the state after it. Worse, the
-     detachFromFlow() below pulled the tile out of the grid it is laid out by. */
+  /* a tile has no box of its own to put back: "this tile is 340px wide" means
+     "this container's tracks are 340px wide". Replaying one through the
+     generic path wrote a width onto a single grid item and left the CONTAINER
+     tiled at whatever the drag ended on - neither the state before the drag
+     nor after it - and detachFromFlow() below pulled the tile out of the grid
+     laying it out. */
   if (isTileBoxEl(el)) {
     setTileTrackSize(el, box.w, box.h);
     commitSize(el);
@@ -2531,9 +2224,8 @@ function applyResizeSide(el, box) {
 }
 
 /**
- * Pushes a "move" undo entry (see applyHistoryAction()) unless the drag
- * didn't actually change anything (eg a double-click reset with nothing to
- * reset). Clears the redo stack, same as any other fresh edit.
+ * Pushes a "move" undo entry, unless the drag changed nothing (eg a
+ * double-click reset with nothing to reset). Clears the redo stack.
  * @param id the element's data-edit-id or data-resize-id
  * @param before {tx, ty} before the drag
  * @param after {tx, ty} after the drag
@@ -2566,9 +2258,8 @@ function pushResizeUndo(id, before, after, area) {
 }
 
 /**
- * Whether two content.sizes records describe the same box, either of them
- * possibly absent ("no saved size at all", which is a state in its own right -
- * see applySizeOverrides()).
+ * Whether two content.sizes records describe the same box, either possibly
+ * absent - "no saved size at all" is a state in its own right.
  * @param a a {w, h} or null/undefined
  * @param b a {w, h} or null/undefined
  * @return true if they mean the same thing
@@ -2579,13 +2270,12 @@ function sameSavedSize(a, b) {
 }
 
 /**
- * Puts one flow container's saved size back to an exact record (or to none at
- * all), DOM and content.sizes together, and re-runs the layout that reads it.
- * The counterpart of growFlowAreaForTiles(), which only ever grows a container
- * and so can't be its own inverse: undoing the tile drag that grew it has to
- * say the old height out loud.
+ * Puts one flow container's saved size back to an exact record (or to none),
+ * DOM and content.sizes together, and re-runs the layout that reads it.
  * @param id the container's data-resize-id
  * @param size a {w, h}, or null to go back to having no saved size
+ * @note The counterpart of growFlowAreaForTiles(), which only ever grows and
+ * so can't be its own inverse: undoing that has to say the old height aloud.
  */
 function setFlowAreaSavedSize(id, size) {
   if (!id) return;
@@ -2622,22 +2312,17 @@ function setFlowAreaSavedSize(id, size) {
 var EDIT_SIZES = {};
 
 /**
- * Applies saved size overrides (from a resize-handle drag, see
- * startResizeDrag()) on top of the page's own default sizing, for every
- * tracked element that has one. Runs on every load, live site included,
- * same as applyTextOverrides(): a saved size means real width/height, so
- * the element needs detaching from flow first (see detachFromFlow()) even
- * outside the ta portal's editor, otherwise a visitor's page would reflow
- * around the resized element. Elements with no saved size are left
- * completely untouched, in flow, exactly as the template renders them.
- * A tile role's id repeats identically across every rendered tile, so a size
- * stored under one applies to all of them here - that IS the shared-template
- * mirroring the spec asks for (mirrorTiledRoleGeometry() does the same thing
- * live, mid-session), not a bug to filter out. Two things are skipped: an
- * isResizeLockedTileRole() element (a reel tile, which would break its flex
- * track), and a TILE, whose saved size is a container track size rather than
- * a box of its own and is applied by applyTileFlow() instead.
+ * Applies saved size overrides on top of the page's own default sizing, for
+ * every tracked element that has one.
  * @param sizes content.sizes, {id: {w, h}}
+ * @note Runs on every load, live site included: a saved size means real
+ * width/height, so the element needs detaching from flow even outside the
+ * editor, or a visitor's page would reflow around it. Elements with no saved
+ * size are left completely untouched, in flow.
+ * @note A tile role's id repeats across every rendered tile, so a size stored
+ * under one applies to all - that IS the shared-template mirroring, not a bug
+ * to filter out. Skipped: a reel tile (it would break its flex track) and a
+ * TILE, whose saved size is a container track size applied by applyTileFlow().
  */
 function applySizeOverrides(sizes) {
   sizes = sizes || {};
@@ -2652,14 +2337,11 @@ function applySizeOverrides(sizes) {
        something the other tiles would follow. */
     if (isTileBoxEl(el)) return;
     detachFromFlow(el);
-    /* a flow container's HEIGHT is only its own to keep while its y axis is
-       locked (see areaFlowFor()). With y expanding - the default for both
-       top-level areas - the height is whatever the tiles currently painted
-       into it come to, re-derived on every render, and pinning it to a stored
-       px figure just fights that: a stale value too tall leaves a dead gap
-       below the tiles, too short clips them. Width is applied either way; an
-       x-expanding container has applyTileFlow() clear it again straight
-       after, since that axis is content-sized. */
+    /* a container's HEIGHT is only its own to keep while its y axis is
+       locked. With y expanding - the default for both top-level areas - the
+       height is whatever its tiles come to, re-derived per render, and a
+       stored px figure just fights that: too tall leaves a dead gap, too
+       short clips them. Width is applied either way. */
     if (isLiveAreaEl(el)) {
       el.dataset.ovW = s.w;
       el.style.width = s.w + "px";
@@ -2688,10 +2370,8 @@ function applyFontSizeOverrides(sizes) {
 
 /**
  * Applies saved whole-field text style overrides (font family, alignment,
- * letter spacing, see showTextToolbar()/saveTextStyle()) on top of the
- * page's own default styling, for every click-to-edit text field that
- * carries one. Runs on every load, live site included, same as
- * applyTextOverrides().
+ * letter spacing) on top of the page's default styling, for every
+ * click-to-edit field carrying one. Runs on every load, live site included.
  * @param styles content.text_styles, {id: {fontFamily, align, letterSpacing}}
  */
 function applyTextStyleOverrides(styles) {
@@ -2728,21 +2408,16 @@ function applyTextStyleOverrides(styles) {
 var ALIGN_JUSTIFY = { left: "flex-start", center: "center", right: "flex-end", justify: "space-between" };
 
 /**
- * Sets one element's text alignment - the single place that decision is
- * made, so the toolbar's align buttons, the datetime element's own align
- * buttons, undo/redo and the load-time apply pass can't drift apart.
- *
- * `text-align` alone silently does nothing on a flex container, and every
- * button on this site is one (`.btn`/`.theme-btn` are inline-flex, so a
- * label can sit beside an icon): its text becomes an anonymous flex ITEM,
- * and where that item sits is `justify-content`'s call, not text-align's.
- * That's why alignment appeared to be ignored on buttons specifically while
- * working everywhere else. Both properties are written, so the same saved
- * "align" value reads correctly whether the element turns out to lay its
- * content out as text or as flex items, with no per-element special-casing
- * and nothing extra stored.
+ * Sets one element's text alignment - the single place that decision is made,
+ * so the toolbar, the datetime element's own buttons, undo/redo and the
+ * load-time pass can't drift apart.
  * @param el the element
- * @param align "left"/"center"/"right"/"justify", or "" for the template default
+ * @param align "left"/"center"/"right"/"justify", or "" for the default
+ * @note `text-align` alone silently does nothing on a flex container, and
+ * every button here is one - its text becomes an anonymous flex ITEM, placed
+ * by justify-content rather than text-align, which is why alignment looked
+ * ignored on buttons specifically. Both properties are written, so one saved
+ * value reads correctly either way with nothing extra stored.
  */
 function applyTextAlignStyle(el, align) {
   el.style.textAlign = align;
@@ -2753,30 +2428,25 @@ function applyTextAlignStyle(el, align) {
 
 /**
  * Sets one element's forced text case - the single place that decision is
- * made, so the toolbar's caps toggle, undo/redo and the load-time apply
- * pass can't drift apart, same reasoning as applyTextAlignStyle() just
- * above. Several templates already force ALL CAPS on specific labels
- * through their own css class (a day tag, the hero heading, ...) rather
- * than through this override at all - this is only ever what a ta explicitly
- * picked for one instance on top of (or instead of) that.
+ * made, same reasoning as applyTextAlignStyle() above.
  * @param el the element
  * @param value "uppercase", "none", or "" for the template's own default
+ * @note Several templates already force ALL CAPS on specific labels through
+ * their own css class rather than this override; this is only what a ta
+ * explicitly picked for one instance on top of that.
  */
 function applyTextTransformStyle(el, value) {
   el.style.textTransform = value || "";
 }
 
 /**
- * Applies saved padding overrides (the text toolbar's padding row, see
- * buildTextToolbar()) on top of whatever padding the stylesheet gives an
- * element. Runs on every load, live site included, same as
- * applyTextStyleOverrides().
- *
- * Stored as one css shorthand string per id rather than four numbers: it's
- * what actually gets written, it round-trips through the snapshot as plain
- * text, and "no override" is just the absent key - the same shape every
- * other single-value override map in here already has.
+ * Applies saved padding overrides on top of whatever padding the stylesheet
+ * gives an element. Runs on every load, live site included.
  * @param padding content.padding, {id: css padding shorthand}
+ * @note Stored as one css shorthand string per id rather than four numbers:
+ * it's what actually gets written, it round-trips through the snapshot as
+ * plain text, and "no override" is just the absent key - the same shape every
+ * other single-value override map here already has.
  */
 function applyPaddingOverrides(padding) {
   padding = padding || {};
@@ -2788,12 +2458,12 @@ function applyPaddingOverrides(padding) {
 }
 
 /**
- * Reads an element's current padding as the four side values the toolbar's
- * padding row edits, rounded to whole px (the row only ever writes whole px,
- * and a computed sub-pixel value would show up as an unusable "11.328" in a
- * number box).
+ * Reads an element's current padding as the four side values the toolbar
+ * edits, rounded to whole px.
  * @param el the element
  * @return {t, r, b, l} in px
+ * @note The row only ever writes whole px, and a computed sub-pixel value
+ * would show up as an unusable "11.328" in a number box.
  */
 function currentPaddingValues(el) {
   var cs = getComputedStyle(el);
@@ -2806,28 +2476,21 @@ function currentPaddingValues(el) {
 }
 
 /**
- * Applies saved move offsets (from a move-handle drag, see
- * startMoveDrag()) on top of the page's own default flow position. Runs on
- * every load, live site included, same as applyTextOverrides(). A block/
- * inline-block element's flow slot is untouched either way, a translate is
- * paint-only, but a naturally *inline* element (a plain <span>, eg. the
- * hero title text) ignores `transform` entirely per spec until blockified,
- * so any element carrying a saved position still needs detachFromFlow()
- * first; a size override already forced that in applySizeOverrides()
- * (called before this), so this is a no-op for those. Two passes so every
- * element's cancel-out of its ancestors' offsets (see ancestorPos()) sees
- * those offsets already in place. Same "one id, every element carrying it"
- * shared-template rule as applySizeOverrides(), so a tile role's saved offset
- * lands on every tile at once; only isMoveLockedTileRole() (a reel tile) is
- * skipped.
- *
- * A third pass re-clamps every tile role afterward, for the same reason
- * mirrorTiledRoleGeometry() does live: one saved offset is painted into tiles
- * of different widths, so it can be inside the tile a ta dragged in and past
- * the edge of a narrower one. Real visitors get this too, not just the
- * editor - it's what stops a mirrored icon from being half-clipped by a day
- * card's overflow on a student's screen.
+ * Applies saved move offsets on top of the page's own default flow position.
+ * Runs on every load, live site included.
  * @param positions content.positions, {id: {tx, ty}}
+ * @note A translate is paint-only, so a block element's flow slot is
+ * untouched - but a naturally inline element ignores transform entirely until
+ * blockified, so anything carrying a saved position still needs
+ * detachFromFlow() first. A size override already forced that.
+ * @note Two passes, so every element's cancel-out of its ancestors' offsets
+ * sees those offsets already in place.
+ * @note Same "one id, every element carrying it" rule as applySizeOverrides(),
+ * so a tile role's offset lands on every tile; only a reel tile is skipped.
+ * @note A third pass re-clamps every tile role afterwards, for the reason
+ * mirrorTiledRoleGeometry() does live: one offset is painted into tiles of
+ * different widths. Visitors get this too - it's what stops a mirrored icon
+ * being half-clipped by a day card's overflow on a student's screen.
  */
 function applyPositionOverrides(positions) {
   positions = positions || {};
@@ -2856,12 +2519,12 @@ function applyPositionOverrides(positions) {
 var HIDDEN_IDS = {};
 
 /**
- * Hides every element a ta deleted in the visual editor (see
- * deleteElement()), on every load, live site included, same as
- * applyTextOverrides(). A deleted id can match more than one element
- * (mirrored text like the brand wordmark, nav + footer); all of them hide
- * together, same "an id is one logical thing" rule as the rest of this file.
+ * Hides every element a ta deleted in the visual editor, on every load, live
+ * site included.
  * @param hidden array of data-edit-id/data-resize-id values to hide
+ * @note A deleted id can match more than one element (the brand wordmark in
+ * nav and footer); all of them hide together, same "an id is one logical
+ * thing" rule as the rest of this file.
  */
 function applyHiddenOverrides(hidden) {
   HIDDEN_IDS = {};
@@ -2874,91 +2537,65 @@ function applyHiddenOverrides(hidden) {
 }
 
 /**
- * Whether el has any independently-tagged element nested inside it (eg the
- * brand link wraps the logo image and brand text, or the hero section wraps
- * its own eyebrow/title/countdown box, each separately resizable/editable).
- * Used to tell a plain leaf element (a hero CTA button, nothing tracked
- * nested inside it) from a wrapper other tagged elements depend on staying
- * visible/present when it's deleted.
- *
- * A login-page element (see buildCustomElementNode()'s "loginField"/
- * "loginButton"/"loginError" kinds) is the one deliberate "no": its label,
- * its input rectangle, its placeholder and its two error strings are PARTS of
- * it, not independent content that happened to be nested inside, so deleting
- * a credential box has to take the whole box with it. Leaving it on the
- * wrapper path would hide the outline and nothing else - the real <input>
- * would stay on the card, still focusable, still typed into, still posted.
+ * Whether el has any independently-tagged element nested inside it - eg the
+ * brand link wraps the logo image and brand text, each separately editable.
  * @param el the element
  * @return true if el has a tracked descendant
+ * @note Used to tell a plain leaf (a CTA button) from a wrapper other tagged
+ * elements depend on staying present when it's deleted.
+ * @note A login-page element is the one deliberate "no": its label, input
+ * rectangle, placeholder and error strings are PARTS of it, so deleting a
+ * credential box must take the whole box. On the wrapper path it would hide
+ * the outline and nothing else - the real <input> would stay on the card,
+ * still focusable, still typed into, still posted.
  */
 function hasTrackedDescendants(el) {
   if (el.hasAttribute && el.hasAttribute("data-login-el")) return false;
-  /* a theme toggle, for the same reason: its icon and its wording are the
-     button's own two pieces (see isGluedChild()), not elements that happen to
-     be sitting inside it. Treating it as a wrapper is what made "send to
-     back" a no-op on it - a wrapper is deliberately never given a z-index at
-     all (see applyLayerOrder()) - and left deleting one showing a floating
-     icon and label over a button that had gone invisible underneath them. */
+  /* a theme toggle, for the same reason: its icon and wording are the
+     button's own two pieces, not elements that happen to sit inside it.
+     Treating it as a wrapper made "send to back" a no-op on it, and left
+     deleting one showing a floating icon and label over an invisible
+     button. */
   if (isThemeToggleEl(el)) return false;
   return el.querySelectorAll(RESIZABLE_SEL).length > 0;
 }
 
 /**
- * Whether el is the root of a pasted copy (see pasteClipAsElement(), and
- * data-clip-root in buildCustomElementNode()). The single exception to
- * applyLayerOrder()'s "a container never gets a number" rule, because a paste
- * is the only container that routinely has to paint against something it
- * OVERLAPS: it lands 24px off whatever it was copied from, so the original is
- * directly underneath it. Without a number of its own, a pasted card is a
- * z-index:auto positioned box, and css paints every positively-ranked leaf
- * above every one of those whatever the dom order - so the original's own
- * heading and icons came straight through the copy's panel and the two read as
- * one garbled card.
- *
- * The rule exists to stop a container trapping its contents in a stacking
- * context, and a paste is the one place that costs nothing: its parts are the
- * copy's parts, the layer menu already moves a container's subtree as one
- * block (layerSubtreeIds()), and the whole thing is placed on top of the order
- * at the moment it's pasted. Every OTHER container stays unranked, so a hero
- * caption can still go behind a video in a different section.
+ * Whether el is the root of a pasted copy.
  * @param el the element
  * @return true if el is a pasted copy's root
+ * @note The single exception to applyLayerOrder()'s "a container never gets a
+ * number" rule, because a paste is the only container that routinely paints
+ * against something it OVERLAPS: it lands 24px off what it was copied from.
+ * Unranked, a pasted card is a z-index:auto positioned box, and css paints
+ * every positively-ranked leaf above those whatever the dom order - so the
+ * original's heading and icons came straight through the copy's panel.
+ * @note The rule exists to stop a container trapping its contents in a
+ * stacking context, and a paste is the one place that costs nothing: its
+ * parts are the copy's own, and the layer menu already moves a subtree as one
+ * block. Every OTHER container stays unranked.
  */
 function isClipRoot(el) {
   return !!(el && el.hasAttribute && el.hasAttribute("data-clip-root"));
 }
 
 /**
- * Applies (or removes) the "deleted" look/behavior for one element, without
- * persisting anything (setElementHidden() below does that on top of this;
- * applyHiddenOverrides() calls this directly on every load, since a real
- * visitor's page must never write to localStorage). A leaf element (nothing
- * independently tracked inside it) gets display:none, detached from flow
- * first (see detachFromFlow()) so its own slot stays reserved and removing
- * it can never reflow a sibling into the gap, same "no attachment between
- * elements" guarantee a move/resize already gets.
- *
- * Any element wrapping other independently-tagged elements (eg the brand
- * link around the logo image and brand text, or a section/card around its
- * own nested text/images/icons) can't use display:none at all: css
- * unconditionally hides every descendant of a hidden element too, which
- * would take those down with it even though none of them was the thing
- * actually selected for deletion. Physically moving them out to become
- * siblings (an earlier attempt at this) broke just as badly, dropping them
- * out of whatever flex/inline layout the wrapper used to arrange them,
- * straight into the surrounding layout's own flow, visibly reshuffling
- * everything else in it. Instead the wrapper is made invisible but still
- * present: visibility:hidden on it (unlike display:none, this doesn't
- * force-hide descendants, css lets any of them override back to visible on
- * their own), with visibility:visible stamped onto every tracked descendant
- * so they stay fully visible and interactive exactly as before, deleting a
- * section can never take its independent children down with it. A
- * descendant that's independently deleted in its own right (its id is in
- * HIDDEN_IDS) is left alone here rather than forced visible, so deleting a
- * wrapper never accidentally resurrects something inside it that was
- * already separately deleted.
+ * Applies (or removes) the "deleted" look for one element, without persisting
+ * anything - setElementHidden() does that on top, and applyHiddenOverrides()
+ * calls this directly on every load, since a visitor's page must never write
+ * to localStorage.
  * @param el the element
  * @param hide true to hide/delete it, false to restore it
+ * @note A leaf gets display:none, detached from flow first so its slot stays
+ * reserved and removing it can't reflow a sibling into the gap.
+ * @note A wrapper around other tagged elements can't use display:none at all:
+ * css unconditionally hides every descendant, taking them down with it.
+ * Moving them out to become siblings broke just as badly, dropping them out
+ * of the wrapper's flex layout into the surrounding flow. Instead the wrapper
+ * is made invisible but present - visibility:hidden, which descendants CAN
+ * override, with visibility:visible stamped onto each tracked one.
+ * @note A descendant already deleted in its own right is left alone rather
+ * than forced visible, so deleting a wrapper never resurrects it.
  */
 function setHiddenVisual(el, hide) {
   if (hasTrackedDescendants(el)) {
@@ -2975,51 +2612,39 @@ function setHiddenVisual(el, hide) {
   }
 }
 
-/* the visual editor's stacking order, bottom to top: which id's element
-   paints on top of which. an explicit ordered list a ta controls with the
-   ring's layer up/down handles (see moveLayer()), not the old syncStacking()
-   guess ("whatever was touched last must be on top", removed - it stomped
-   its own z-index the moment two touched elements overlapped, since resize/
-   move and stacking order shared the same inline style property). kept as
-   the in-memory canonical order so moveLayer() can shift one id without
-   re-deriving everything from content.layers again. */
+/* the visual editor's stacking order, bottom to top: an explicit ordered list
+   a ta controls with the ring's layer handles, not the old "whatever was
+   touched last is on top" guess (which stomped its own z-index the moment two
+   touched elements overlapped, since move/resize and stacking shared one
+   inline property). Kept in memory so moveLayer() can shift one id without
+   re-deriving everything from content.layers. */
 var LAYER_ORDER = [];
 
-/* The page's painted-in backdrops - the hero's background video and its
-   darkening scrim, and the faint logo watermark behind the about copy - used
-   to be handled here, by a BACKDROP_IDS table mapping a synthetic id to a
-   plain css selector, because they deliberately weren't tagged elements: no
-   ring, no handles, `pointer-events: none` on the watermark.
+/* The page's painted-in backdrops - the hero's video and scrim, the logo
+   watermark - used to be handled here by a table mapping a synthetic id to a
+   css selector, because they weren't tagged elements.
 
-   That was the wrong shape and it's gone. A synthetic id gets an element a
-   z-index and NOTHING else, which is not the same thing as being part of the
-   layer system: send a photo behind the watermark and the photo really did
-   get the lower number, but the watermark still couldn't be clicked, couldn't
-   be selected, couldn't be raised out of its hardcoded 5% opacity, and had no
-   ring to show it was now the thing in front - so the one move that would
-   demonstrate the layering had happened was the one move it refused to make,
-   and "it didn't go behind" was the only reading available. A backdrop is an
-   element painted on the page like any other; the fix is to say so. All three
-   carry a real data-resize-id now (templates/index.html), keeping the exact
-   ids the synthetic table used, so any saved content.layers still resolves.
+   That was the wrong shape. A synthetic id gets an element a z-index and
+   NOTHING else: send a photo behind the watermark and the photo really did
+   get the lower number, but the watermark still couldn't be clicked,
+   selected, or shown with a ring - so the one move that would demonstrate the
+   layering was the one it refused to make. A backdrop is an element painted
+   on the page like any other; all three carry a real data-resize-id now,
+   keeping the exact ids the synthetic table used so saved layers resolve.
 
-   They therefore need no special case anywhere in this file: they're ranked,
-   selectable, restyleable and layerable through the same one path as
-   everything else. DOM order is what puts them behind by default, which is
-   where they already sit in the markup.
-
-   The one thing left is a migration, not a mechanism: a content.layers saved
-   before these ids were ranked at all doesn't list them, and reconcileLayerOrder()
-   would otherwise append them on TOP of everything that order does list. */
+   They need no special case anywhere: DOM order puts them behind by default,
+   which is where they already sit. What's left is a migration, not a
+   mechanism - a content.layers saved before they were ranked doesn't list
+   them, and reconcileLayerOrder() would otherwise append them on top. */
 var BACKDROP_DEFAULT_BACK_IDS = ["media.hero.video", "media.hero.scrim", "media.about.logo"];
 
 /**
  * Every currently-rendered tracked element's id, in DOM (paint) order,
- * deduplicated. Seeds a sane default stack for any id a saved content.layers
- * list doesn't know about yet (a fresh blob, or a template id added since
- * it was saved), so an untouched page's stacking still matches exactly what
- * it looked like before any layer system existed.
+ * deduplicated.
  * @return array of ids, document order
+ * @note Seeds a sane default stack for any id a saved content.layers doesn't
+ * know about, so an untouched page still stacks exactly as it did before any
+ * layer system existed.
  */
 function domOrderIds() {
   var seen = {};
@@ -3031,12 +2656,10 @@ function domOrderIds() {
   return ids;
 }
 
-/* ids "promoted to navbar" (see the right-click "Promote to navbar" menu
-   option, toggleFixed()): these always stack above every non-fixed element
-   regardless of layer order, since a sticky/fixed-position element (the nav
-   bar itself, by default, see NAV_FIXED_IDS in app/db.py) needs to actually
-   stay on top of scrolling page content, not just whatever its DOM position
-   happened to sort it to. an object keyed by id for O(1) lookup. */
+/* ids "promoted to navbar" (see toggleFixed()): these always stack above
+   every non-fixed element regardless of layer order, since a sticky element
+   needs to stay on top of scrolling content rather than whatever its DOM
+   position sorted it to. An object keyed by id for O(1) lookup. */
 var FIXED_SET = {};
 
 /**
@@ -3088,13 +2711,11 @@ function saveFixedElements(ids) {
   try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
 }
 
-/* ids locked against being moved (right-click "Lock element"/"Unlock
-   element", see toggleLocked()): blocks both the drag-anywhere-to-move
-   affordance and the ring's own move handle from starting a drag, so a
-   placed element can't be nudged out of position by an accidental
-   click-drag. Resizing, text editing, deleting, layering, and color/
-   opacity are all still allowed while locked, only moving is blocked. an
-   object keyed by id for O(1) lookup, same shape as FIXED_SET. */
+/* ids locked against being moved (right-click "Lock element"): blocks both
+   the drag-anywhere affordance and the ring's move handle, so a placed
+   element can't be nudged out of position by an accidental drag. Resizing,
+   text, deleting, layering and colour all still work. Same shape as
+   FIXED_SET. */
 var LOCKED_SET = {};
 
 /**
@@ -3117,11 +2738,10 @@ function setLockedElements(ids) {
 }
 
 /**
- * Toggles one id in or out of the locked set (the right-click "Lock
- * element"/"Unlock element" option), repaints the grey edit-mode
- * highlight, and persists the change. Its own inverse, same as
- * toggleFixed(), so undo/redo just call it again either direction.
+ * Toggles one id in or out of the locked set, repaints the grey edit-mode
+ * highlight, and persists the change.
  * @param id the element's data-edit-id or data-resize-id
+ * @note Its own inverse, like toggleFixed(), so undo/redo just call it again.
  */
 function toggleLocked(id) {
   if (LOCKED_SET[id]) delete LOCKED_SET[id];
@@ -3158,27 +2778,25 @@ function applyLockHighlight() {
 
 /**
  * True if el is the actual instance FIXED_SET's id refers to, not just any
- * DOM node that happens to share that id. "Promote to navbar" (NAV_FIXED_IDS
- * in app/db.py) is conceptually about the nav bar itself, but a handful of
- * ids (eg "nav.brand", the wordmark) are shared with a mirrored copy
- * elsewhere on the page - eg templates/index.html's footer reuses
- * "nav.brand" so editing the brand name once updates both - and that
- * second copy was never meant to inherit the nav's own fixed/z-boosted
- * treatment just because it shares the same id.
+ * node sharing that id.
  * @param el the element
  * @return true if el both has a fixed id AND actually sits inside <nav>
+ * @note "Promote to navbar" is about the nav bar itself, but a few ids (eg
+ * "nav.brand") are shared with a mirrored copy elsewhere - the footer reuses
+ * it so editing the brand name updates both - and that copy was never meant
+ * to inherit the nav's z-boosted treatment.
  */
 function isFixedInstance(el) {
   return !!el && isFixed(elId(el)) && !!(el.closest && el.closest("nav"));
 }
 
 /**
- * The nearest tracked ancestor of el that is itself a fixed instance, ie the
- * navbar el has been promoted into (or, for something nested deeper, whichever
- * promoted box holds it). Used by applyLayerOrder() to tell the one container
- * that has to clear the whole page from the ones already inside it.
+ * The nearest tracked ancestor of el that is itself a fixed instance - the
+ * navbar el has been promoted into.
  * @param el the element
  * @return the ancestor element, or null
+ * @note Used by applyLayerOrder() to tell the one container that has to clear
+ * the whole page from the ones already inside it.
  */
 function fixedTrackedAncestor(el) {
   var box = el && el.parentElement && el.parentElement.closest(RESIZABLE_SEL);
@@ -3190,10 +2808,9 @@ function fixedTrackedAncestor(el) {
 }
 
 /**
- * Paints the always-visible red "this is fixed" outline (see .edit-fixed in
- * css/style.css) onto every currently-rendered element in FIXED_SET, and
- * clears it off everything else. Only actually visible under body.edit-mode
- * (the css rule is scoped there), but harmless to run unconditionally.
+ * Paints the always-visible red "this is fixed" outline onto every rendered
+ * element in FIXED_SET, and clears it off everything else. Only visible under
+ * body.edit-mode, but harmless to run unconditionally.
  */
 function applyFixedHighlight() {
   document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
@@ -3202,14 +2819,11 @@ function applyFixedHighlight() {
 }
 
 /**
- * Marks every tagged element that's either an actual link (`<a>`) or has a
- * right-click "Add link" url set (see LINKS/applyOneLink()) with
- * .edit-link (yellow hitbox, orange if it's also fixed, see
- * css/style.css), so anything that navigates when clicked reads as
- * visually distinct from the plain content nested inside it, instead of
- * just another same-colored overlapping box. Reruns on every
- * setElementLink(), same as applyFixedHighlight() reruns on every
- * toggleFixed().
+ * Marks every tagged element that is a real link or carries an "Add link" url
+ * with .edit-link, so anything that navigates when clicked reads as visually
+ * distinct from the plain content nested inside it.
+ * @note Reruns on every setElementLink(), as applyFixedHighlight() reruns on
+ * every toggleFixed().
  */
 function applyLinkHighlight() {
   document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
@@ -3222,32 +2836,24 @@ function applyLinkHighlight() {
 var LINKS = {};
 
 /**
- * Makes one element actually navigate to url when clicked. A real `<a>`
- * tag (a button, the brand link) just gets a real href, same as any
- * ordinary link, so the browser's own affordances (new tab, status bar
- * preview, ctrl-click) work normally; inside the visual editor,
- * wireClickToEdit()'s own click handler already preventDefaults before
- * this ever fires (see wireTextField()), so a linked button never
- * navigates away mid-edit with no extra handling needed here. Anything
- * else (a card, an image, a plain text field, none of which have a
- * navigable href of their own) gets a click listener that navigates
- * instead, gated on !isEditMode() so clicking it in the visual editor
- * still selects/edits normally rather than leaving the page. Guarded by
- * a JS property, not a dataset attribute: cloneNode() (see
- * duplicateElement()) copies attributes but never properties or
- * listeners, so a freshly duplicated element always gets its own real
- * listener re-wired here rather than trusting a copied flag that would
- * otherwise look "already wired" with no actual listener behind it.
+ * Makes one element navigate to url when clicked.
  * @param el the element
  * @param url the link target, or "" to remove it
+ * @note A real `<a>` just gets an href, so the browser's own affordances (new
+ * tab, status bar, ctrl-click) work normally. In the editor, the click-to-edit
+ * handler already preventDefaults before this fires, so a linked button never
+ * navigates away mid-edit.
+ * @note Anything else gets a click listener instead, gated on !isEditMode() so
+ * clicking it in the editor still selects normally.
+ * @note Guarded by a JS property, not a dataset attribute: cloneNode() copies
+ * attributes but never listeners, so a duplicate would otherwise look "already
+ * wired" with no listener behind it.
  */
 function applyOneLink(el, url) {
-  /* a gallery page action (see galleryActionOf()) isn't somewhere to navigate
-     to, it's something to DO on this page - so it takes the click-listener
-     path even on a real <a>, and the href is stripped rather than set: an
-     href="gallery:next" would be a broken navigation for anyone who
-     ctrl-clicked it. This is what makes "any button can be the forward
-     button" true - being the forward button is a link, nothing more. */
+  /* a gallery page action isn't somewhere to navigate to, it's something to
+     DO here - so it takes the click-listener path even on a real <a>, and the
+     href is stripped rather than set (an href="gallery:next" would be a broken
+     navigation for anyone who ctrl-clicked it) */
   var action = galleryActionOf(url);
   if (el.tagName === "A" && !action) {
     if (url) el.href = url; else el.removeAttribute("href");
@@ -3307,19 +2913,15 @@ function setElementLink(id, url) {
 
 /* ---------------------------------------------------------------------------
    THE "APPLY NOW" LINK: one url (content.join_url) shared by every .join-link
-   on the landing page - the hero's button, the one in the nav, the one at the
-   bottom of the about section. Not a content.links entry, and deliberately
-   not made into one: they're several elements pointing at one thing, so an
-   ordinary per-element link on one of them would silently drift the set apart
-   the next time the page loaded and setJoinUrl() painted the shared url back
-   over it.
+   on the landing page - the hero's button, the nav's, the about section's.
+   Deliberately not a content.links entry: they're several elements pointing
+   at one thing, so a per-element link on one would silently drift the set
+   apart the next time setJoinUrl() painted the shared url back over it.
 
    It used to be a field in the content manager's Landing page section, which
-   is why the link editor pointed at it there rather than offering to change
-   it. That section is down to the Apply Now tooltip now (everything else on
-   the landing page is edited in place), so the editor owns this too: the
-   link editor and the links view both write it through setSharedJoinUrl()
-   below, which paints all of them at once.
+   is why the link editor pointed at it there. That section is gone, so the
+   editor owns this too - the link editor and the links view both write it
+   through setSharedJoinUrl(), which paints all of them at once.
    --------------------------------------------------------------------------- */
 
 /* the current content.join_url, so the link editor has something to show
@@ -3376,23 +2978,18 @@ function setSharedJoinUrl(url) {
 
 /* ---------------------------------------------------------------------------
    INLINE LINKS: a link on PART of a text field, rather than on the whole
-   element the way LINKS/applyOneLink() above does it.
+   element the way LINKS/applyOneLink() does it.
 
-   The two are complementary, not competing. An element link makes a whole
-   card/image/button navigate; an inline link makes three words in the middle
-   of a sentence navigate and leaves the rest of the sentence alone - which is
-   what a line like "Access credentials are provided only to accepted
-   participants. Apply here." has always needed, and the reason that sentence
-   was until now the one piece of copy on the login page a ta couldn't safely
-   touch (its link was raw markup inside the field; there was no ui that knew
-   the link was in there).
+   The two are complementary. An element link makes a whole card or button
+   navigate; an inline link makes three words in the middle of a sentence
+   navigate and leaves the rest alone - which is why "Apply here." on the
+   login page was until now the one piece of copy a ta couldn't safely touch
+   (its link was raw markup inside the field, with no ui that knew it existed).
 
    An inline link is just more of the field's own innerHTML, so it needs no
-   storage of its own: saveEditedField() already persists the field's markup
-   verbatim and applyTextOverrides() already restores it, so a link survives
-   Apply/reload/profiles with zero new plumbing, and gets full undo/redo for
-   free through commitTextFieldChange() - the same "a chip is just markup"
-   reasoning the expression chips (buildExpressionChipHtml()) already rely on.
+   storage: saveEditedField() already persists the markup verbatim and
+   applyTextOverrides() restores it, so a link survives Apply, reload and
+   profiles with no new plumbing, and gets undo/redo for free.
    --------------------------------------------------------------------------- */
 
 /* what marks a piece of a field's text as linked. One class over both element
@@ -3403,20 +3000,15 @@ var INLINE_LINK_SEL = ".txt-link";
 
 /**
  * Which element an inline link inside this field has to be built out of.
- * Normally a real `<a href>`, so the browser's own affordances (ctrl-click,
- * middle-click, status-bar preview, "copy link address", screen-reader link
- * role) all work with nothing simulating them.
- *
- * The exception is a field that IS a link or a button, or sits inside one -
- * the "button" element kind is a tagged `<a class="btn">`, and the login
- * page's submit button is a `<span data-edit-id>` inside a real `<button>`.
- * Nesting an `<a>` in either is invalid html: the parser unnests it, so the
- * link would silently fall out of the field the first time its saved markup
- * was restored. Those get a `<span data-href>` that the delegated handler in
- * wireInlineLinks() navigates instead, which is exactly what applyOneLink()
- * already does for every non-`<a>` element link.
  * @param field the data-edit-id text field
  * @return "a" or "span"
+ * @note Normally a real `<a href>`, so ctrl-click, middle-click, status-bar
+ * preview and the screen-reader link role all work with nothing simulated.
+ * @note The exception is a field that IS a link or button, or sits inside
+ * one. Nesting an `<a>` in either is invalid html: the parser unnests it, so
+ * the link would silently fall out of the field the first time its saved
+ * markup was restored. Those get a `<span data-href>` instead, navigated by
+ * the delegated handler - exactly what applyOneLink() does for element links.
  */
 function inlineLinkTagFor(field) {
   return field.closest && field.closest("a, button") ? "span" : "a";
@@ -3434,8 +3026,7 @@ function inlineLinkHref(el) {
 
 /**
  * Points an inline link at a url, in whichever shape it already is - a real
- * `<a>` keeps using href (so it stays a real link to the browser), a span
- * keeps using data-href.
+ * `<a>` keeps using href, a span keeps using data-href.
  * @param el a .txt-link element
  * @param url the target
  */
@@ -3459,15 +3050,13 @@ function unwrapInlineNode(node) {
 }
 
 /**
- * The inline link the current text selection sits inside, if it's inside one
- * at all - what makes clicking the toolbar's link button with the caret
- * anywhere in "Apply here." edit THAT link rather than nest a second one in
- * it. Matches plain `<a>` markup too, not just .txt-link: a template's own
- * hand-written link (the login card's note shipped with one long before any
- * of this existed) should be just as editable as one placed here, which is
- * the whole point of the feature.
+ * The inline link the current text selection sits inside, if any - what makes
+ * the toolbar's link button edit THAT link rather than nest a second one.
  * @param field the data-edit-id text field being edited
  * @return the link element, or null
+ * @note Matches plain `<a>` markup too, not just .txt-link: a template's own
+ * hand-written link should be just as editable as one placed here, which is
+ * the whole point of the feature.
  */
 function inlineLinkAt(field) {
   var sel = window.getSelection();
@@ -3553,19 +3142,12 @@ function removeInlineLinkAtSelection(field) {
 
 /**
  * Makes inline links navigate on the live site, and makes sure they never do
- * anywhere else. One delegated listener for the whole page, so a link a ta
- * creates mid-session is live the moment it exists - the same reason
- * js/login.js delegates everything off document.
- *
- * Three cases:
- *  - inside the ta portal's preview/editor iframe: nothing navigates, same
- *    rule neuterLink() enforces for the nav's own links (the click still
- *    reaches wireTextField(), which is what opens the text for editing).
- *  - a real `<a>` on the live site: left completely alone, the browser
- *    already does everything right.
- *  - a `<span data-href>` on the live site (see inlineLinkTagFor()): navigated
- *    by hand, honouring ctrl/cmd/shift and middle-click as "new tab" so it
- *    behaves like the link it's standing in for.
+ * anywhere else. One delegated listener for the page, so a link a ta creates
+ * mid-session is live the moment it exists.
+ * @note Three cases: inside the portal's iframe nothing navigates (the click
+ * still reaches wireTextField(), which opens the text for editing); a real
+ * `<a>` on the live site is left alone; a `<span data-href>` is navigated by
+ * hand, honouring ctrl/cmd/shift and middle-click as "new tab".
  */
 function wireInlineLinks() {
   function navigate(e, link) {
@@ -3603,39 +3185,26 @@ function wireInlineLinks() {
 }
 wireInlineLinks();
 
-/* the generated copy of a container's own painted surface (see
-   ensureLayerSurfaces() and .layer-surface in css/style.css), tagged with the
-   id of the container it belongs to. Deliberately NOT in RESIZABLE_SEL: it's
-   a layer, not an element a ta owns - it can't be selected, moved, resized,
-   deleted, styled or reordered, it just gives the things ranked under its
-   container something solid to be behind, and it appears and disappears with
-   that container's own paint. */
+/* the generated copy of a container's own painted surface, tagged with that
+   container's id. Deliberately NOT in RESIZABLE_SEL: it's a layer, not an
+   element a ta owns - it just gives the things ranked under its container
+   something solid to be behind, and appears and disappears with it. */
 var LAYER_SURFACE_SEL = "[data-layer-surface]";
 
 /**
- * Whether el paints a surface of its own that something could sensibly be put
- * behind: anything with tracked elements inside it and a FULLY OPAQUE
- * background of its own.
- *
- * "Tracked elements inside it" is asked directly rather than through
- * hasTrackedDescendants(), which answers a different question and says no to
- * two boxes that matter here. A theme toggle and a login button each hold
- * their own icon and their own label, and that function calls them leaves on
- * purpose, so that deleting one takes its pieces with it (see isGluedChild()).
- * They are still boxes with things painted on them, and "put this label behind
- * the button" is still a sentence - it just has nothing to do with whether
- * they delete as a unit.
- *
- * Opaque is the whole test, and it's about the copy rather than the original.
- * A surface layer doesn't hollow the container out - it repaints the same
- * background over the top of it (see .layer-surface in css/style.css) - so an
- * opaque colour survives being painted twice unchanged, while a translucent
- * one would composite with itself and every faded panel on the site would
- * quietly darken. A container a ta has faded with the opacity slider therefore
- * has no surface layer and nothing can be put behind it, which is at least
- * honest: there's nothing solid there to be behind.
+ * Whether el paints a surface something could sensibly be put behind:
+ * anything with tracked elements inside it and a FULLY OPAQUE background.
  * @param el the element
  * @return true if el should carry a surface layer
+ * @note "Tracked elements inside it" is asked directly rather than through
+ * hasTrackedDescendants(), which answers a different question and calls a
+ * theme toggle and a login button leaves on purpose, so deleting one takes
+ * its pieces with it. They're still boxes with things painted on them.
+ * @note Opaque is the whole test, and it's about the copy: a surface layer
+ * repaints the same background over the container rather than hollowing it
+ * out, so an opaque colour survives being painted twice while a translucent
+ * one would composite with itself and quietly darken every faded panel. A
+ * faded container therefore has nothing to be behind, which is honest.
  */
 function paintsOwnSurface(el) {
   if (!el || !el.querySelectorAll || !el.querySelectorAll(RESIZABLE_SEL).length) return false;
@@ -3647,13 +3216,13 @@ function paintsOwnSurface(el) {
 }
 
 /**
- * Whether el establishes a stacking context of its own, ie whether a negative
- * z-index inside it resolves against EL's background or escapes to paint
- * against some ancestor's instead. The list is the css one; the last case is
- * the easily-missed one, since a flex or grid item with a z-index becomes a
- * context while still position:static.
+ * Whether el establishes a stacking context of its own - ie whether a
+ * negative z-index inside it resolves against EL's background or escapes to
+ * an ancestor's.
  * @param el the element
  * @return true if el is a stacking context
+ * @note The list is the css one; the last case is easily missed, since a flex
+ * or grid item with a z-index becomes a context while still position:static.
  */
 function createsStackingContext(el) {
   var cs = getComputedStyle(el);
@@ -3672,51 +3241,38 @@ function createsStackingContext(el) {
 
 /**
  * Whether el needs a copy of its own surface painted as a child layer.
- *
- * Narrower than painting one. A box that is NOT a stacking context doesn't
- * need the copy: a negative z-index inside it escapes to the nearest ancestor
- * context, where the box's own background is an ordinary in-flow block
- * background - and css paints those AFTER negative-z descendants, so the real
- * background already covers whatever was ranked under it, and a second copy
- * would only bleed through the antialiasing of its own rounded corners. A
- * stacking CONTEXT is the case that needs one, because there its background
- * paints first of all, below even the negative band.
- *
- * Anything the layer order gives a number to counts as one whether it looks
- * like it yet or not: applyLayerOrder() hands every ranked element an explicit
- * z-index and position:relative, which is the definition. Asking the computed
- * style alone would be a pass behind, since on the first load the number isn't
- * written yet.
  * @param el the element
  * @return true if el should carry a .layer-surface child
+ * @note Narrower than painting one. A box that is NOT a stacking context
+ * doesn't need the copy: a negative z-index inside it escapes to the nearest
+ * ancestor context, where the box's background is an ordinary in-flow block
+ * background - painted AFTER negative-z descendants - so the real background
+ * already covers them and a copy would only bleed through its own rounded
+ * corners. A stacking CONTEXT needs one, since there its background paints
+ * first of all, below even the negative band.
+ * @note Anything the layer order numbers counts as one whether it looks like
+ * it yet or not, since applyLayerOrder() hands every ranked element a z-index
+ * and position:relative. Asking the computed style would be a pass behind.
  */
 function needsLayerSurface(el) {
   return paintsOwnSurface(el) && (!hasTrackedDescendants(el) || createsStackingContext(el));
 }
 
 /**
- * Builds, sizes and tears down the surface layers, so that afterwards every
- * box that needs one has exactly one `.layer-surface` child and nothing else
- * does.
- *
- * Which boxes those are is needsLayerSurface()'s question. Called from
- * reconcileLayerOrder(), which every entry point into the stacking order
- * already goes through.
- *
- * Rebuilt from the live computed style each pass rather than once at load,
- * because everything it reads can change under it: a ta recolours a card (so a
- * container that painted nothing now paints something), fades one (so it stops
- * qualifying), duplicates one (so a second copy of the original's surface
- * arrives already in the clone), or a whole section is rendered late by a
- * fetch. The stale sweep is what makes all four self-correcting.
- *
- * Inserted as the FIRST child, which is also its default rank: reconcileLayerOrder()
- * seeds unknown ids in document order, so a surface starts out under
- * everything its container holds and an untouched page paints exactly as it
- * always did. position:relative goes on the container if it's still static -
- * an absolutely positioned child needs it to have something to fill - and
- * relative alone never creates a stacking context, so this doesn't wall the
- * container's contents off from the rest of the page's ranking.
+ * Builds, sizes and tears down the surface layers, so afterwards every box
+ * that needs one has exactly one `.layer-surface` child and nothing else
+ * does. Called from reconcileLayerOrder(), which every entry point into the
+ * stacking order already goes through.
+ * @note Rebuilt from the live computed style each pass rather than once at
+ * load, because everything it reads can change: a ta recolours a card (so a
+ * container that painted nothing now paints something), fades one, duplicates
+ * one, or a section renders late off a fetch. The stale sweep is what makes
+ * all four self-correcting.
+ * @note Inserted as the FIRST child, which is also its default rank, so a
+ * surface starts under everything its container holds and an untouched page
+ * paints as it always did. position:relative goes on a still-static
+ * container; relative alone never creates a stacking context, so this doesn't
+ * wall its contents off from the rest of the page's ranking.
  */
 function ensureLayerSurfaces() {
   /* stale sweep first: a surface whose container no longer paints one, whose
@@ -3754,19 +3310,16 @@ function ensureLayerSurfaces() {
 }
 
 /**
- * Whether an element has been ranked below a container it lives in that paints
- * a surface - a ta asking for it to sit behind the panel itself, not merely
- * behind the panel's other contents.
- *
- * Ranking below the container is the trigger rather than some separate flag
- * because it's already exactly what the layer menu means: domOrderIds() seeds
- * every container ahead of its own children, so everything in a box starts out
- * above that box and only a deliberate "send backward"/"send to back" can put
- * anything under it. Every enclosing box is checked, not just the nearest, so
- * an element sent to the very back of the page is behind all of them.
+ * Whether an element has been ranked below a container it lives in that
+ * paints a surface - a ta asking for it to sit behind the panel itself, not
+ * merely behind the panel's other contents.
  * @param m a member ({el, id}) from applyLayerOrder()
  * @param rank id -> its position in the layer order
  * @return true if el belongs under a surface of one of its own containers
+ * @note Ranking below the container is the trigger rather than a separate
+ * flag because that's already what the layer menu means: every container is
+ * seeded ahead of its children, so only a deliberate "send backward" puts
+ * anything under it. Every enclosing box is checked, not just the nearest.
  */
 function surfaceRankedOver(m, rank) {
   if (rank[m.id] === undefined) return false;
@@ -3776,12 +3329,10 @@ function surfaceRankedOver(m, rank) {
     if (id && rank[id] !== undefined && rank[m.id] < rank[id] && paintsOwnSurface(box)) return true;
     /* a negative z-index cannot leave a stacking context, so nothing outside
        the first one on the way up is reachable however the ranks compare. The
-       theme toggle is exactly this: an opaque button that IS one (every ranked
-       element gets an explicit z-index and position:relative, which is what
-       makes one), so its own label going below zero lands above the button's
-       background, not below the navbar's - and read the navbar as the panel it
-       had gone behind, the button stayed lit up, and the whole move looked
-       like the button doing nothing. It has its own surface layer now. */
+       theme toggle is exactly this: an opaque button that IS one, so its label
+       going below zero landed above the button's background rather than below
+       the navbar's, and the whole move looked like nothing happening. It has
+       its own surface layer now. */
     if (createsStackingContext(box)) return false;
     box = box.parentElement;
   }
@@ -3790,15 +3341,12 @@ function surfaceRankedOver(m, rank) {
 
 /**
  * Every element the stacking order covers - each tracked element, the page's
- * painted-in backdrops (tracked like anything else) and every container's own
- * surface layer (see ensureLayerSurfaces()) - in document order, each tagged
- * with the id its rank is looked up by and its position in that document
- * order.
- *
- * Iterated by ELEMENT, not by id: an id can be worn by more than one element
- * (the brand wordmark, mirrored in the nav and the footer), and each copy gets
- * its own z-index.
+ * backdrops and every container's surface layer - in document order, tagged
+ * with the id its rank is looked up by and its place in that order.
  * @return array of {el, id, dom, surface, fixed}
+ * @note Iterated by ELEMENT, not by id: an id can be worn by more than one
+ * element (the brand wordmark, mirrored in nav and footer), and each copy
+ * gets its own z-index.
  */
 function layerMembers() {
   var members = [];
@@ -3833,11 +3381,11 @@ function layerRanks() {
 
 /**
  * Sort comparator for two members of the one flat ranking: the ta's own
- * order, then document order for anything the saved order has never heard of.
- * The fixed/non-fixed banding isn't in here - applyLayerOrder() splits the
- * members into those two bands first and sorts each with this.
+ * order, then document order for anything it has never heard of.
  * @param rank id -> rank, from layerRanks()
  * @return a comparator for layerMembers() entries
+ * @note The fixed/non-fixed banding isn't in here - applyLayerOrder() splits
+ * the members into those bands first and sorts each with this.
  */
 function byLayerRank(rank) {
   return function (a, b) {
@@ -3852,20 +3400,15 @@ function byLayerRank(rank) {
 /**
  * The ids one layer-menu click actually has to move, in current stacking
  * order (bottom first).
- *
- * For a LEAF that's just its own id. For a CONTAINER it's every ranked id
- * inside it, because a container carries no z-index of its own (see
- * applyLayerOrder()) and so has no rank a stacking order could move: what
- * "send this card to the back" can only honestly mean is "send everything
- * painted in this card to the back", together and in the order they're
- * already in. That's also what a ta means by it - a card is its contents -
- * and it's what makes the layer menu do something on a container instead of
- * being silently dead on every one of them.
- *
- * Nested containers are skipped for the same reason they're skipped when
- * z-index is handed out: they hold no rank, their leaves do.
  * @param el the element
  * @return array of ids, bottom first, deduplicated
+ * @note For a LEAF that's its own id. For a CONTAINER it's every ranked id
+ * inside it, because a container carries no z-index of its own and so has no
+ * rank to move: "send this card to the back" can only honestly mean "send
+ * everything painted in this card to the back", together and in the order
+ * they're in. That's also what a ta means by it - a card is its contents.
+ * @note Nested containers are skipped for the same reason they're skipped
+ * when z-index is handed out: they hold no rank, their leaves do.
  */
 function layerSubtreeIds(el) {
   if (!el) return [];
@@ -3883,20 +3426,16 @@ function layerSubtreeIds(el) {
 }
 
 /**
- * Reconciles a saved order with what's actually on the page right now, and
- * installs the result as LAYER_ORDER: every id the saved list doesn't know
- * about yet is appended in document order (see domOrderIds()), so a page
- * that's never had anything reordered still stacks exactly as if there were
- * no layer system at all, and anything added since - a duplicated card, a
- * gallery tile that only exists once its fetch lands - starts out on top.
- *
- * Called before any reorder as well as by applyLayerOrder() itself, not just
- * by the latter: a layer button acting on an id the saved order had never
- * heard of used to move that id and then have every OTHER unknown id
- * appended on top of it a moment later, so "bring to front" on a gallery
- * tile's own backdrop landed it under the very label it was asked to cover.
+ * Reconciles a saved order with what's on the page right now and installs the
+ * result as LAYER_ORDER: every unknown id is appended in document order, so a
+ * page that's never been reordered stacks as if there were no layer system,
+ * and anything added since starts out on top.
  * @param layers content.layers, ordered ids bottom to top
  * @return the reconciled order (also stored in LAYER_ORDER)
+ * @note Called before any reorder as well as by applyLayerOrder(): a layer
+ * button acting on an unknown id used to move it and then have every OTHER
+ * unknown id appended on top a moment later, so "bring to front" on a gallery
+ * tile's backdrop landed it under the very label it was asked to cover.
  */
 function reconcileLayerOrder(layers) {
   /* before anything is ranked, since the surfaces are ranked too and a
@@ -3906,14 +3445,12 @@ function reconcileLayerOrder(layers) {
   var order = (layers || []).slice();
   var have = {};
   order.forEach(function (id) { have[id] = true; });
-  /* purely a migration, not a mechanism: the three backdrops (hero video,
-     hero scrim, about watermark) are ordinary tracked elements now and need
-     no special handling, but an order saved back when they weren't ranked at
-     all doesn't mention them, and the generic "append anything unknown to the
-     end" rule below would land them in FRONT of everything already on the
-     page - exactly backwards for something meant to be a backdrop. Walked in
-     REVERSE because unshift() prepends: forwards would put the scrim behind
-     the video and hide its darkening under the opaque clip. */
+  /* purely a migration: the three backdrops are ordinary tracked elements
+     now, but an order saved back when they weren't ranked doesn't mention
+     them, and the "append anything unknown" rule below would land them in
+     FRONT of the page - exactly backwards for a backdrop. Walked in REVERSE
+     because unshift() prepends: forwards would put the scrim behind the video
+     and hide its darkening under the opaque clip. */
   BACKDROP_DEFAULT_BACK_IDS.slice().reverse().forEach(function (id) {
     if (!have[id] && elByAnyId(id)) { order.unshift(id); have[id] = true; }
   });
@@ -3926,82 +3463,49 @@ function reconcileLayerOrder(layers) {
 
 /**
  * Applies an explicit stacking order to every tracked element and to the
- * page's own backdrops: z-index is just an id's rank (bottom = 1), so the
- * layer menu (see moveLayer()/moveLayerExtreme()) is the only thing that ever
- * reorders anything, and resizing or moving an element no longer silently
- * bumps it above its neighbours.
- *
- * ONE flat rank for the whole page, not one scoped per container. This is the
- * only arrangement that can answer the question a ta is actually asking. Css
- * compares z-index inside a stacking context and nowhere else, and any
- * positioned element given a z-index of its own BECOMES such a context - so
- * the moment a container carries a number, everything inside it is sealed in
- * with it and can never be ranked against anything outside. A scoped version
- * of this function tried exactly that and made "send to back" a half-truth
- * everywhere below the first section: an about-section photo could be sent
- * behind its own section's watermark, a day tile's title behind that tile's
- * own rect, but nothing could ever cross between two boxes, and reaching
- * across by dragging each element's whole ancestor chain to the end of the
- * order instead re-stacked entire SECTIONS as a side effect of layering one
- * photo inside one of them.
- *
- * So a stacking context is only ever escaped by not creating one: NO tracked
- * container (has hasTrackedDescendants()) is given an explicit z-index at any
- * depth. It stays at `z-index: auto`, which never establishes a context, so it
- * cannot trap its own contents however deeply they're nested. Only a LEAF -
- * icon, image, text, button, rect, custom element - competes for a number, and
- * every leaf on the page shares the exact same ranking. A leaf anywhere can
- * therefore be put in front of or behind a leaf anywhere else: a hero caption
- * behind the hero video, an about photo behind the `.bg-logo` watermark, a day
- * tile's lock icon behind that tile's `.day-tile-rect`, all through the same
- * one list.
- *
- * That a container holds no rank of its own is not the same as a container
- * being unlayerable: the layer menu moves everything INSIDE it instead, as one
- * block, keeping their order among themselves - see layerSubtreeIds().
- *
- * A surface a ta can get behind is always a real element, never a container's
- * own `background`, because a background is unrankable: css paints it before
- * every descendant of that element, in every stacking context, whatever
- * z-index the descendant is given. Some of those elements are hand-written
- * (the day/extras/year tiles each paint their own `.day-tile-rect`/
- * `.extras-tile-rect`/`.gv-year-rect`, the hero its video and scrim, the about
- * section its watermark). The hand-written ones are ordinary ranked leaves and
- * getting under one is plain z-index.
- *
- * The rest are generated by ensureLayerSurfaces(), one per container that
- * paints an opaque surface of its own - a navbar, a day row, an info card, a
- * reel tile, a banner, a whole section. Those are NOT ranked: they're pinned
- * at z-index:-1, the one number that means "over this box's own background,
- * under everything in it" (see .layer-surface in css/style.css for why a rank
- * can't do that job). What gets ranked is the elements underneath them, at -2
- * and down, in the band above.
- *
- * That does mean "send to back" on an element sitting directly on a section
- * takes it under that section's own panel and out of sight. That's the honest
- * reading of the button - the section's backdrop is one of the things painted
- * on the page, and behind all of them is behind that too - and it's undoable
- * like every other layer move.
- *
- * Fixed elements (FIXED_SET, see setFixedElements()) get no band of their own
- * and need none. "Promote to navbar" MOVES an element into the bar (which is
- * why isFixedInstance() can insist on one being inside a <nav> to count), and
- * the bar is stamped clear of the whole page below - so everything in it is
- * already above everything that isn't, and what's left to decide is only the
- * order the bar's own contents paint in, which is just their rank. There used
- * to be a second band that lifted every fixed element above every non-fixed
- * one, and once the bar's surface became a rankable layer that band was
- * actively wrong: the surface belongs to a fixed container, so it sorted into
- * the fixed band, above every un-promoted nav link - and the dashboard's "My
- * days"/"Extra attachments" links vanished under the bar's own backdrop.
- * A fixed CONTAINER - nav itself - gets stamped one past every rank on the
- * page even though ordinary containers get nothing, which is what keeps a
- * sticky bar over scrolling content regardless of how many leaves the page has
- * grown to; `.nav`'s hardcoded `z-index: 50` in css/style.css stays as the
- * no-js default. Runs on every load, live site included, same as
- * applyTextOverrides(). Forces position:relative on a still-static leaf first,
- * z-index has no effect otherwise.
+ * page's backdrops: z-index is just an id's rank (bottom = 1), so the layer
+ * menu is the only thing that ever reorders anything and a resize no longer
+ * silently bumps an element above its neighbours. Runs on every load, live
+ * site included.
  * @param layers content.layers, ordered ids bottom to top
+ *
+ * @note ONE flat rank for the whole page, not one scoped per container - the
+ * only arrangement that answers the question a ta is actually asking. Css
+ * compares z-index inside a stacking context and nowhere else, and any
+ * positioned element given a z-index BECOMES one, so the moment a container
+ * carries a number everything inside is sealed in with it. A scoped version
+ * made "send to back" a half-truth below the first section: nothing could
+ * cross between two boxes, and reaching across by dragging each element's
+ * whole ancestor chain re-stacked entire SECTIONS as a side effect.
+ * @note So a stacking context is only ever escaped by not creating one: NO
+ * tracked container is given an explicit z-index at any depth. It stays at
+ * z-index:auto, which never establishes a context. Only a LEAF competes for a
+ * number, and every leaf on the page shares one ranking - so a hero caption
+ * can go behind the hero video, or a day tile's lock icon behind its rect,
+ * all through the same list. A container holding no rank isn't the same as
+ * being unlayerable: the menu moves everything inside it as one block.
+ * @note A surface a ta can get behind is always a real element, never a
+ * container's own `background`, which is unrankable - css paints it before
+ * every descendant whatever z-index they get. The hand-written ones (a tile's
+ * rect, the hero's video and scrim, the about watermark) are ordinary ranked
+ * leaves. The rest are generated by ensureLayerSurfaces() and are NOT ranked:
+ * they're pinned at z-index:-1, the one number meaning "over this box's own
+ * background, under everything in it". What gets ranked is the elements
+ * beneath them, at -2 and down.
+ * @note That does mean "send to back" on an element sitting directly on a
+ * section takes it under that section's panel and out of sight. That's the
+ * honest reading of the button, and it undoes like any other layer move.
+ * @note Fixed elements get no band of their own and need none: "Promote to
+ * navbar" MOVES an element into the bar, and the bar is stamped clear of the
+ * whole page below, so what's left to decide is only the order the bar's own
+ * contents paint in. A second band that lifted every fixed element above
+ * every non-fixed one became actively wrong once the bar's surface was
+ * rankable - it sorted into the fixed band above every un-promoted nav link,
+ * and the dashboard's links vanished under the bar's own backdrop.
+ * @note A fixed CONTAINER - nav itself - is stamped one past every rank on
+ * the page even though ordinary containers get nothing, which keeps a sticky
+ * bar over scrolling content however many leaves the page grows.
+ * `.nav`'s hardcoded z-index: 50 stays as the no-js default.
  */
 function applyLayerOrder(layers) {
   reconcileLayerOrder(layers);
@@ -4017,55 +3521,44 @@ function applyLayerOrder(layers) {
   members.sort(byLayerRank(rank));
   var top = members.length + 1;
 
-  /* everything a ta has ranked below one of its own containers' surfaces (see
-     surfaceRankedOver()). Those go BELOW zero, and are the only things that
-     ever do: -1 is the surface layer itself, and css paints a negative-z
-     descendant right after the background of whichever context it resolves
-     in, so -2 and down is under the panel and under nothing else. Most
-     negative to the lowest-ranked, so they keep the order the layer menu
-     shows. This is the one place the old "an element can be hidden and still
-     be there" complaint could come back, and what stops it is that the test
-     is paintsOwnSurface(): a member only ever gets a negative number when
-     there is a real opaque panel over it to be behind. */
+  /* everything ranked below one of its own containers' surfaces. Those go
+     BELOW zero, and are the only things that do: -1 is the surface layer
+     itself, and css paints a negative-z descendant right after the background
+     of whichever context it resolves in, so -2 and down is under the panel and
+     under nothing else. Most negative to the lowest-ranked, so they keep the
+     order the menu shows. What stops "hidden but still there" coming back is
+     that a member only goes negative when there is a real opaque panel over
+     it to be behind. */
   var behind = members.filter(function (m) { return m.assignZ && surfaceRankedOver(m, rank); });
   behind.forEach(function (m, i) { m.behindZ = -(behind.length - i + 1); });
 
   var z = 1;
   members.forEach(function (m) {
     if (!m.assignZ) {
-      /* a container never gets a numbered rank the way a leaf does, but a
-         FIXED one (nav itself, or anything "Promote to navbar" was used on
-         that happens to wrap tracked children) still has to visually clear
-         the whole non-fixed band while scrolling, same guarantee a fixed leaf
-         already gets. One past the highest number anything on the page can
-         have, so it stays correct however large the page grows - nav used to
-         lean on css/style.css's own `z-index: 50`, which quietly stopped
-         being enough once the page passed 50 tracked leaves.
+      /* a container never gets a numbered rank, but a FIXED one still has to
+         visually clear the whole non-fixed band while scrolling. One past the
+         highest number anything on the page can have, so it stays correct
+         however large the page grows - nav used to lean on css's own z-index:
+         50, which stopped being enough past 50 tracked leaves.
 
-         Only the OUTERMOST fixed container gets it - the bar itself - and
-         never one nested inside another. A number on a nested one buys
-         nothing (it's already inside the bar's own context, which is what
-         clears the page) and costs the thing this whole mechanism is for: a
-         flex or grid ITEM with a z-index becomes a stacking context even
-         while it's still position:static, which is exactly what `.brand` is
-         inside `.nav-inner`. That sealed the wordmark and the logo in with
-         it above the bar's own surface layer, so "send to back" on either
-         moved their rank and changed nothing on screen. */
+         Only the OUTERMOST fixed container gets it, never one nested inside
+         another. A number on a nested one buys nothing and costs the thing
+         this is for: a flex ITEM with a z-index becomes a stacking context
+         even while position:static, which is exactly what `.brand` is inside
+         `.nav-inner` - sealing the wordmark and logo in above the bar's own
+         surface, so "send to back" on either changed nothing on screen. */
       m.el.style.zIndex = (m.fixed && !fixedTrackedAncestor(m.el)) ? String(top) : "";
       return;
     }
     if (getComputedStyle(m.el).position === "static") m.el.style.position = "relative";
     if (m.behindZ !== undefined) { m.el.style.zIndex = String(m.behindZ); return; }
     m.el.style.zIndex = String(z);
-    /* a tint overlay (setElementTint()) is a plain untracked sibling div
-       appended right after its image inside the same free-wrap: without
-       its own z-index it stays at the implicit 0/auto, and ANY element
-       here with a real explicit z-index (which is every one of them,
-       including its own image) paints above z-index:auto regardless of
-       dom order, hiding the tint completely. Giving it the SAME z-index
-       as its image is enough, not a higher one: for two elements sharing
-       one z-index, plain dom order decides, and the overlay is already
-       the later sibling. */
+    /* a tint overlay is a plain untracked sibling div after its image in the
+       same free-wrap: without its own z-index it stays at auto, and any
+       element here with an explicit one (including its own image) paints
+       above auto regardless of dom order, hiding the tint. The SAME z-index
+       as its image is enough - for two elements sharing one, dom order
+       decides, and the overlay is already the later sibling. */
     if (m.el.parentNode && m.el.parentNode.classList &&
         m.el.parentNode.classList.contains("free-wrap")) {
       var tintOv = m.el.parentNode.querySelector(".tint-ov");
@@ -4079,21 +3572,16 @@ function applyLayerOrder(layers) {
 }
 
 /**
- * Shifts one element one step up or down the stacking order (the layer
- * menu's "Bring forward"/"Send backward"), repaints every z-index and
- * persists the whole order.
- *
- * The step is over the one flat page-wide order (see applyLayerOrder()),
- * skipping anything the element could never paint against anyway, so a single
- * click really does move it past exactly one thing it could be painting over
- * or under. A CONTAINER steps as a block - every leaf inside it at once,
- * keeping their order among themselves (see layerSubtreeIds()) - which is the
- * only thing stepping a container can mean, since a container holds no rank of
- * its own.
+ * Shifts one element one step up or down the stacking order, repaints every
+ * z-index and persists the whole order.
  * @param id the element's data-edit-id or data-resize-id
  * @param dir +1 to bring forward one step, -1 to send backward one step
  * @return true if it actually moved, false at either end of its band (so
  *   pushLayerUndo() knows not to record a no-op step)
+ * @note The step is over the one flat page-wide order, skipping anything the
+ * element could never paint against anyway, so a click really does move it
+ * past exactly one thing. A CONTAINER steps as a block, keeping its leaves'
+ * order among themselves - the only thing stepping a container can mean.
  */
 function moveLayer(id, dir) {
   /* reconciled first so every id involved is certain to be IN the order
@@ -4106,11 +3594,10 @@ function moveLayer(id, dir) {
 
   /* one step lands past something that can actually paint against the element
      being moved. Two ids never can if one is inside a navbar and the other
-     isn't: the bar is a stacking context of its own (see applyLayerOrder()),
-     so how their ranks compare decides nothing, and a click that stepped the
-     brand past a hero button just looked like the button doing nothing. An id
-     with nothing rendered for it at all - a saved order still listing an
-     element a template has since dropped - is skipped for the same reason. */
+     isn't - the bar is its own stacking context, so how their ranks compare
+     decides nothing, and stepping the brand past a hero button just looked
+     like the button doing nothing. An id with nothing rendered is skipped for
+     the same reason. */
   var byId = {};
   layerMembers().forEach(function (m) { if (!byId[m.id]) byId[m.id] = m.el; });
   function stepNavOf(lid) {
@@ -4160,19 +3647,16 @@ function pushLayerUndo(id, dir) {
 }
 
 /**
- * Moves id all the way to the front or back of the PAGE (the layer menu's
- * "Bring to front"/"Send to back"), by dropping it at the extreme end of
- * LAYER_ORDER. Since the order is flat and page-wide (see applyLayerOrder()),
- * an end of the array is genuinely the front or back of everything painted on
- * the page - the section it happens to live in, the card, the tile and the
- * page's own backdrops included - which is what the button says.
- *
- * A CONTAINER moves as a block: every leaf inside it, keeping their order
- * among themselves (see layerSubtreeIds()), since a container holds no rank
- * of its own to move.
+ * Moves id all the way to the front or back of the PAGE, by dropping it at
+ * the extreme end of LAYER_ORDER.
  * @param id the element's data-edit-id or data-resize-id
  * @param toTop true for "to top" (front), false for "to bottom" (back)
  * @return true if the order actually changed
+ * @note Since the order is flat and page-wide, an end of the array really is
+ * the front or back of everything painted - the section, card, tile and the
+ * page's own backdrops included - which is what the button says.
+ * @note A CONTAINER moves as a block, keeping its leaves' order among
+ * themselves, since it holds no rank of its own.
  */
 function moveLayerExtreme(id, toTop) {
   reconcileLayerOrder(LAYER_ORDER);
@@ -4194,11 +3678,11 @@ function moveLayerExtreme(id, toTop) {
 
 /**
  * Pushes a "layerorder" undo entry for a to-top/to-bottom jump, unless
- * moveLayerExtreme() reports it was a no-op. Stores the whole before/after
- * stack (not just an id+dir like the single-step version) since jumping to
- * an extreme isn't its own inverse the way an adjacent swap is.
+ * moveLayerExtreme() reports a no-op.
  * @param id the element's data-edit-id or data-resize-id
- * @param toTop true for "to top", false for "to bottom", same as moveLayerExtreme()
+ * @param toTop true for "to top", false for "to bottom"
+ * @note Stores the whole before/after stack rather than an id+dir, since
+ * jumping to an extreme isn't its own inverse the way a swap is.
  */
 function pushLayerExtremeUndo(id, toTop) {
   var before = LAYER_ORDER.slice();
@@ -4208,10 +3692,8 @@ function pushLayerExtremeUndo(id, toTop) {
 }
 
 /**
- * Persists the whole stacking order into the preview snapshot, the same
- * localStorage draft every other override here uses. Rewritten wholesale
- * (not merged), same as saveCustomElements(), since the in-memory
- * LAYER_ORDER is always the full, current stack.
+ * Persists the whole stacking order into the preview snapshot. Rewritten
+ * wholesale rather than merged, since LAYER_ORDER is always the full stack.
  * @param order LAYER_ORDER
  */
 function saveLayerOrder(order) {
@@ -4223,71 +3705,48 @@ function saveLayerOrder(order) {
   try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
 }
 
-/* undo/redo for every visual editor action, a plain stack of commits: see
-   applyHistoryAction()'s doc comment for the full list of entry shapes
-   (text, delete, add, move, resize, fontsize, align, letterspacing,
-   fontfamily, layer, layerorder, fixed, color, opacity, locked). a
-   duplicate reuses the "add" entry shape, see duplicateElement(). a fresh
-   edit clears the redo stack, same convention as any text editor. */
+/* undo/redo for every visual editor action, a plain stack of commits - see
+   applyHistoryAction() for the entry shapes. A duplicate reuses the "add"
+   shape, and a fresh edit clears the redo stack, as in any text editor. */
 var EDIT_UNDO = [];
 var EDIT_REDO = [];
 
 /**
  * Takes el out of normal document flow so its real width/height can change
- * without ever touching anything else on the page: an absolutely
- * positioned box is excluded from its containing block's own fit-content
- * size calculation by definition, so however big el gets, no sibling or
- * parent ever shifts because of it (no attachment between elements). Only
- * done lazily, on the first actual resize (or a saved size on load); an
- * untouched element stays exactly as the template laid it out.
- * Wraps el in a plain <span class="free-wrap"> (skipped if already
- * wrapped) frozen to el's pre-detach layout size, so el's old flow slot
- * doesn't collapse or get filled by a sibling the instant el leaves it.
- * The wrap's display is matched to el's natural one (block stays block,
- * inline becomes inline-block): forcing inline-block on everything would
- * pull block siblings (a heading and its paragraph) onto one line. Sizes
- * come from offsetWidth/offsetHeight (layout px) rather than the rect so
- * an element with a stylesheet transform of its own (the scaled brand
- * logo) doesn't get its visual size baked in as its layout size; svg has
- * no offsetWidth, so icons fall back to the rect, which is fine since
- * none of them are scaled by the stylesheet.
+ * without touching anything else on the page.
  * @param el the element to detach from flow
  * @return el's wrap
+ * @note An absolutely positioned box is excluded from its containing block's
+ * fit-content size by definition, so however big el gets, nothing shifts
+ * because of it. Only done lazily, on the first resize or a saved size.
+ * @note Wraps el in a `<span class="free-wrap">` frozen to its pre-detach
+ * size, so its old slot doesn't collapse or get filled by a sibling. The
+ * wrap's display matches el's natural one - forcing inline-block on
+ * everything would pull block siblings onto one line.
+ * @note Sizes come from offsetWidth/Height (layout px) rather than the rect,
+ * so an element with a stylesheet transform doesn't bake its visual size in
+ * as its layout size. Svg has no offsetWidth, so icons fall back to the rect.
  */
 function detachFromFlow(el, knownRect) {
   var wrap = el.parentNode;
   if (wrap && wrap.classList && wrap.classList.contains("free-wrap")) return wrap;
 
-  /* el's exact pre-detach viewport position, so any drift introduced by
-     the wrap/reparent below (see the correction at the bottom of this
-     function) can be measured and cancelled out. Accepts an already-
-     measured rect (knownRect) instead of measuring fresh here: a grouped
-     move detaches several siblings in one gesture, and an EARLIER sibling
-     leaving flow (becoming position:absolute) can itself reflow a LATER
-     one still waiting its turn (eg two spans sharing one <h1> line box),
-     so measuring fresh here for the second element would capture its
-     position AFTER the first one's departure already nudged it, not its
-     true pre-drag spot. Callers that detach a whole group up front (see
-     startMoveDrag()) grab every member's rect in one synchronous pass
-     before detaching any of them, and pass those in here instead. */
+  /* el's exact pre-detach viewport position, so any drift the wrap/reparent
+     introduces can be measured and cancelled. Accepts an already-measured
+     rect: a grouped move detaches several siblings in one gesture, and an
+     EARLIER sibling leaving flow can itself reflow a LATER one still waiting
+     its turn, so measuring fresh here would capture the second element's
+     position after the first had already nudged it. */
   var preRect = knownRect || el.getBoundingClientRect();
 
-  /* an element that's already position:absolute via its OWN stylesheet
-     rule (eg. .day-tile-rect/.extras-tile-rect, an inset:0 background
-     layer that fills its position:relative tile without ever affecting
-     the tile's own flow height - see css/style.css) needs a completely
-     different path here: the normal wrap-in-flow logic below measures
-     el's CURRENT rendered size and turns that into a brand new IN-FLOW
-     block sized to match. For an inset:0 element that size IS its entire
-     parent tile, so that wrap becomes a phantom box as tall as the whole
-     tile, inserted right into the tile's own flow on top of all its real
-     content - inflating the card to a huge height and shoving everything
-     else down (this is what corrupted the day tiles when one of these
-     rects took even a tiny accidental drag). Since el was never part of
-     flow to begin with, its wrap shouldn't be either: give the wrap the
-     same absolute scheme, positioned to match el's current spot relative
-     to its own positioned ancestor, so it keeps contributing exactly zero
-     flow footprint, same as el always did. */
+  /* an element already position:absolute via its OWN stylesheet rule (a tile
+     rect, inset:0 over its tile) needs a different path: the normal logic
+     below measures el's rendered size and turns it into an IN-FLOW block. For
+     an inset:0 element that size IS its whole parent tile, so the wrap becomes
+     a phantom box as tall as the tile, inserted into the tile's own flow on
+     top of its real content - which is what corrupted the day tiles when a
+     rect took a tiny accidental drag. Since el was never in flow, its wrap
+     shouldn't be either: give the wrap the same absolute scheme. */
   if (getComputedStyle(el).position === "absolute") {
     var absAncestor = el.offsetParent || el.parentNode;
     var absParentRect = absAncestor.getBoundingClientRect();
@@ -4313,12 +3772,9 @@ function detachFromFlow(el, knownRect) {
     return wrap;
   }
 
-  /* getBoundingClientRect keeps sub-pixel precision; offsetWidth/Height
-     round to a whole css px, which is fine for a transformed element (its
-     visual, scaled size shouldn't become its layout size) but for
-     anything else that rounding is enough to nudge a child's text across
-     its own wrap threshold and reflow it, moving stuff that's supposed to
-     be immune (see freezeDescendants()) */
+  /* getBoundingClientRect keeps sub-pixel precision; offsetWidth/Height round
+     to whole px, fine for a transformed element but otherwise enough to nudge
+     a child's text across its wrap threshold and reflow it */
   var xf = getComputedStyle(el).transform;
   var w, h;
   if (xf && xf !== "none") {
@@ -4329,16 +3785,11 @@ function detachFromFlow(el, knownRect) {
     w = rect.width; h = rect.height;
   }
   var naturalDisplay = getComputedStyle(el).display;
-  /* any "inline-*" keyword (inline, inline-block, inline-flex, inline-grid,
-     inline-table) is still an inline-LEVEL box - it takes part in an inline
-     formatting context and its margin does NOT collapse with an adjacent
-     block sibling's margin. Forcing every non-"inline" value to a plain
-     "block" wrap (the old check) silently turned an inline-flex button's
-     wrap into a real block box, which DOES collapse margins with its
-     previous sibling (eg a paragraph's margin-bottom eating the button's
-     own margin-top down to whichever was larger), shrinking the shared
-     parent and reflowing everything below it even though nothing about
-     that sibling changed. */
+  /* any "inline-*" keyword is still an inline-LEVEL box: its margin does NOT
+     collapse with an adjacent block sibling's. Forcing every non-"inline"
+     value to a plain "block" wrap turned an inline-flex button's wrap into a
+     real block box, which DOES collapse margins - shrinking the shared parent
+     and reflowing everything below it. */
   var isInlineLevel = /^inline/.test(naturalDisplay);
   /* el's own margin becomes the gap flow siblings expect around its old
      slot; moved onto the wrap below so zeroing it on el (needed so its
@@ -4354,16 +3805,11 @@ function detachFromFlow(el, knownRect) {
   wrap.style.height = h + "px";
   wrap.style.margin = mTop + " " + mRight + " " + mBottom + " " + mLeft;
   /* an inline-block whose only child is position:absolute has no in-flow
-     content of its own, so its default baseline (vertical-align: baseline)
-     falls back to its OWN bottom margin edge instead of wherever the
-     original text's baseline actually was. That drags the whole box above
-     the line's baseline as pure ascent, inflating the line box (and the
-     containing block's height along with it, eg. the hero title <h1>),
-     which can shift unrelated siblings sharing that container (eg the
-     eyebrow text above it, recentered by the hero's own flex layout) even
-     though nothing about them changed. Aligning to the line's top instead
-     removes the wrap from that baseline calculation entirely, so detaching
-     one inline span can't inflate the shared line/container it sits in. */
+     content, so its default baseline falls back to its own bottom margin edge
+     instead of the original text's baseline. That drags the box above the
+     line's baseline as pure ascent, inflating the line box and its container,
+     which shifts unrelated siblings. Aligning to the line's top removes the
+     wrap from that calculation entirely. */
   if (isInlineLevel) wrap.style.verticalAlign = "top";
   el.parentNode.insertBefore(wrap, el);
   wrap.appendChild(el);
@@ -4388,36 +3834,24 @@ function detachFromFlow(el, knownRect) {
      the image's shape) only happens once an actual resize drag starts, see
      startResizeDrag() and applySizeOverrides() below, never here. */
 
-  /* if el holds any independently-tracked descendants (eg the hero section
-     around its own eyebrow/title/buttons), those get counter-translated by
-     paintPos()/ancestorPos() to stay visually put while el itself moves,
-     exactly the "no attachment between elements" rule this whole system is
-     built on. But that only works if el can't clip them: an "overflow:
-     hidden/clip" ancestor (eg .hero's own clip, meant for its background
-     video) crops anything outside its OWN box regardless of how a child got
-     there, so as el moved further from its start point its "staying put"
-     children would fall outside el's new box and vanish. Forcing visible
-     here (inline, only once el is actually detached, never touching the
-     stylesheet) is scoped to exactly the containers that need it: nothing
-     tracked inside means nothing can ever escape el's box in the first
-     place, so an untouched or childless element keeps its authored clip. */
+  /* independently-tracked descendants get counter-translated to stay visually
+     put while el moves - but that only works if el can't clip them. An
+     overflow:hidden ancestor crops anything outside its OWN box however a
+     child got there, so as el moved further from its start its "staying put"
+     children would fall outside its new box and vanish. Forcing visible is
+     scoped to exactly the containers that need it: nothing tracked inside
+     means nothing can escape, so a childless element keeps its clip. */
   if (el.querySelectorAll(RESIZABLE_SEL).length > 0) {
     if (cs.overflowX === "hidden" || cs.overflowX === "clip") el.style.overflowX = "visible";
     if (cs.overflowY === "hidden" || cs.overflowY === "clip") el.style.overflowY = "visible";
   }
 
-  /* a naturally-inline element (this h1's own title/accent spans, say)
-     unconditionally blockifies the instant position:absolute lands on it
-     (a plain css rule, not a bug), which can render its text a few px off
-     from the tight inline rect measured above (the line's own line-height
-     leading applies around the text as a block that never applied to it
-     as raw inline content, and that leading itself shifts depending on
-     what ELSE is still sharing its old line box, eg a sibling span that
-     already left flow earlier, so the drift isn't even a fixed constant
-     for a given element). Rather than reason about which of those css
-     mechanics applies to a given el, just measure the actual result and
-     cancel out whatever it drifted by, so detaching is pixel-seamless
-     unconditionally, exactly as this function has always promised. */
+  /* a naturally-inline element blockifies the instant position:absolute
+     lands on it, which can render its text a few px off the tight inline rect
+     measured above - the line's leading now applies as a block, and shifts
+     again depending on what else still shares its old line box. Rather than
+     reason about which css mechanic applies, measure the result and cancel
+     out the drift, so detaching is pixel-seamless unconditionally. */
   var postRect = el.getBoundingClientRect();
   var driftX = postRect.left - preRect.left, driftY = postRect.top - preRect.top;
   if (driftX || driftY) {
@@ -4427,17 +3861,13 @@ function detachFromFlow(el, knownRect) {
   return wrap;
 }
 
-/* the visual editor's one selection ring: a floating frame that follows
-   whichever tracked element was last clicked, carrying 8 resize handles
-   (all four corners + all four edges, so any direction works) and one
-   move handle. one shared ring instead of per-element grips, so a
-   hundred-odd tagged elements never show overlapping handles at once and
-   nested elements (an icon in a card in a section) stay individually
-   grabbable. Selection is click-based and sticky: it stays on whatever was
-   clicked regardless of where the mouse moves afterward (so an element
-   just dragged behind another stays selected and can still be grabbed by
-   its own move handle, which floats above everything), and only changes
-   when a different tracked element is clicked or empty space clears it. */
+/* the visual editor's one selection ring: a floating frame following whichever
+   tracked element was last clicked, carrying 8 resize handles and one move
+   handle. One shared ring rather than per-element grips, so a hundred tagged
+   elements never show overlapping handles and nested ones stay individually
+   grabbable. Selection is click-based and sticky: it stays where it was
+   regardless of the mouse afterwards, so an element just dragged behind
+   another can still be grabbed by its move handle. */
 var RING = null;
 var RING_EL = null;
 var RING_DRAGGING = false;
@@ -4623,36 +4053,27 @@ function hideLayerMenu() {
 }
 
 /**
- * Whether el is a button-like element that needs its own separate Text
- * color control, distinct from its background: a custom Button element
- * (right-click "Add element" > Button, or the template's own CTA links,
- * a single tagged `<a class="btn">`, its text box IS the button, same rule
- * every other CTA on the site follows), OR a theme toggle (the nav's own
- * `#themeBtn`, or a placed "theme" custom element, both tagged
- * `data-theme-toggle`), a plain `<button>` (not an `<a class="btn">`, so the
- * class check alone misses it) whose own Color row already means its
- * background (see colorTarget()), leaving no other control for its "Light
- * mode"/"Dark mode" label's own color. Its own helper (rather than inlining
- * the check) since both colorTarget() and the style popover's Text color row
- * (see buildStyleMenu()) need the exact same test.
+ * Whether el is button-like and so needs its own Text color control,
+ * separate from its background.
  * @param el the element
  * @return true if el is a button
+ * @note Covers a custom Button element and the template's own CTA links (a
+ * tagged `<a class="btn">`, whose text box IS the button), plus a theme
+ * toggle - a plain `<button>` the class check alone misses, whose Color row
+ * already means its background, leaving its label with no other control.
  */
 function isButtonEl(el) {
   return (el.tagName === "A" && el.classList.contains("btn")) || isThemeToggleEl(el);
 }
 
 /**
- * Which css property a color override actually lands on, for a given
- * element: an icon (svg, currentColor stroke/fill throughout this
- * codebase's icon set) gets its foreground color; a plain click-to-edit
- * text field gets its font color; everything else (cards, sections, nav,
- * footer, buttons, the countdown box) gets its background color, since
- * that's the only visible surface a resize-id container has. A button's
- * own text color is a separate control, see the Text color bullet in
- * CLAUDE.md / applyTextColorOverrides().
+ * Which css property a colour override lands on for a given element.
  * @param el the element
  * @return "icon", "text", or "bg"
+ * @note An icon (currentColor throughout this icon set) gets its foreground;
+ * a plain text field its font colour; everything else its background, the
+ * only visible surface a container has. A button's text colour is a separate
+ * control, see applyTextColorOverrides().
  */
 function colorTarget(el) {
   if (elKind(el) === "icon") return "icon";
@@ -4665,21 +4086,15 @@ function colorTarget(el) {
 }
 
 /**
- * Whether el's opacity has to fade its own background surface instead of
- * using real css opacity: css opacity is a group compositing effect that
- * unconditionally fades an element's WHOLE subtree (the exact same problem
- * setHiddenVisual() already had to solve for delete, see its own doc
- * comment), so a wrapper with independently tracked children inside it (a
- * card, a section, the countdown box) can't use real opacity without
- * dragging those children's own look down with it. Scoped to "bg" targets
- * (colorTarget()) since that covers every container in this project that
- * can have nested tracked content (cards/sections/nav/footer/buttons/the
- * countdown box all paint via backgroundColor); an icon is always a leaf
- * svg (never wraps anything tracked) and a lone click-to-edit text field
- * wrapping other tracked elements doesn't occur in this template, so both
- * keep using plain css opacity, same as an image/video (also always a leaf).
+ * Whether el's opacity has to fade its own background surface rather than
+ * using real css opacity.
  * @param el the element
  * @return true if opacity should fade backgroundColor instead of el itself
+ * @note Css opacity is a group compositing effect that fades an element's
+ * WHOLE subtree - the same problem setHiddenVisual() has for delete - so a
+ * wrapper with tracked children can't use it without dragging their look down
+ * too. Scoped to "bg" targets, which covers every container here that can
+ * hold nested tracked content; an icon and an image are always leaves.
  */
 function fadesOwnBackground(el) {
   return colorTarget(el) === "bg" && hasTrackedDescendants(el);
@@ -4699,18 +4114,14 @@ function hexToRgba(hex, alpha) {
 
 /**
  * Repaints a fadesOwnBackground() wrapper's real backgroundColor from its
- * last-known color (data-op-color) and opacity (data-op-alpha), kept on the
- * element's own dataset rather than re-derived from the live computed style
- * every time: color and opacity both have to land on this SAME css
- * property, and re-reading an already alpha-blended computed color as the
- * "base" for the next change would compound (each edit fading it further
- * than intended) instead of composing the two independently. data-op-color
- * defaults to whatever the element's pristine background already was
- * (data-base-color, captured once by applyColorOverrides() before either
- * override ever touches it, or the live computed style as a last resort)
- * so an element that's never had an explicit color override still fades
- * its own real surface, not an invented one.
+ * last-known colour and opacity, both kept on its own dataset.
  * @param el the element
+ * @note Colour and opacity land on the SAME css property, so re-reading an
+ * already alpha-blended computed colour as the base for the next change would
+ * compound - each edit fading it further - instead of composing the two.
+ * @note data-op-color defaults to the element's pristine background, captured
+ * once by applyColorOverrides() before either override touches it, so an
+ * element with no colour override still fades its real surface.
  */
 function paintSurface(el) {
   var hex = el.dataset.opColor || el.dataset.baseColor || rgbToHex(getComputedStyle(el).backgroundColor) || "#000000";
@@ -4720,15 +4131,13 @@ function paintSurface(el) {
 }
 
 /**
- * Paints one element's color override onto whichever css property
- * colorTarget() says it should (icon/text color both use el.style.color,
- * currentColor is how every svg icon in this codebase is drawn). A
- * fadesOwnBackground() wrapper never writes backgroundColor directly here:
- * it stashes the color on the dataset and repaints through paintSurface()
- * instead, so a color change composes with whatever opacity is already
- * active rather than resetting it back to fully opaque.
+ * Paints one element's colour override onto whichever css property
+ * colorTarget() picks (icon and text both use el.style.color).
  * @param el the element
- * @param value a css color string, or "" to clear back to the template default
+ * @param value a css color string, or "" to clear back to the default
+ * @note A fadesOwnBackground() wrapper never writes backgroundColor here: it
+ * stashes the colour on the dataset and repaints through paintSurface(), so a
+ * colour change composes with the active opacity rather than resetting it.
  */
 function setElementColor(el, value) {
   if (fadesOwnBackground(el)) {
@@ -4742,11 +4151,9 @@ function setElementColor(el, value) {
 }
 
 /**
- * Applies value (0-1) as el's own opacity without ever touching anything
- * nested inside it, see fadesOwnBackground()'s doc comment for why a plain
- * css opacity can't be used on a wrapper. Used on every load
- * (applyOpacityOverrides()), by the style popover's live slider, and by
- * undo/redo, so all three ways of setting opacity behave identically.
+ * Applies value (0-1) as el's own opacity without touching anything nested
+ * inside it - see fadesOwnBackground() for why plain css opacity can't be
+ * used on a wrapper.
  * @param el the element
  * @param value 0-1
  */
@@ -4773,20 +4180,16 @@ var THEMED_OVERRIDE_MAPS = {
 };
 
 /**
- * Applies saved color overrides (from the style popover, see
- * buildStyleMenu()) on top of the page's own default colors. Runs on every
- * load, live site included, same as applyTextOverrides(). Images/videos
- * are deliberately skipped: a background color painted behind an
- * object-fit: cover element is never visible, there's nothing for a color
- * picker to usefully do there. Also captures every fadesOwnBackground()
- * wrapper's pristine default background (data-base-color) before anything
- * this load could have touched it, so a later opacity fade (or a reset
- * back to "no color override") always has the real template default to
- * fall back to, see paintSurface().
+ * Applies saved colour overrides on top of the page's own default colours.
+ * Runs on every load, live site included.
  * @param colors content.colors, {id: css color string}
- * @param darkColors content.dark_colors, {id: css color string}, the
- *   explicit dark-mode override for whichever ids also have one here (see
- *   resolveThemedColor())
+ * @param darkColors content.dark_colors, {id: css color string}, the explicit
+ *   dark-mode override for whichever ids also have one here
+ * @note Images and videos are skipped: a background colour behind an
+ * object-fit: cover element is never visible.
+ * @note Also captures every fadesOwnBackground() wrapper's pristine default
+ * background before anything this load could have touched it, so a later fade
+ * or reset always has the real template default to fall back to.
  */
 function applyColorOverrides(colors, darkColors) {
   colors = colors || {};
@@ -4812,12 +4215,11 @@ function applyColorOverrides(colors, darkColors) {
 }
 
 /**
- * Applies saved opacity overrides (from the style popover's slider) on top
- * of the page's own default (fully opaque). Runs on every load, live site
- * included, same as applyTextOverrides(). Must run after
- * applyColorOverrides() so a fadesOwnBackground() wrapper's data-base-color
- * is already captured.
+ * Applies saved opacity overrides on top of the page's default (fully
+ * opaque). Runs on every load, live site included.
  * @param opacity content.opacity, {id: number 0-1}
+ * @note Must run after applyColorOverrides(), so a fadesOwnBackground()
+ * wrapper's data-base-color is already captured.
  */
 function applyOpacityOverrides(opacity) {
   opacity = opacity || {};
@@ -4850,16 +4252,13 @@ function applyFillOverrides(fill, darkFill) {
 }
 
 /**
- * Applies saved button text-color overrides (the style popover's Text
- * color row, buttons only) on top of the page's own default `.btn` text
- * color. Runs on every load, live site included, same as
- * applyColorOverrides()/applyFillOverrides(). A button's own Color row
- * already controls its background (see colorTarget()), this is the
- * separate control for its label, since css has no single property that's
- * "whichever of background/text makes sense for this element".
+ * Applies saved button text-colour overrides on top of the page's default
+ * `.btn` text colour. Runs on every load, live site included.
  * @param colors content.text_color, {id: css color string}
- * @param darkColors content.dark_text_color, {id: css color string}, see
- *   resolveThemedColor()
+ * @param darkColors content.dark_text_color, {id: css color string}
+ * @note A button's Color row already controls its background, and css has no
+ * single property meaning "whichever of background/text makes sense here", so
+ * its label needs a control of its own.
  */
 function applyTextColorOverrides(colors, darkColors) {
   colors = colors || {};
@@ -4876,29 +4275,18 @@ function applyTextColorOverrides(colors, darkColors) {
 
 /* ================= HOVER / CLICK COLORS =================
  *
- * A second and third color for any element a ta can already recolor - not
- * just buttons: what it looks like under the cursor, and what it looks like
- * while it's being pressed. Boxes, icons, headings and links all take one.
+ * A second and third colour for any element a ta can already recolour - not
+ * just buttons: what it looks like under the cursor, and while it's pressed.
  *
  * Three things shape how it's stored and applied:
- *
- *  - There is no inline :hover. The picked color travels as a css custom
- *    property, and a marker attribute says which css property it belongs on
- *    (see .el-hovered/.el-pressed in css/style.css). Which of the two it is
- *    follows colorTarget(), the same split the plain Color row already makes:
- *    a surface gets a background, text and icons get a foreground.
- *
- *  - The two states default into each other rather than being independent:
- *    with nothing picked an element just keeps its normal color, picking a
- *    hover color gives the press state the same one, and picking a click
- *    color is what finally splits them apart. So a ta gets sensible pressed
- *    feedback from one decision, and still has the second when they want it.
- *
- *  - Grouped elements light up together (see stateColorTargets()): hovering
- *    any member puts the whole group into its hover state, each in its own
- *    color. That's why the state is a class this file paints on rather than
- *    the :hover pseudo-class - no selector can reach sideways from a hovered
- *    element to an unrelated one elsewhere on the page.
+ *  - There is no inline :hover. The colour travels as a css custom property,
+ *    with a marker attribute saying which css property it belongs on. Which
+ *    of the two follows colorTarget(), the split the Color row already makes.
+ *  - The two states default into each other: picking a hover colour gives the
+ *    press state the same one, and picking a click colour splits them apart.
+ *  - Grouped elements light up together, which is why the state is a class
+ *    this file paints rather than the :hover pseudo-class - no selector can
+ *    reach sideways from a hovered element to an unrelated one.
  */
 
 /**
@@ -4925,13 +4313,13 @@ function applyStateColorOverrides(hoverColor, darkHoverColor, activeColor, darkA
 }
 
 /**
- * Writes one element's hover-or-press color out as the custom property +
- * marker attribute pair the stylesheet reads, clearing both when there's
- * nothing picked. Split out from applyStateColorOverrides() so the style
- * popover's live swatches repaint through the exact same code the load-time
- * pass uses, rather than a second copy that could drift from it.
+ * Writes one element's hover-or-press colour out as the custom property and
+ * marker attribute pair the stylesheet reads, clearing both when nothing is
+ * picked.
  * @param el the element
  * @param which "hover" or "press"
+ * @note Split out so the popover's live swatches repaint through the exact
+ * code the load-time pass uses, rather than a second copy that could drift.
  */
 function paintElementStateColor(el, which) {
   var id = elId(el);
@@ -4976,11 +4364,11 @@ var STATE_PREVIEW_EL = null;
 
 /**
  * Holds one element in its hover or press look while that colour is being
- * picked in the style popover, and drops whatever was being held before.
- * Only ever one at a time, and never more than one state at once, so the
- * element shows exactly the thing the row being edited controls.
+ * picked, and drops whatever was held before.
  * @param el the element, or null to just drop the current preview
  * @param which "hover", "press", or null
+ * @note Only ever one at a time, and never two states at once, so the element
+ * shows exactly what the row being edited controls.
  */
 function previewElementState(el, which) {
   if (STATE_PREVIEW_EL) {
@@ -5046,19 +4434,15 @@ function setStateColorClass(cls, held, els) {
 }
 
 /**
- * Wires the hover/press states once per page. Delegated off the document
- * (one listener each, never per element) so elements that come and go -
- * dashboard tiles, gallery tiles, anything a ta places or duplicates - are
- * covered with no re-wiring, the same reasoning wireTooltipHover() uses.
- *
- * Deliberately inert inside the visual editor: there the cursor is a tool,
- * not a visitor's, so lighting elements up under it would fight the ring and
- * the drag handles, and - the reason this matters more than it sounds - the
- * style popover primes its swatches from an element's live computed color,
- * which would then read back a hover color instead of the resting one every
- * time the popover was opened by clicking the element it belongs to. The
- * page's own stylesheet hover rules are held off in the editor for that same
- * reason, see body.edit-mode in css/style.css.
+ * Wires the hover/press states once per page, delegated off the document so
+ * elements that come and go are covered with no re-wiring.
+ * @note Deliberately inert inside the visual editor: there the cursor is a
+ * tool, not a visitor's, so lighting elements up would fight the ring and the
+ * drag handles - and, more importantly, the style popover primes its swatches
+ * from an element's live computed colour, which would then read back a hover
+ * colour every time the popover was opened by clicking its element. The
+ * page's own stylesheet hover rules are held off in the editor for the same
+ * reason.
  */
 function wireStateColorHover() {
   if (STATE_HOVER_WIRED || (isPreviewMode() && isEditMode())) return;
@@ -5081,17 +4465,13 @@ function wireStateColorHover() {
 }
 
 /**
- * Paints (or removes) a color tint over an image/video. An object-fit:
- * cover element has no visible background-color of its own to paint over
- * (see colorTarget()'s doc comment on why the plain Color row is hidden for
- * images), so tinting one needs an actual overlay layer instead: a same-
- * size, pointer-events:none ".tint-ov" div in mix-blend-mode "color"
- * (css/style.css), painted right on top of it. Forces el into its own
- * free-wrap first (detachFromFlow(), the same lazy "first special action
- * detaches" rule a resize/move/delete already follows) so the overlay has
- * something position:relative to size itself against.
+ * Paints (or removes) a colour tint over an image or video.
  * @param el the image/video element
  * @param hex a "#rrggbb" tint color, or "" to remove the tint
+ * @note An object-fit: cover element has no visible background of its own to
+ * paint over, so a tint needs a real overlay: a same-size, pointer-events:none
+ * ".tint-ov" div in mix-blend-mode "color" on top of it. Forces el into its
+ * own free-wrap first, so the overlay has something to size itself against.
  */
 function setElementTint(el, hex) {
   var wrap = detachFromFlow(el);
@@ -5114,11 +4494,10 @@ function setElementTint(el, hex) {
 }
 
 /**
- * Applies saved image/video tint overrides on top of the page's own default
- * (no tint). Runs on every load, live site included, same as
- * applyColorOverrides(). Only ever touches elKind() === "img" elements
- * (images and videos both); the Tint row is hidden for anything else.
+ * Applies saved image/video tint overrides on top of the default (none). Runs
+ * on every load, live site included.
  * @param tint content.tint, {id: css color string}
+ * @note Only touches elKind() === "img" elements; the row is hidden for others.
  */
 function applyTintOverrides(tint) {
   tint = tint || {};
@@ -5130,17 +4509,13 @@ function applyTintOverrides(tint) {
 }
 
 /**
- * Darkens (or un-darkens) an image/video with a flat black overlay, the same
- * per-element idea as the hero's own .hero-scrim, just resizable/undoable
- * like every other style control here instead of being one fixed global
- * layer. A plain opacity change (see applyElementOpacity()) would dim the
- * whole element uniformly (icon, text, everything alike), which reads as
- * "faded", not "darkened photo"; this instead stacks a same-size, pointer-
- * events:none black ".shade-ov" sibling in the element's own free-wrap (see
- * detachFromFlow(), same lazy-detach rule setElementTint() already follows),
- * so the pixels themselves stay fully opaque and only get visually darker.
+ * Darkens (or un-darkens) an image or video with a flat black overlay - the
+ * same idea as the hero's own scrim, but per-element and undoable.
  * @param el the image/video element
  * @param alpha 0 (no shade) to 1 (fully black); 0 removes the overlay
+ * @note A plain opacity change would dim the whole element uniformly, which
+ * reads as "faded" rather than "darkened photo". This stacks a same-size
+ * black sibling in the element's free-wrap, so its pixels stay fully opaque.
  */
 function setElementShade(el, alpha) {
   var wrap = detachFromFlow(el);
@@ -5162,11 +4537,10 @@ function setElementShade(el, alpha) {
 }
 
 /**
- * Applies saved image/video shade overrides on top of the page's own
- * default (none). Runs on every load, live site included, same spot as
- * applyTintOverrides(). Only ever touches elKind() === "img" elements; the
- * Shade row is hidden for anything else.
+ * Applies saved image/video shade overrides on top of the default (none).
+ * Runs on every load, live site included.
  * @param shade content.shade, {id: number 0-1}
+ * @note Only touches elKind() === "img" elements; the row is hidden for others.
  */
 function applyShadeOverrides(shade) {
   shade = shade || {};
@@ -5212,23 +4586,16 @@ function applyBorderOverrides(border, darkBorder) {
   });
 }
 
-/* the width an empty progress bar is previewed at, as a percentage, and the
-   two elements (if any) currently entitled to that preview: the selected one
-   and the hovered one.
+/* the width an empty progress bar is previewed at, and the two elements (if
+   any) entitled to that preview: the selected one and the hovered one.
 
-   A bar whose bound variables come to zero paints no fill at all, so its fill
-   colour - very often the exact thing a ta pointed at or selected it to look
-   at or change - is invisible precisely when they're looking at it. So while
-   it's under the pointer or carrying the selection ring in the visual editor,
-   an empty bar is drawn part-filled. Both halves are strictly momentary: the
-   bar is empty again the instant the pointer leaves and the selection moves
-   on, which is what keeps the preview readable as a preview rather than as
-   the bar's real value.
-   Editor-only and never persisted, same deal as the style popover's own
-   hover preview (see wireProgressFillHoverPreview(), which forces the same
-   width so hovering the colour swatch doesn't make the bar jump): the real
-   percentage stays on the fill bar's dataset throughout, and the moment the
-   pointer and the selection are both elsewhere the bar is repainted from it. */
+   A bar whose bound variables come to zero paints no fill, so its fill colour
+   - often the exact thing a ta selected it to change - is invisible precisely
+   when they're looking at it. So while it's hovered or ringed in the editor,
+   an empty bar is drawn part-filled. Strictly momentary: it's empty again the
+   instant the pointer leaves, which keeps the preview readable as a preview
+   rather than as the bar's real value. Editor-only and never persisted - the
+   real percentage stays on the fill bar's dataset throughout. */
 var PROGRESS_PREVIEW_PCT = 60;
 var PROGRESS_PREVIEW_EL = null;
 var PROGRESS_HOVER_EL = null;
@@ -5238,14 +4605,13 @@ var PROGRESS_HOVER_EL = null;
 var PROGRESS_HOVER_WIRED = false;
 
 /**
- * The width one progress bar's fill should actually be painted at: its real
- * percentage, or the preview width while it's empty and either hovered or
- * selected. Everything that writes a fill width goes through this, so a
- * repaint that lands mid-preview - a colour edit, a theme flip, a rebind -
- * can't quietly drop the bar back to an invisible 0%, and equally can't
- * leave a preview width on a bar that no longer qualifies for one.
+ * The width one progress bar's fill should be painted at: its real
+ * percentage, or the preview width while it's empty and hovered or selected.
  * @param fillEl the bar's inner .progress-el-fill
  * @return the width to paint, as a percentage number
+ * @note Everything that writes a fill width goes through this, so a repaint
+ * landing mid-preview can't drop the bar to an invisible 0%, and equally
+ * can't leave a preview width on a bar that no longer qualifies.
  */
 function progressFillWidthFor(fillEl) {
   var pct = +(fillEl.dataset.pct || 0);
@@ -5259,9 +4625,8 @@ function progressFillWidthFor(fillEl) {
 
 /**
  * Repaints each given progress bar's fill at whatever width it's entitled to
- * right now - the shared tail of both preview switches below, since every
- * change of either one has to repaint the bar losing the preview as well as
- * the bar gaining it.
+ * right now - the shared tail of both preview switches, since every change
+ * has to repaint the bar losing the preview as well as the one gaining it.
  * @param bars an array of progress elements, nulls tolerated
  */
 function repaintProgressFills(bars) {
@@ -5272,11 +4637,9 @@ function repaintProgressFills(bars) {
 }
 
 /**
- * Moves the empty-bar preview onto whatever the selection ring is on now
- * (nothing, if that isn't a progress element). Called from positionRing(), so
- * every path that changes the selection - a click, the links view's reveal,
- * the ring's own parent handle, a delete, clicking empty space - keeps this
- * right for free.
+ * Moves the empty-bar preview onto whatever the ring is on now (nothing, if
+ * that isn't a progress element). Called from positionRing(), so every path
+ * that changes the selection keeps this right for free.
  */
 function syncProgressPreview() {
   var el = RING_EL && RING_EL.hasAttribute && RING_EL.hasAttribute("data-progress") ? RING_EL : null;
@@ -5299,15 +4662,12 @@ function syncProgressHoverPreview(el) {
 }
 
 /**
- * Wires the pointer half of the empty-bar preview. Delegated off the document
- * (one pair of listeners, never per element) so bars that are placed,
- * duplicated or rebuilt mid-session are covered with no re-wiring - the same
- * reasoning wireStateColorHover()/wireTooltipHover() give.
- *
- * Called from wireResizable(), which is the visual editor's own setup and
+ * Wires the pointer half of the empty-bar preview, delegated off the document
+ * so bars placed or rebuilt mid-session need no re-wiring.
+ * @note Called from wireResizable(), the visual editor's own setup and
  * nothing else's: on the live site a student's empty bar has to read as
- * empty, and painting 60% of it in under their cursor would be reporting
- * progress nobody made.
+ * empty, and filling 60% of it under their cursor would report progress
+ * nobody made.
  */
 function wireProgressBarHoverPreview() {
   if (PROGRESS_HOVER_WIRED) return;
@@ -5323,15 +4683,13 @@ function wireProgressBarHoverPreview() {
 }
 
 /**
- * Paints one "progress" element's live fill width (off its two bound
- * variables, VARIABLES/variableNumericValue()) and its two theme-paired
- * colors (THEMED_OVERRIDE_MAPS.progress*). Split out from
- * applyProgressBindings() so a single element can be repainted right away -
- * just after it's placed (finishAddedElement()), after its Current/Total
- * bindings change, or after a fill/track color edit - without re-scanning
- * every progress element on the page for one change.
+ * Paints one "progress" element's live fill width and its two theme-paired
+ * colours.
  * @param el the element (data-progress)
  * @param d its custom-element descriptor ({varCurrent, varTotal, ...})
+ * @note Split out from applyProgressBindings() so one element can be
+ * repainted right away - just after it's placed, after its bindings change,
+ * or after a colour edit - without re-scanning every bar on the page.
  */
 function paintProgressElement(el, d) {
   var id = elId(el);
@@ -5340,13 +4698,10 @@ function paintProgressElement(el, d) {
   var pct = tot > 0 ? Math.max(0, Math.min(100, (cur / tot) * 100)) : 0;
   var fillEl = el.querySelector(".progress-el-fill");
   if (fillEl) {
-    /* stashed on the fill bar itself (not just computed on demand) so the two
-       preview paths (the style popover's fill-color hover preview, see
-       buildStyleMenu(), and the selected-and-empty one, see
-       progressFillWidthFor()) can restore the real width after temporarily
-       forcing a visible one, without having to re-run this whole calc just to
-       leave preview mode - and so this pass can tell whether the bar it's
-       repainting is one of them */
+    /* stashed on the fill bar itself, not just computed on demand, so both
+       preview paths can restore the real width after temporarily forcing a
+       visible one without re-running this whole calc - and so this pass can
+       tell whether the bar it's repainting is one of them */
     fillEl.dataset.pct = pct;
     fillEl.style.width = progressFillWidthFor(fillEl) + "%";
   }
@@ -5358,11 +4713,10 @@ function paintProgressElement(el, d) {
 
 /**
  * Applies every placed "progress" element's live state on top of whatever
- * buildCustomElementNode() built it with by default. Runs on every load,
- * live site included, right after renderCustomElements() has (re)built
- * every progress element's DOM and VARIABLES has been refreshed from the
- * same content payload - same "build with defaults, then apply overrides"
- * two-pass shape every other kind/override here follows.
+ * buildCustomElementNode() built it with. Runs on every load, live site
+ * included, right after the DOM is rebuilt and VARIABLES refreshed from the
+ * same payload - the "build with defaults, then apply overrides" two-pass
+ * shape everything else here follows.
  * @param fill content.progress_fill, {id: css color string}
  * @param darkFill content.dark_progress_fill, {id: css color string}
  * @param track content.progress_track, {id: css color string}
@@ -5379,16 +4733,12 @@ function applyProgressBindings(fill, darkFill, track, darkTrack) {
 }
 
 /**
- * Re-resolves every color/fill/text-color/border/progress override already
- * on the page against whichever theme just became active, from the same
- * maps the last applyColorOverrides()/applyFillOverrides()/
- * applyTextColorOverrides()/applyBorderOverrides()/applyProgressBindings()
- * pass cached (THEMED_OVERRIDE_MAPS) - a plain re-run of those five rather
- * than a full page reload, so a mid-session theme toggle repaints every
- * TA-set color immediately. Exposed on window so js/theme.js's setTheme()
- * can call it right after updateIcon() without a circular file dependency
- * (main.js already loads before theme.js on every page, see
- * templates/index.html's script order, but not guaranteed the other way).
+ * Re-resolves every colour/fill/text-colour/border/progress override already
+ * on the page against whichever theme just became active, from the maps the
+ * last apply pass cached - a plain re-run of those five rather than a page
+ * reload, so a mid-session theme toggle repaints every ta-set colour at once.
+ * @note Exposed on window so theme.js's setTheme() can call it without a
+ * circular dependency: main.js loads first on every page, but not vice versa.
  */
 function reapplyThemedColors() {
   applyColorOverrides(THEMED_OVERRIDE_MAPS.colors, THEMED_OVERRIDE_MAPS.darkColors);
@@ -5408,20 +4758,14 @@ function reapplyThemedColors() {
 window.reapplyThemedColors = reapplyThemedColors;
 
 /**
- * Repaints every inline foreColor span (see applyThemedForeColor(), the
- * floating text toolbar's ".tt-color" picker) against whichever theme is
- * currently active. Unlike the whole-element overrides above, these spans
- * carry their own light/dark values right on themselves (data-light-color/
- * data-dark-color) rather than in a THEMED_OVERRIDE_MAPS entry, since a
- * single text field's innerHTML can hold any number of independently-colored
- * spans, not just one - the id-keyed map shape the rest of this file uses
- * doesn't fit. Those data attributes ride along in the same innerHTML string
- * applyTextOverrides()/saveEditedField() already read and write, so no
- * separate save path or content.* column is needed for them. Called once
- * after every load (right after applyTextOverrides() sets each field's
- * innerHTML from its saved override, which may have been painted for
- * whichever theme was active at save time) and again here on every theme
- * flip, same as the rest of reapplyThemedColors().
+ * Repaints every inline foreColor span against whichever theme is active.
+ * @note Unlike the whole-element overrides, these spans carry their own
+ * light/dark values on themselves rather than in a THEMED_OVERRIDE_MAPS
+ * entry: one text field's innerHTML can hold any number of independently
+ * coloured spans, so the id-keyed map shape doesn't fit. Those attributes
+ * ride along in the same innerHTML the save/restore path already handles, so
+ * they need no content column of their own.
+ * @note Called once after every load and again on every theme flip.
  */
 function repaintInlineTextColors() {
   document.querySelectorAll("[data-light-color], [data-dark-color]").forEach(function (span) {
@@ -5442,16 +4786,13 @@ function applyShadowOverrides(shadow) {
   });
 }
 
-/* the three per-video playback switches offered on a placed video's right-
-   click menu (see renderCtxMenuRoot()'s "Video" section). Each is a flat list
-   of ids, the same shape content.shadow/content.locked already use for a
-   per-id boolean flag - a placed video ships exactly the way it always has
-   (muted, looping, autoplaying, no controls, see buildCustomElementNode()),
-   so each list only names the videos that deviate from that default rather
-   than storing a full state per video:
+/* the three per-video playback switches on a placed video's right-click menu.
+   Each is a flat list of ids, the shape content.shadow already uses for a
+   per-id flag - a placed video ships muted, looping and autoplaying with no
+   controls, so each list only names the videos that deviate:
    - "video_no_autoplay": doesn't start on its own
-   - "video_controls": shows the browser's own native player chrome
-   - "video_pausable": a plain click anywhere on the clip play/pauses it */
+   - "video_controls": shows the browser's native player chrome
+   - "video_pausable": a click anywhere on the clip play/pauses it */
 var VIDEO_PLAYBACK_KEYS = ["video_no_autoplay", "video_controls", "video_pausable"];
 
 /**
@@ -5482,14 +4823,14 @@ function setVideoPlaybackOption(el, key, on) {
 }
 
 /**
- * Whether one of a video's playback options is currently on, read straight
- * off the element rather than out of a parallel map - the same "the dom is
- * the state" approach the style popover's shadow checkbox takes (see
- * currentShadowOn()), and the only one that works for a cloned reel tile,
- * which carries these attributes but none of the ids they were saved under.
+ * Whether one of a video's playback options is on, read straight off the
+ * element rather than a parallel map.
  * @param el the <video> element
  * @param key one of VIDEO_PLAYBACK_KEYS
  * @return true if it's switched on
+ * @note "The dom is the state", and the only approach that works for a cloned
+ * reel tile, which carries these attributes but none of the ids they were
+ * saved under.
  */
 function videoPlaybackOn(el, key) {
   if (!el) return false;
@@ -5503,10 +4844,9 @@ var VIDEO_PAUSE_WIRED = false;
 
 /**
  * Wires the single delegated listener behind the "Click to play/pause"
- * switch. Delegated rather than per-element for the same reason
- * wireNavButtons() is: a video placed mid-session, and every copy
- * js/learn-reel.js clones out of a reel tile AFTER the override passes have
- * run, then behaves like the original with no re-wiring at all.
+ * switch. Delegated rather than per-element so a video placed mid-session -
+ * and every copy learn-reel.js clones out of a tile after the override passes
+ * have run - behaves like the original with no re-wiring.
  */
 function wireVideoPauseClicks() {
   if (VIDEO_PAUSE_WIRED) return;
@@ -5529,25 +4869,17 @@ function wireVideoPauseClicks() {
 var VIDEO_NATIVE_MENU_WIRED = false;
 
 /**
- * Takes the browser's own affordances off one clip: the floating
- * picture-in-picture toggle firefox draws in a corner on hover, and the
- * download/speed entries chromium tucks into its control bar's overflow menu
- * when a ta switches "Show controls" on.
- *
- * None of it is the browser's to offer here. Every video on this site is
- * something a ta placed and positioned - a hero background, a reel tile, a
- * gallery clip - sized and anchored to sit exactly where it sits. Popping one
- * out into a floating window pulls it out of that layout and leaves a hole in
- * the page where it was, and the rest of the list hands a visitor switches
- * over playback that the ta already decided for them through the "Autoplay"/
- * "Show controls"/"Click to play/pause" toggles on the video's own right-click
- * menu in the editor (see VIDEO_PLAYBACK_KEYS above).
- *
- * Written as attributes, not properties, for the same reason
- * setVideoPlaybackOption() writes attributes: cloneNode() copies attributes
- * and nothing else, so js/learn-reel.js's cloned tiles inherit this without
- * being swept again.
+ * Takes the browser's own affordances off one clip: firefox's floating
+ * picture-in-picture toggle, and the download/speed entries chromium tucks
+ * into its overflow menu when "Show controls" is on.
  * @param el the <video> element (anything else is ignored)
+ * @note None of it is the browser's to offer here. Every video on this site
+ * was placed and anchored to sit exactly where it sits: popping one into a
+ * floating window leaves a hole in the page, and the rest hands a visitor
+ * switches the ta already decided for them through the video's own menu.
+ * @note Written as attributes, not properties, for the same reason
+ * setVideoPlaybackOption() is: cloneNode() copies attributes and nothing
+ * else, so cloned reel tiles inherit this without being swept again.
  */
 function hardenVideo(el) {
   if (!el || el.tagName !== "VIDEO") return;
@@ -5557,17 +4889,12 @@ function hardenVideo(el) {
 
 /**
  * Hardens every clip on the page and closes the other way into the same
- * offers: the native video context menu (Loop/Speed/Full Screen/"Watch in
- * Picture-in-Picture"/Save Video As...), which firefox would still be showing
- * with the corner toggle already hidden.
- *
- * The sweep runs on every call, since a clip can be built long after the
- * first one (a video placed mid-session, a gallery pane switching to a
- * different file); the listener is delegated and installed once, for the same
- * reason wireVideoPauseClicks()'s is - nothing built later needs re-wiring.
- * preventDefault() only, never stopPropagation(): inside the editor
- * wireAddElementMenu()'s own contextmenu listener is what puts the "Add
- * element" menu up over a video, and it has to keep seeing these.
+ * offers: the native video context menu, which firefox would still show with
+ * the corner toggle already hidden.
+ * @note The sweep runs on every call, since a clip can be built long after
+ * the first; the listener is delegated and installed once.
+ * @note preventDefault() only, never stopPropagation(): inside the editor the
+ * "Add element" menu's own contextmenu listener has to keep seeing these.
  */
 function wireNativeVideoMenu() {
   document.querySelectorAll("video").forEach(hardenVideo);
@@ -5580,10 +4907,9 @@ function wireNativeVideoMenu() {
 
 /**
  * Applies the saved per-video playback switches on top of a placed video's
- * built-in default (autoplays, no controls, not click-pausable). Runs on
- * every load, live site included, same shape as applyShadowOverrides() - and
- * deliberately ahead of initAllReels(), so a reel's cloned tiles are copied
- * from videos that are already in their final state.
+ * default (autoplays, no controls, not click-pausable). Runs on every load,
+ * live site included, and deliberately ahead of initAllReels() so a reel's
+ * clones are copied from videos already in their final state.
  * @param noAutoplay content.video_no_autoplay, a flat array of ids
  * @param controls content.video_controls, a flat array of ids
  * @param pausable content.video_pausable, a flat array of ids
@@ -5605,10 +4931,11 @@ function applyVideoPlaybackOverrides(noAutoplay, controls, pausable) {
 
 /**
  * Flips one of a video's playback switches from the right-click menu: live,
- * saved, and undoable. The undo entry carries no before/after value since
- * the toggle is its own inverse, same as "shadow"/"flip_h".
+ * saved and undoable.
  * @param id the video's data-resize-id
  * @param key one of VIDEO_PLAYBACK_KEYS
+ * @note The undo entry carries no before/after, since the toggle is its own
+ * inverse - same as "shadow"/"flip_h".
  */
 function toggleVideoPlayback(id, key) {
   var el = elByAnyId(id);
@@ -5621,16 +4948,13 @@ function toggleVideoPlayback(id, key) {
 }
 
 /**
- * Applies saved Flip horizontal/Flip vertical/Rotate overrides (style
- * popover's Flip buttons and Rotate slider, icon/image/video/box elements
- * only, see toggleStyleMenu()) on top of the page's own default (no
- * transform). Runs on every load, live site included, same as
- * applyRadiusOverrides()/applyOpacityOverrides(). Written onto el's own
- * dataset rather than el.style.transform directly, since paintPos() is the
- * only place allowed to write that (see flipRotateTransform()).
+ * Applies saved Flip/Rotate overrides on top of the page's default (no
+ * transform). Runs on every load, live site included.
  * @param flipH content.flip_h, a flat array of ids
  * @param flipV content.flip_v, a flat array of ids
  * @param rotate content.rotate, {id: degrees number}
+ * @note Written onto el's dataset rather than el.style.transform, since
+ * paintPos() is the only place allowed to write that.
  */
 function applyFlipRotateOverrides(flipH, flipV, rotate) {
   flipH = flipH || [];
@@ -5652,36 +4976,27 @@ function applyFlipRotateOverrides(flipH, flipV, rotate) {
 /* ---------------------------------------------------------------------------
    ELEMENT TOOLTIPS
 
-   Any tagged element, on any page the editor opens, can carry a hover tooltip:
-   a ta right-clicks it, picks "Add tooltip", and gets a small sub-editor for
-   the words and for the bubble's own look - where it sits, its two colors, its
-   border, corners, text size and how wide it's allowed to get. Saved in
-   content.tooltips keyed by data-edit-id/data-resize-id like every other
-   override, and painted on the live site too: a tooltip is something a visitor
-   reads, not editor chrome.
+   Any tagged element can carry a hover tooltip: right-click, "Add tooltip",
+   and a small sub-editor for the words and the bubble's own look. Saved in
+   content.tooltips keyed like every other override, and painted on the live
+   site too - a tooltip is something a visitor reads, not editor chrome.
 
-   ONE DESCRIPTOR PER ELEMENT, rather than the dozen parallel id-keyed maps the
-   older style controls use (content.colors, content.radius, content.border,
-   ...). Those grew one control at a time, each new knob needing its own map; a
-   tooltip arrives as one whole thing with one panel behind it, so it stores as
-   one whole thing. content.custom_elements is already free-form json in the
-   same blob, so the shape is nothing new to anything downstream.
+   ONE DESCRIPTOR PER ELEMENT, rather than the dozen parallel id-keyed maps
+   the older style controls use. Those grew one knob at a time; a tooltip
+   arrives as one whole thing with one panel behind it, so it stores as one.
 
-   ONE BUBBLE, parked on the body and moved to whatever is being hovered,
-   rather than a ::after on each element. A pseudo-element inherits its host's
-   clipping and stacking - a tooltip on anything inside a scrolling container,
-   an overflow:hidden card or a tile would come out cut in half or behind its
-   neighbours - and a lot of the tagged elements on this site sit inside one of
-   those. It also keeps the bubble out of every innerHTML the editor saves: a
-   node parked inside a text field would be written straight into content.text
-   by saveEditedField().
+   ONE BUBBLE, parked on the body and moved to whatever is hovered, rather
+   than a ::after on each element. A pseudo-element inherits its host's
+   clipping and stacking, so a tooltip on anything inside a scrolling or
+   overflow:hidden container would come out cut in half - and many tagged
+   elements here sit inside one. It also keeps the bubble out of every
+   innerHTML the editor saves, which would otherwise write it into
+   content.text.
 
-   This replaces content.apply_tooltip, which was one hardcoded string shared by
-   the three Apply Now buttons and edited from a lone field in the content
-   manager, because a tooltip that only exists while someone hovers had no
-   element in the editor to click on. It does now, so those three are ordinary
-   tooltips seeded with the same words - see _migrate_apply_tooltip() in
-   app/db.py.
+   This replaces content.apply_tooltip, one hardcoded string shared by the
+   three Apply Now buttons, which existed only because a tooltip had no
+   element to click on. It does now, so those three are ordinary tooltips
+   seeded with the same words.
    --------------------------------------------------------------------------- */
 
 /* content.tooltips, {id: descriptor}. See TOOLTIP_DEFAULTS for the shape. */
@@ -5714,24 +5029,24 @@ var TOOLTIP_DEFAULTS = {
 
 /**
  * One element's tooltip descriptor with every field filled in, for the
- * sub-editor to prime its controls from. Saved descriptors are written whole
- * (see setTooltipProp()), but one seeded in app/db.py or left behind by an
- * older shape of this feature needn't be.
+ * sub-editor to prime its controls from.
  * @param id a data-edit-id/data-resize-id
- * @return a fresh object, never the stored one - a caller can't edit the map
- *   out from under everything else by accident
+ * @return a fresh object, never the stored one, so a caller can't edit the
+ *   map out from under everything else by accident
+ * @note Saved descriptors are written whole, but one seeded server-side or
+ * left by an older shape of this feature needn't be.
  */
 function tooltipDescriptor(id) {
   return Object.assign({}, TOOLTIP_DEFAULTS, TOOLTIPS[id] || {});
 }
 
 /**
- * The tooltip worth actually showing for an id: one with words in it. A
- * descriptor with an empty text is a draft the sub-editor is still holding
- * (see closeTooltipEditor(), which throws those away rather than saving an
- * invisible tooltip nobody can find again).
+ * The tooltip worth actually showing for an id: one with words in it.
  * @param id a data-edit-id/data-resize-id
  * @return the descriptor, or null
+ * @note A descriptor with empty text is a draft the sub-editor is holding;
+ * closeTooltipEditor() throws those away rather than saving an invisible
+ * tooltip nobody can find again.
  */
 function tooltipFor(id) {
   var d = id && TOOLTIPS[id];
@@ -5740,14 +5055,13 @@ function tooltipFor(id) {
 
 /**
  * The element a hover should show a tooltip for: the innermost tracked
- * ancestor of node that has one. Walking up rather than looking only at what
- * the pointer is directly over is what makes a tooltip put on a card (or a
- * button, or a whole tile) fire for the text inside it too - those inner
- * pieces are separately tracked elements in their own right, so a plain lookup
- * would find nothing and the tooltip would only appear in the gaps between
- * them.
+ * ancestor of node that has one.
  * @param node the event target
  * @return the element, or null if nothing in the chain has a tooltip
+ * @note Walking up rather than looking only at what the pointer is over is
+ * what makes a tooltip on a card fire for the text inside it too - those
+ * inner pieces are separately tracked, so a plain lookup would find nothing
+ * and the tooltip would appear only in the gaps between them.
  */
 function tooltipTargetFor(node) {
   var el = node && node.closest ? node.closest(RESIZABLE_SEL) : null;
@@ -5766,13 +5080,12 @@ function buildTooltipBubble() {
 }
 
 /**
- * Paints the bubble from one descriptor. Every property is written on every
- * paint, "" where the descriptor has nothing to say: this is ONE shared node,
- * so anything left inline from the last element it was shown for would
- * otherwise leak onto the next one. An empty string hands the property back to
- * the stylesheet (see .tt-bubble in css/style.css), which is where the
- * defaults actually live.
+ * Paints the bubble from one descriptor.
  * @param d a tooltip descriptor
+ * @note Every property is written on every paint, "" where the descriptor has
+ * nothing to say: this is ONE shared node, so anything left inline from the
+ * last element would leak onto the next. An empty string hands the property
+ * back to the stylesheet, which is where the defaults live.
  */
 function paintTooltipBubble(d) {
   var s = TT_BUBBLE.style;
@@ -5792,12 +5105,11 @@ function paintTooltipBubble(d) {
 
 /**
  * Puts the bubble on whichever side of an element its descriptor asks for.
- * Clamped to the VIEWPORT rather than to the document: a bubble hanging off
- * the right edge would widen the page and hand every page on the site a
- * horizontal scrollbar. Coordinates are document ones (rect + scroll), same as
- * the editor's own popovers.
  * @param el the element the tooltip belongs to
  * @param pos "top", "bottom", "left" or "right"
+ * @note Clamped to the VIEWPORT rather than the document: a bubble hanging
+ * off the right edge would widen the page and hand every page on the site a
+ * horizontal scrollbar.
  */
 function positionTooltipBubble(el, pos) {
   var r = el.getBoundingClientRect();
@@ -5849,12 +5161,10 @@ function refreshTooltipBubble() {
 }
 
 /**
- * Wires the hover/focus behaviour once per page. Delegated off the document
- * rather than bound per element, which is the whole reason nothing has to
- * re-run when the dashboard's tiles, the gallery's panes or a placed element
- * are rebuilt: a listener attached to one of those would go with it, and the
- * lookup here starts from the event target either way (see
- * tooltipTargetFor()).
+ * Wires the hover/focus behaviour once per page, delegated off the document
+ * rather than bound per element - which is why nothing has to re-run when the
+ * dashboard's tiles or a placed element are rebuilt: a listener on one of
+ * those would go with it, and the lookup starts from the event target anyway.
  */
 function wireTooltipHover() {
   if (TT_HOVER_WIRED) return;
@@ -5895,11 +5205,10 @@ function wireTooltipHover() {
 }
 
 /**
- * Applies saved tooltips. Runs on every load, live site included, same as
- * applyTextOverrides(). Nothing is written onto the elements themselves -
- * tooltipTargetFor() answers from this map at hover time - so this is just the
- * map plus the one-time wiring behind it.
+ * Applies saved tooltips. Runs on every load, live site included.
  * @param map content.tooltips, {id: descriptor}
+ * @note Nothing is written onto the elements themselves - tooltipTargetFor()
+ * answers from this map at hover time - so this is the map plus its wiring.
  */
 function applyTooltipOverrides(map) {
   TOOLTIPS = map || {};
@@ -5910,12 +5219,12 @@ function applyTooltipOverrides(map) {
 
 /**
  * Writes one element's tooltip into the map and the preview snapshot, and
- * repaints whatever is on show. A descriptor with no text is deleted rather
- * than stored, so "no tooltip" is the absence of an entry everywhere - the
- * live site, the saved content and the "Add/Edit tooltip" label all read it
- * the same way.
+ * repaints whatever is on show.
  * @param id the element's data-edit-id/data-resize-id
  * @param d a full descriptor, or null/one without text to remove it
+ * @note A descriptor with no text is deleted rather than stored, so "no
+ * tooltip" is the absence of an entry everywhere - live site, saved content
+ * and the "Add/Edit tooltip" label all read it the same way.
  */
 function setTooltipDescriptor(id, d) {
   if (d && d.text) TOOLTIPS[id] = d;
@@ -5927,13 +5236,12 @@ function setTooltipDescriptor(id, d) {
 
 /**
  * Changes one field of an element's tooltip from the sub-editor, filling the
- * rest in from the defaults if this is the first thing set on a brand new one.
- * Saved on every keystroke/slider tick like the rest of the editor's controls;
- * the single undo entry covering the whole session at the panel is pushed on
- * close instead, see closeTooltipEditor().
+ * rest in from the defaults if this is the first thing set on a new one.
  * @param id the element's data-edit-id/data-resize-id
  * @param key a TOOLTIP_DEFAULTS field name
  * @param value its new value
+ * @note Saved on every keystroke like the rest of the editor's controls; the
+ * single undo entry covering the whole session is pushed on close.
  */
 function setTooltipProp(id, key, value) {
   var d = Object.assign({}, TOOLTIP_DEFAULTS, TOOLTIPS[id] || {});
@@ -5968,9 +5276,8 @@ function refreshPinnedTooltip() {
 /**
  * Ends a session at the tooltip sub-editor: drops a draft that never got any
  * words, records the one undo entry for everything that did change, and lets
- * the bubble go back to following the pointer. Called from hideCtxMenu(), so
- * every way the menu can close - a click elsewhere, Escape, another
- * right-click, the panel's own Done button - comes through here.
+ * the bubble follow the pointer again. Called from hideCtxMenu(), so every
+ * way the menu can close comes through here.
  */
 function closeTooltipEditor() {
   if (!TT_EDIT_EL) return;
@@ -5995,12 +5302,11 @@ function closeTooltipEditor() {
 
 /**
  * Swaps the right-click menu into the tooltip sub-editor for whatever
- * CTX_TARGET_ID/CTX_TARGET_EL point at. It lives in the menu rather than in
- * the style popover for the same reason the link editor does - a tooltip is
- * something an element either has or hasn't, not one more knob on something
- * that's always there - and it holds the bubble open the whole time it's up,
- * so every change lands on the real element in front of the ta as they make
- * it.
+ * CTX_TARGET_ID points at.
+ * @note It lives in the menu rather than the style popover for the same
+ * reason the link editor does - a tooltip is something an element either has
+ * or hasn't, not one more knob on something always there - and it holds the
+ * bubble open throughout, so every change lands on the real element.
  */
 function renderCtxMenuTooltip() {
   var id = CTX_TARGET_ID;
@@ -6137,17 +5443,16 @@ function tooltipColorRowHtml(key, label, what) {
 }
 
 /**
- * Primes and wires one color row, doing the same light<->dark primary swap the
- * style popover does (see primeThemedColorRow()): the theme that's actually on
- * is the one the top swatch edits, and the other side stays collapsed behind
- * its toggle until a ta opens it or it already carries an explicit override.
- * Without the swap, a ta working in dark mode - the site's own default - would
- * be picking colors they can't see the effect of.
+ * Primes and wires one colour row, doing the same light<->dark primary swap
+ * the style popover does: the theme that's actually on is the one the top
+ * swatch edits, and the other stays collapsed until opened or already
+ * overridden. Without the swap, a ta working in dark mode - the site's own
+ * default - would be picking colours they can't see the effect of.
  * @param id the element being edited
  * @param d its descriptor, filled out
  * @param key the light-mode field name, also the row's class stem
  * @param darkKey the dark-mode field name
- * @param liveHex what the bubble currently renders this color as, for the
+ * @param liveHex what the bubble currently renders this colour as, for the
  *   swatch that has no explicit value of its own to show
  * @param what the noun for the toggle's title
  */
@@ -6203,12 +5508,12 @@ function wireTooltipColorRow(id, d, key, darkKey, liveHex, what) {
 }
 
 /**
- * Whether a saved color is one of the sub-editor's own picks, ie something an
- * <input type=color> can actually be set to. A descriptor seeded elsewhere can
- * carry a css variable (var(--surface-2)) or any other color string, which a
- * swatch has no way to show.
+ * Whether a saved colour is one of the sub-editor's own picks, ie something
+ * an <input type=color> can be set to.
  * @param v the saved value
  * @return true if it's a "#rrggbb" string
+ * @note A descriptor seeded elsewhere can carry a css variable or any other
+ * colour string, which a swatch has no way to show.
  */
 function isHexColor(v) {
   return typeof v === "string" && v.charAt(0) === "#";
@@ -6566,19 +5871,14 @@ function buildStyleMenu() {
   });
 
   /**
-   * Wires one Color/Text color/Fill/Border row's "🌙"/"☀️" toggle: click
-   * shows (or hides) whichever of the row's two swatches - light ("Color")
-   * or dark ("Dark mode color") - ISN'T the one currently shown by default.
-   * The one shown by default always matches the theme actually rendering
-   * right now (see primeThemedColorRow(), which sets the icon and default
-   * visibility every time the popover opens or the site theme flips while
-   * it's open): in light mode the light row is already visible and this
-   * reveals the dark one; in dark mode it's the other way around. Purely a
-   * visibility toggle either way - the value underneath is set/cleared by
-   * each row's own input/reset, wired separately below.
-   * @param toggleBtn the row's own "🌙"/"☀️" button
-   * @param lightRow the "sm-color-row"-style div (always saves to the light map)
-   * @param darkRow the "sm-dark-row" div (always saves to the dark map)
+   * Wires one colour row's light/dark toggle: click shows (or hides)
+   * whichever of the row's two swatches isn't the one currently on show.
+   * @param toggleBtn the row's own toggle button
+   * @param lightRow the light-mode div (always saves to the light map)
+   * @param darkRow the dark-mode div (always saves to the dark map)
+   * @note The default one always matches the theme rendering right now, so in
+   * light mode this reveals the dark row and vice versa. Purely a visibility
+   * toggle - the value underneath is set by each row's own input/reset.
    */
   function wireDarkToggle(toggleBtn, lightRow, darkRow) {
     toggleBtn.addEventListener("click", function () {
@@ -6596,15 +5896,13 @@ function buildStyleMenu() {
   wireDarkToggle(borderDarkToggle, STYLE_MENU.querySelector(".sm-border-color"), STYLE_MENU.querySelector(".sm-border-dark-row"));
 
   /**
-   * Previews the progress bar's fill at a visible, non-zero width while a ta
-   * is choosing its color - at a low (but non-zero) % the color swatch's own
-   * choice is otherwise invisible on the actual bar. An empty bar is already
-   * being previewed at this exact width just for being selected (see
-   * progressFillWidthFor()), so hovering the swatch doesn't make it jump.
-   * Purely a visual preview: the real width (stashed on the fill bar's own
-   * dataset by paintProgressElement()) is restored on mouseleave, no data
-   * changes.
+   * Previews the progress bar's fill at a visible width while its colour is
+   * being chosen - at a low percentage the swatch's choice is otherwise
+   * invisible on the actual bar.
    * @param input the row's own <input type=color> (light or dark side)
+   * @note An empty bar is already previewed at this exact width just for
+   * being selected, so hovering the swatch doesn't make it jump. Purely
+   * visual: the real width is restored on mouseleave and no data changes.
    */
   function wireProgressFillHoverPreview(input) {
     input.addEventListener("mouseenter", function () {
@@ -6774,23 +6072,20 @@ function buildStyleMenu() {
   });
 
   /**
-   * Wires one state-color row (Hover color/Click color, each with its own
-   * light+dark pair) - same 6-listener shape (light input/change/reset, dark
-   * input/change/reset) every other themed color row in this popover already
-   * follows (see textColorInput's handlers just above), factored out since
-   * Hover/Click are otherwise identical but for which THEMED_OVERRIDE_MAPS
-   * entry and undo type each one writes to. Unlike a plain color row there's
-   * no rendered "current" value a reset can read back (a hover/press color
-   * only ever paints during that state, see applyStateColorOverrides()), so
-   * light reset just clears to a neutral "#000000" swatch display.
-   * @param lightInput/lightReset/darkInput/darkReset/darkToggle the row's controls
-   * @param mapKey/darkMapKey THEMED_OVERRIDE_MAPS keys (eg "hoverColor"/"darkHoverColor")
+   * Wires one state-colour row (Hover or Click, each with its own light+dark
+   * pair) - the same six-listener shape every other themed colour row here
+   * follows, factored out since the two are identical but for which map entry
+   * and undo type they write to.
+   * @param lightInput/lightReset/darkInput/darkReset/darkToggle the controls
+   * @param mapKey/darkMapKey THEMED_OVERRIDE_MAPS keys for this row
    * @param which "hover" or "press", for paintElementStateColor()
-   * @param saveFn/darkSaveFn the light/dark saveEdited*() persistence functions
-   * @param undoType/darkUndoType the EDIT_UNDO entry "type" strings for this row
+   * @param saveFn/darkSaveFn the light/dark persistence functions
+   * @param undoType/darkUndoType the EDIT_UNDO "type" strings for this row
    * @param getBefore/setBefore/getDarkBefore/setDarkBefore accessors for this
-   *   row's own STYLE_*_BEFORE module vars (plain vars can't be passed by
-   *   reference, hence the get/set closures)
+   *   row's own STYLE_*_BEFORE vars (plain vars can't be passed by reference)
+   * @note Unlike a plain colour row there's no rendered "current" value a
+   * reset can read back, since these only paint during their state, so the
+   * reset just clears to a neutral swatch display.
    */
   function wireButtonStateColorRow(lightInput, lightReset, darkInput, darkReset,
       mapKey, darkMapKey, which, saveFn, darkSaveFn, undoType, darkUndoType,
@@ -6958,23 +6253,19 @@ function buildStyleMenu() {
   });
 
   /**
-   * Wires one "progress" themed color row's input/change/reset for both its
-   * light and dark swatches - the fill/darkFill wiring just above's
-   * generic twin, factored since progress adds two such rows (fill, track)
-   * at once rather than incrementally like fill/border/etc were. Unlike a
-   * plain background color there's no single setElementColor()-style
-   * setter for a two-color composite element, so every branch repaints via
-   * paintProgressElement() instead.
+   * Wires one progress colour row's input/change/reset for both swatches -
+   * the fill/darkFill wiring's generic twin, factored out because progress
+   * adds two such rows (fill, track) at once.
    * @param lightInput/lightReset/darkInput/darkReset the row's four controls
    * @param mapKey/darkMapKey THEMED_OVERRIDE_MAPS.progress* keys for this row
-   * @param saveFn/saveDarkFn the row's saveEditedProgress*()/
-   *   saveEditedDarkProgress*() persistence functions
+   * @param saveFn/saveDarkFn the row's persistence functions
    * @param type/darkType EDIT_UNDO "type" strings for this row
-   * @param readCurrentFn (el) -> hex, reads the live rendered color back
-   *   after a reset (currentProgressFillValue or currentProgressTrackValue)
-   * @param getBefore/setBefore/getDarkBefore/setDarkBefore accessors for
-   *   this row's pair of STYLE_PROGRESS*_BEFORE/STYLE_DARKPROGRESS*_BEFORE
-   *   session-baseline globals
+   * @param readCurrentFn (el) -> hex, reads the live rendered colour back
+   *   after a reset
+   * @param getBefore/setBefore/getDarkBefore/setDarkBefore accessors for this
+   *   row's pair of session-baseline globals
+   * @note There's no single setElementColor()-style setter for a two-colour
+   * composite element, so every branch repaints via paintProgressElement().
    */
   function wireProgressColorRow(lightInput, lightReset, darkInput, darkReset,
       mapKey, darkMapKey, saveFn, saveDarkFn, type, darkType, readCurrentFn,
@@ -7185,16 +6476,13 @@ function buildStyleMenu() {
   });
 
   /**
-   * Commits width+color together, given the color to use. Width is always
-   * theme-independent (applyBorderOverrides() only ever reads w off the
-   * light "border" map), but the color half needs care: when light mode is
-   * the secondary/hidden swatch right now, borderColor.value is just an
-   * unconfirmed autoDarkVariant() suggestion, not something the TA
-   * actually chose - dragging only the width slider must NOT promote that
-   * suggestion into a real saved light color. So a width-only drag reuses
-   * whatever light color was last confirmed (the cached map entry) instead
-   * of reading the possibly-hidden swatch; an actual edit of the light
-   * swatch itself always passes its own (deliberately-chosen) value.
+   * Commits width and colour together, given the colour to use.
+   * @note Width is always theme-independent, but the colour half needs care:
+   * when light mode is the hidden swatch, its value is only an unconfirmed
+   * auto-suggestion, and dragging the width slider must not promote that into
+   * a real saved colour. So a width-only drag reuses the last confirmed light
+   * colour from the cached map, while an edit of the light swatch itself
+   * always passes its own deliberately-chosen value.
    */
   function commitBorder(color) {
     if (!STYLE_MENU_ID) return;
@@ -7429,9 +6717,9 @@ function styleMenuEl() {
 }
 
 /**
- * Looks up the element the popover is styling by its id, the page included
- * (see idSel()) - every row in the popover paints through this, so the page
- * has to resolve here or its own color rows would change nothing.
+ * Looks up the element the popover is styling by its id, the page included -
+ * every row paints through this, so the page has to resolve here or its own
+ * colour rows would change nothing.
  * @param id the element's id
  * @return the element, or null if it's no longer in the document
  */
@@ -7449,9 +6737,9 @@ function styleMenuFlowArea() {
 }
 
 /**
- * Reads an element's current color override as a hex string a native
- * <input type=color> can display, "#000000" if none is set (the input
- * itself has no real "unset" state to fall back to).
+ * Reads an element's current colour override as a hex string an
+ * <input type=color> can display, "#000000" if none is set - the input has
+ * no real "unset" state to fall back to.
  * @param el the element
  * @return a "#rrggbb" string
  */
@@ -7462,17 +6750,13 @@ function currentColorValue(el) {
 }
 
 /**
- * Parses a computed color string into 0-255 r/g/b and a 0-1 alpha,
- * whichever of the two syntaxes the browser used to serialize it: the
- * usual "rgb(r, g, b)"/"rgba(r, g, b, a)", or "color(srgb r g b / a)"
- * (0-1 floats), which Chromium uses instead when the computed value came
- * from a color-mix() (this project's own --surface tokens are all defined
- * that way, eg the countdown box's "color-mix(in srgb, var(--surface) 75%,
- * transparent)" background) - a plain rgba?() regex alone never matches
- * that second form at all, silently falling back to black everywhere a
- * color-mix()'d surface's current color needed reading back.
+ * Parses a computed colour string into 0-255 r/g/b and a 0-1 alpha.
  * @param str the computed color string
  * @return {r, g, b, a} (0-255, 0-255, 0-255, 0-1), or null if unparseable
+ * @note Handles both serializations: the usual rgb()/rgba(), and "color(srgb
+ * r g b / a)" with 0-1 floats, which Chromium uses when the value came from a
+ * color-mix() - as all this project's --surface tokens do. A plain rgba?()
+ * regex never matches that second form, silently falling back to black.
  */
 function parseComputedColor(str) {
   var m = /^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/.exec(str || "");
@@ -7501,12 +6785,12 @@ function rgbToHex(rgb) {
 }
 
 /**
- * Converts a "#rrggbb" hex string to {h, s, l} (h 0-360, s/l 0-100), the
- * intermediate autoDarkVariant() flips lightness in rather than plain rgb
- * (flipping rgb channels directly would shift hue/saturation too, eg a TA's
- * navy blue would come back a washed-out tan instead of a lighter blue).
+ * Converts a "#rrggbb" hex string to {h, s, l} (h 0-360, s/l 0-100).
  * @param hex a "#rrggbb" string
  * @return {h, s, l}, or null if unparseable
+ * @note The intermediate autoDarkVariant() flips lightness in - flipping rgb
+ * channels directly would shift hue and saturation too, turning a ta's navy
+ * blue into a washed-out tan rather than a lighter blue.
  */
 function hexToHsl(hex) {
   var m = /^#?([0-9a-f]{6})$/i.exec(hex || "");
@@ -7547,18 +6831,15 @@ function hslToHex(h, s, l) {
 }
 
 /**
- * Auto-computes a dark-mode variant of a TA-picked light-mode color: same
- * hue/saturation, lightness flipped around the midpoint (l' = 100 - l), the
- * same trick this site's own --text/--bg/--surface css variables already
- * amount to between their [data-theme="light"] and (default) dark palettes.
- * A near-black color a ta picked for a light background becomes near-white
- * for the dark one, same hue, so it never goes invisible in the theme it
- * wasn't designed against. Used as the fallback whenever a TA hasn't picked
- * an explicit dark-mode override (see resolveThemedColor()).
- * @param hex a "#rrggbb" string (or any css color the browser normalized to
+ * Auto-computes a dark-mode variant of a ta-picked light colour: same hue and
+ * saturation, lightness flipped around the midpoint - the same trick this
+ * site's own --text/--bg/--surface variables amount to between their two
+ * palettes. A near-black picked for a light background becomes near-white for
+ * the dark one, so it never goes invisible in the theme it wasn't designed
+ * against. The fallback whenever no explicit dark override exists.
+ * @param hex a "#rrggbb" string (or any css colour the browser normalized to
  *   one via getComputedStyle - callers here always pass one of those)
- * @return a "#rrggbb" string, or the input unchanged if unparseable (eg a
- *   css var()/color-mix() string that never went through getComputedStyle)
+ * @return a "#rrggbb" string, or the input unchanged if unparseable
  */
 function autoDarkVariant(hex) {
   var c = hexToHsl(hex);
@@ -7567,44 +6848,30 @@ function autoDarkVariant(hex) {
 }
 
 /**
- * Whether the page currently being edited/viewed is showing dark mode right
- * now - the live signal every theme-aware color read/write in this file
- * keys off (resolveThemedColor(), the style popover's primary/secondary
- * swatch binding, see primeThemedColorRow()). Reads straight off
- * documentElement rather than caching, since a ta can flip it at any moment
- * at any moment - the site's own light/dark button on a live page, the
- * right-click menu's "Preview in ... mode" inside the editor, both landing in
- * js/theme.js's setTheme(). Default
- * theme with no [data-theme] set at all would be dark (js/theme.js's
- * currentTheme() convention), but templates/index.html always sets one
- * explicitly, so that fallback is mostly theoretical here.
+ * Whether the page being edited is showing dark mode right now - the live
+ * signal every theme-aware colour read in this file keys off.
  * @return true if dark mode is the one currently rendering
+ * @note Read straight off documentElement rather than cached, since a ta can
+ * flip it at any moment - the site's own toggle on a live page, or the
+ * right-click "Preview in ... mode" inside the editor.
  */
 function isDarkThemeActive() {
   return document.documentElement.getAttribute("data-theme") !== "light";
 }
 
 /**
- * Resolves which of a color-bearing override's two saved values actually
- * applies right now: the TA's explicit value for whichever theme is active
- * if they set one, else the OTHER side's auto-computed variant
- * (autoDarkVariant(), self-inverse so it round-trips either direction) -
- * never the literal other-theme color unmodified, which is the whole bug
- * this exists to fix (a TA-placed element's color used to be identical in
- * both themes). The two values are independent optional overrides, not "a
- * base plus an optional override": either can be set without the other (a
- * ta editing while already in dark mode - the site's own default theme -
- * can set just the dark value, see primeThemedColorRow()), so this has to
- * auto-flip in BOTH directions, not just light-set/dark-missing: a ta who
- * only ever edits in dark mode and never sets a light value would otherwise
- * see every override silently vanish back to the page default the moment
- * light mode renders (eg a first-time visitor whose OS/browser prefers
- * light), instead of the same auto-derived variant the dark side already
- * gets from a light-only value.
+ * Resolves which of a colour override's two saved values applies right now:
+ * the ta's explicit value for the active theme if they set one, else the
+ * OTHER side's auto-computed variant - never the literal other-theme colour
+ * unmodified, which is the bug this exists to fix.
  * @param lightVal the saved light-mode value, "" / undefined if unset
  * @param darkVal the saved dark-mode value, "" / undefined if unset
- * @return the css color string to actually paint, "" if neither side is set
- *   (callers already skip painting anything in that case)
+ * @return the css colour string to paint, "" if neither side is set
+ * @note The two are independent optional overrides, not "a base plus an
+ * override": a ta editing in dark mode - the site's default - can set only
+ * the dark value, so this auto-flips in BOTH directions. Otherwise someone
+ * who never edits in light mode would see every override vanish back to the
+ * page default the moment a light-preferring visitor loaded the page.
  */
 function resolveThemedColor(lightVal, darkVal) {
   if (isDarkThemeActive()) {
@@ -7618,10 +6885,9 @@ function resolveThemedColor(lightVal, darkVal) {
 }
 
 /**
- * Reads an element's current background fill (a textbox's own surface
- * color, separate from its font color, see colorTarget()) as a hex string,
- * "#ffffff" if it's transparent/unset (an <input type=color> has no real
- * "unset" state of its own).
+ * Reads an element's current background fill - a textbox's own surface
+ * colour, separate from its font colour - as a hex string, "#ffffff" if
+ * transparent or unset.
  * @param el the element
  * @return a "#rrggbb" string
  */
@@ -7655,10 +6921,8 @@ function currentProgressTrackValue(el) {
 }
 
 /**
- * Reads a button's current text color (see the style popover's Text color
- * row, buttons only) as a hex string, "#ffffff" if it's unparseable (an
- * <input type=color> has no real "unset" state of its own, same convention
- * as currentFillValue()).
+ * Reads a button's current text colour as a hex string, "#ffffff" if
+ * unparseable - same convention as currentFillValue().
  * @param el the button element
  * @return a "#rrggbb" string
  */
@@ -7667,9 +6931,8 @@ function currentTextColorValue(el) {
 }
 
 /**
- * Reads an image/video's current tint color (see setElementTint()) as a hex
- * string, "#ffffff" if it has none (an <input type=color> has no real
- * "unset" state of its own, same convention as currentFillValue()).
+ * Reads an image/video's current tint colour as a hex string, "#ffffff" if it
+ * has none - same convention as currentFillValue().
  * @param el the image/video element
  * @return a "#rrggbb" string
  */
@@ -7694,9 +6957,9 @@ function currentShadeValue(el) {
 }
 
 /**
- * Reads an element's current (uniform, all four corners) border radius in
- * css px, off the live computed style so an element already rounded by the
- * stylesheet (eg a .card) starts the slider at its real look, not 0.
+ * Reads an element's current uniform border radius in css px, off the live
+ * computed style so an element already rounded by the stylesheet starts the
+ * slider at its real look rather than 0.
  * @param el the element
  * @return a whole-number px value
  */
@@ -7705,19 +6968,17 @@ function currentRadiusValue(el) {
 }
 
 /**
- * Reads an element's current border width/color off the live computed
- * style. A computed border-width resolves to 0 when border-style is "none"
- * (the css spec, not a manual check here), but this project's own
- * untouched elements instead draw a real 1px solid border with a fully
- * transparent color (--border in css/style.css, "no borders anywhere" is
- * achieved by hiding the color, not removing the border), which the spec
- * does NOT zero out on its own: read literally, that would show a
- * misleading "1px" in the picker, and worse, undo could restore it as a
- * solid black border once rgbToHex() collapses the unparseable alpha away.
- * So a fully transparent computed color is treated as no border too,
- * same alpha check currentFillValue() already does.
+ * Reads an element's current border width and colour off the live computed
+ * style.
  * @param el the element
  * @return {w, color}
+ * @note A computed width resolves to 0 when border-style is "none", but this
+ * project's untouched elements draw a real 1px solid border with a fully
+ * transparent colour - "no borders anywhere" is achieved by hiding the
+ * colour, not removing the border - which the spec does NOT zero out. Read
+ * literally that shows a misleading "1px", and undo could restore it as solid
+ * black once the alpha collapses. So a fully transparent colour counts as no
+ * border, the same alpha check currentFillValue() makes.
  */
 function currentBorderValue(el) {
   var cs = getComputedStyle(el);
@@ -7730,9 +6991,8 @@ function currentBorderValue(el) {
 }
 
 /**
- * Whether el currently has the shared drop-shadow applied (see
- * BOX_SHADOW_VALUE), read straight off its own inline style since that's
- * the only place applyShadowOverrides()/the shadow checkbox ever write it.
+ * Whether el currently has the shared drop-shadow applied, read off its own
+ * inline style - the only place the shadow is ever written.
  * @param el the element
  * @return true if its box-shadow is set to anything other than "none"
  */
@@ -7742,33 +7002,25 @@ function currentShadowOn(el) {
 }
 
 /**
- * Fills one Color/Text color/Fill/Border row's pair of light+dark swatches,
- * and its toggle button, so that whichever theme is actually rendering on
- * screen right now is always the "primary" one: shown by default, its
- * value the color the TA can actually see. The other theme's swatch is
- * "secondary" - collapsed behind the toggle - so a TA who never touches it
- * never even notices it's there. Without this the panel would always treat
- * light as primary regardless of which mode is being previewed, exactly
- * the bug flagged in "make sure that whatever color shows up in the editor
- * panel is the color that is being shown in the current mode they are on".
- * The secondary swatch previews its own explicit override if the TA set
- * one, else autoDarkVariant() of the primary value as a starting
- * suggestion - autoDarkVariant() is self-inverse (flips HSL lightness), so
- * the same formula works as a suggestion in either direction. Only the
- * primary side's value is written into THEMED_OVERRIDE_MAPS eagerly (it
- * mirrors what's already painted); the secondary side stays
- * presentation-only until the TA actually edits or resets it.
- * @param liveValue the color actually rendered right now (eg
- *   currentColorValue(el)), always goes in the primary swatch
- * @param lightInput/darkInput the row's two <input type=color>s - fixed
- *   save targets (light always saves to lightMap, dark to darkMap)
- *   regardless of which one is primary right now
- * @param lightRow/darkRow their own "sm-*-row"/"sm-dark-row" divs
- * @param toggleBtn the row's "🌙"/"☀️" toggle button
+ * Fills one colour row's pair of light+dark swatches and its toggle, so that
+ * whichever theme is actually rendering is always the "primary" one: shown by
+ * default, its value the colour the ta can see. The other is collapsed behind
+ * the toggle, so a ta who never touches it never notices it.
+ * @param liveValue the colour rendered right now, always goes in the primary
+ *   swatch
+ * @param lightInput/darkInput the row's two <input type=color>s - fixed save
+ *   targets regardless of which is primary right now
+ * @param lightRow/darkRow their own row divs
+ * @param toggleBtn the row's light/dark toggle button
  * @param lightMap/darkMap THEMED_OVERRIDE_MAPS.* for this row
- * @param label used in the toggle's title, eg "color" -> "Edit dark mode color"
+ * @param label used in the toggle's title, eg "color"
  * @return {{lightBefore, darkBefore}} gesture-baseline values for the two
- *   physical inputs, for STYLE_*_BEFORE/STYLE_DARK*_BEFORE
+ *   physical inputs
+ * @note The secondary swatch previews its own explicit override if there is
+ * one, else autoDarkVariant() of the primary as a suggestion - that function
+ * is self-inverse, so one formula works in either direction. Only the primary
+ * side is written into the maps eagerly; the secondary stays
+ * presentation-only until the ta actually edits it.
  */
 function primeThemedColorRow(liveValue, lightInput, darkInput, lightRow, darkRow, toggleBtn, lightMap, darkMap, label) {
   var id = STYLE_MENU_ID;
@@ -7781,14 +7033,11 @@ function primeThemedColorRow(liveValue, lightInput, darkInput, lightRow, darkRow
   var secondaryMap = dark ? lightMap : darkMap;
 
   primaryInput.value = liveValue;
-  /* NOT primaryMap[id] = liveValue here - that would fabricate a fake
-     "explicit override" out of a plain live-value read (eg an element with
-     no dark override at all, just showing its auto-computed variant), and
-     since primary/secondary swap by theme, a later re-open (or theme
-     flip) in the OTHER direction would then see this map entry and
-     wrongly treat it as a real explicit override, auto-expanding the
-     secondary row for something the TA never actually set. Only an actual
-     edit (the row's own "input" handler) should ever write into a map. */
+  /* NOT primaryMap[id] = liveValue: that would fabricate a fake "explicit
+     override" out of a plain live read, and since primary/secondary swap by
+     theme, a later re-open in the other direction would treat it as real and
+     auto-expand the secondary row for something never set. Only an actual
+     edit should write into a map. */
   primaryRow.style.display = "";
 
   var explicitSecondary = secondaryMap[id];
@@ -7811,15 +7060,13 @@ function primeThemedColorRow(liveValue, lightInput, darkInput, lightRow, darkRow
 }
 
 /**
- * Re-primes Color/Text color/Fill/Border color's light<->dark swap for
- * whichever element the style popover is currently open on - the part of
- * toggleStyleMenu() that actually depends on which theme is active, kept
- * separate so it can be re-run on its own by refreshStyleMenuTheme()
- * without disturbing radius/shadow/tint/opacity/etc, which don't change
- * with theme. Which rows are relevant for this element's KIND (isImg,
- * isBtn, isText, isIcon/isDatetime) never changes for a given element, so
- * that gating is recomputed fresh here too (cheap) rather than threaded in.
+ * Re-primes the colour rows' light<->dark swap for whichever element the
+ * popover is open on - the part of toggleStyleMenu() that depends on the
+ * active theme, kept separate so refreshStyleMenuTheme() can re-run it alone
+ * without disturbing radius/shadow/tint/opacity.
  * @param el the element the popover is open on
+ * @note Which rows suit this element's KIND never changes for a given
+ * element, so that gating is just recomputed here rather than threaded in.
  */
 function primeStyleMenuThemedRows(el) {
   var kind = elKind(el);
@@ -7879,12 +7126,11 @@ function primeStyleMenuThemedRows(el) {
   }
 
   if (!isImg && !isProgress && !isExtrasArea) {
-    /* unlike color/text color/fill, hover/click have no rendered "live" value
-       at rest - they only ever paint while the cursor is on the element (see
-       applyStateColorOverrides()). An unpicked one reads back as the color
-       the element already is, which is the honest answer: with nothing picked
-       these states ARE the normal color, so the swatch opens on it and any
-       drag from there is a real change rather than a jump from an invented
+    /* unlike colour/fill, hover and click have no rendered value at rest -
+       they only paint under the cursor. An unpicked one reads back as the
+       colour the element already is, which is the honest answer: with nothing
+       picked these states ARE the normal colour, so the swatch opens on it
+       and any drag is a real change rather than a jump from an invented
        black. */
     var restingColor = currentColorValue(el);
     /* what these two WOULD paint right now, resolved for the theme in force
@@ -7919,26 +7165,19 @@ function primeStyleMenuThemedRows(el) {
   }
 
   if (!isIcon && !isDatetime) {
-    /* border width lives in the same always-visible row as the light color
-       swatch (there's no separate "width" row to swap), so unlike
-       color/text color/fill, border can't just swap two whole rows by
-       theme - instead the light swatch <input> itself hides/shows within
-       its row (width stays put either way, since it's theme-independent,
-       see applyBorderOverrides()), while the dark row (just the one
-       swatch) still swaps wholesale like the others. */
+    /* border width shares the always-visible row with the light swatch, so
+       unlike the other rows border can't swap two whole rows by theme -
+       instead the light <input> hides/shows within its row (width stays put,
+       being theme-independent) while the dark row still swaps wholesale */
     var borderColor = STYLE_MENU.querySelector(".sm-border-color");
     var borderColorDark = STYLE_MENU.querySelector(".sm-border-color-dark");
     var borderDarkToggle = STYLE_MENU.querySelector(".sm-border-dark-toggle");
     var bd = currentBorderValue(el);
     STYLE_MENU.querySelector(".sm-border-w").value = bd.w;
     STYLE_MENU.querySelector(".sm-border-val").textContent = bd.w + "px";
-    /* NOT writing bd (the live value) into THEMED_OVERRIDE_MAPS.border/
-       darkBorder here - same reasoning as primeThemedColorRow(): a plain
-       live-value read isn't a real explicit override, and fabricating one
-       would make the OTHER side wrongly auto-expand once the TA flips
-       theme or reopens this popover later, see confirmedLightBorderColor()
-       for the one place that still needs a "no real override yet"
-       fallback. */
+    /* NOT writing the live value into the border maps - same reasoning as
+       primeThemedColorRow(): a plain live read isn't a real override, and
+       fabricating one would make the other side wrongly auto-expand later */
     var darkActive = isDarkThemeActive();
     if (darkActive) {
       borderColorDark.value = bd.color;
@@ -7964,14 +7203,11 @@ function primeStyleMenuThemedRows(el) {
 }
 
 /**
- * Keeps the style popover in sync with reality when a TA flips the site's
- * own theme toggle while the popover is already open on some element -
- * without this the panel would keep showing whichever mode was active when
- * it was opened, exactly the "you WILL have to add some kind of way for
- * the editor to know which mode of page it is showing a preview of" gap.
- * A no-op if the popover isn't open. Hooked into js/theme.js's setTheme()
- * via window.refreshStyleMenuTheme, same window.-gated pattern as
- * window.reapplyThemedColors.
+ * Keeps the style popover in sync when a ta flips the site's theme while it's
+ * already open on an element - without this the panel would keep showing
+ * whichever mode was active when it opened. A no-op if the popover is shut.
+ * @note Hooked into theme.js's setTheme() via window.refreshStyleMenuTheme,
+ * the same window.-gated pattern as window.reapplyThemedColors.
  */
 function refreshStyleMenuTheme() {
   if (!STYLE_MENU || !STYLE_MENU.classList.contains("show") || !STYLE_MENU_ID) return;
@@ -8021,14 +7257,11 @@ function toggleStyleMenu(anchorEl) {
   STYLE_MENU.querySelector(".sm-textcolor-row").style.display = isBtn ? "" : "none";
   STYLE_MENU.querySelector(".sm-textcolor-dark-row").style.display = isBtn ? "" : "none";
   STYLE_MENU.querySelector(".sm-textcolor-toggle-row").style.display = isBtn ? "" : "none";
-  /* Hover color/Click color: offered wherever the plain Color row is, since
-     they paint the same thing it does (see paintElementStateColor()) - a box,
-     an icon and a heading all get a look under the cursor now, not just a
-     button. Hidden exactly where Color is hidden, for the same reasons: an
-     image has no surface to recolor, a progress bar paints its own two
-     colors, the extras area is deliberately transparent.
-     primeStyleMenuThemedRows() below handles which of each row's light/dark
-     pair actually shows. */
+  /* Hover and Click colour are offered wherever the plain Color row is, since
+     they paint the same thing - a box, an icon and a heading all get a look
+     under the cursor now, not just a button. Hidden exactly where Color is
+     hidden and for the same reasons: an image has no surface, a progress bar
+     paints its own two colours, the extras area is deliberately transparent. */
   STYLE_MENU.querySelectorAll(".sm-btnstate-row").forEach(function (row) {
     row.style.display = (isImg || isProgress || isExtrasArea) ? "none" : "";
   });
@@ -8152,14 +7385,13 @@ function toggleStyleMenu(anchorEl) {
 }
 
 /**
- * Fills the style popover's two reel spacing rows in from one reel's current
- * state: which slider is the horizontal one depends on which way the reel
- * runs (the gap is between tiles, so it's horizontal on a horizontal reel and
- * vertical on a vertical one; the pad is the clear space across the other
- * axis, so it's always the opposite). Split out from toggleStyleMenu() so
- * undo/redo can refresh the sliders while the popover is still open, same as
- * every other row's history branch does.
- * @param panel the .reel element the popover is currently acting on
+ * Fills the popover's two reel spacing rows from one reel's current state.
+ * @param panel the .reel element the popover is acting on
+ * @note Which slider is horizontal depends on which way the reel runs: the
+ * gap is between tiles, so it follows the reel's axis, and the pad is the
+ * clear space across the other one.
+ * @note Split out from toggleStyleMenu() so undo/redo can refresh the sliders
+ * while the popover is still open, as every other row's branch does.
  */
 function primeStyleMenuReelRows(panel) {
   var d = customElementById(elId(panel));
@@ -8178,11 +7410,10 @@ function primeStyleMenuReelRows(panel) {
 }
 
 /**
- * Fills the popover's tile spacing slider in from one flow container's current
- * gap. Split out from toggleStyleMenu() for the same reason
- * primeStyleMenuReelRows() is: undo/redo has to be able to refresh the slider
- * while the popover is still open.
- * @param area the flow container the popover is currently acting on
+ * Fills the popover's tile spacing slider from one flow container's current
+ * gap. Split out for the same reason primeStyleMenuReelRows() is: undo/redo
+ * has to refresh the slider while the popover is still open.
+ * @param area the flow container the popover is acting on
  */
 function primeStyleMenuTileGapRow(area) {
   var gap = areaFlowFor(elId(area)).gap;
@@ -8201,11 +7432,10 @@ function hideStyleMenu() {
 }
 
 /**
- * Snaps the ring onto its current element's rendered box. Document
- * coordinates (rect + scroll), re-run on scroll/resize since the sticky
- * nav's document position changes as the page scrolls. Also toggles
- * .locked so the move handle can dim/disable itself for a locked element
- * (see isLocked()/startMoveDrag()).
+ * Snaps the ring onto its current element's rendered box, in document
+ * coordinates - re-run on scroll and resize, since the sticky nav's document
+ * position changes as the page scrolls. Also toggles .locked so the move
+ * handle can dim itself for a locked element.
  */
 /* how far inside the viewport edge the page's own ring sits (see
    positionRing()): flush against it, its border and its style button would be
@@ -8214,16 +7444,13 @@ var PAGE_RING_INSET = 2;
 
 /**
  * Selects the page itself: the ring frames the viewport and its style button
- * opens onto the page's own color rows (see isPageEl()). This is what an
- * empty-space click does, since on a page whose own background is editable
- * there's no longer any such thing as clicking "nothing" - and hiding it
- * behind a right-click entry instead would leave the one surface a ta most
- * obviously wants to recolor as the only one they can't just click.
- *
- * Falls back to plain deselection wherever the page isn't tagged: the ta
- * portal's own object canvas wires this same editor onto a body with no
- * box.page id of its own (see initObjectCanvas()), and an object being drawn
- * there has no page to recolor.
+ * opens onto the page's own colour rows.
+ * @note This is what an empty-space click does, since on a page whose
+ * background is editable there's no longer such a thing as clicking
+ * "nothing" - and hiding it behind a right-click entry would leave the one
+ * surface a ta most obviously wants to recolour the only one they can't click.
+ * @note Falls back to plain deselection wherever the page isn't tagged: the
+ * portal's object canvas has no page to recolour.
  */
 function selectPage() {
   if (!elId(document.body)) { deselectAll(); return; }
@@ -8298,19 +7525,16 @@ function positionRing() {
 }
 
 /**
- * The tracked element enclosing el, if any - the one the ring's "select the
- * container around this" handle jumps to. Walks the same nearest-tracked-
- * ancestor path ancestorPos() does, and skips a theme toggle's own label for
- * the same reason (it isn't an independent element, see isThemeToggleLabel()).
- *
- * Exists because the live areas are the one place on the page where a tracked
- * element can be completely unreachable by clicking: a tile is covered edge to
- * edge by its own rect, and a flow container is covered by its tiles, so every
- * click inside either one lands on something painted on top. This is the way
- * out - and the way to select a tile at all, which a ta needs in order to
- * resize one and re-tile the container.
+ * The tracked element enclosing el - the one the ring's "select the container
+ * around this" handle jumps to.
  * @param el the currently selected element
  * @return the enclosing tracked element, or null
+ * @note Walks the same path ancestorPos() does, and skips a theme toggle's
+ * label for the same reason: it isn't an independent element.
+ * @note Exists because the live areas are the one place a tracked element can
+ * be unreachable by clicking - a tile is covered edge to edge by its own
+ * rect, and a container by its tiles. This is the way out, and the only way
+ * to select a tile at all in order to resize it.
  */
 function parentSelectableOf(el) {
   if (!el || isThemeToggleLabel(el) || isPageEl(el)) return null;
@@ -8320,61 +7544,44 @@ function parentSelectableOf(el) {
     p = p.parentElement;
   }
   /* the page is the last stop, past the outermost tracked container. Named
-     here rather than found by the walk above because it deliberately isn't a
-     RESIZABLE_SEL match (see elId()). This is the main way to reach it: a
-     full-bleed section/header/footer covers nearly every pixel of these pages,
-     so "click an empty spot" only works where one of them happens not to
-     reach, and stepping up out of the outermost container is exactly the
-     gesture that means "the thing behind all this". */
+     here rather than found by the walk because it deliberately isn't a
+     RESIZABLE_SEL match. This is the main way to reach it: a full-bleed
+     section covers nearly every pixel, so "click an empty spot" rarely works. */
   if (document.body && isPageEl(document.body)) return document.body;
   return null;
 }
 
 /**
- * Freezes every tracked element inside el (icon, text, image, whatever) at
- * its exact current on-screen spot, right before el itself gets resized.
- * Without this, an untouched descendant is still governed by el's own css
- * layout (eg flex centering), so growing el would visually drag it along,
- * breaking "no attachment between elements" just as much as if el's own
- * move leaked into it (moving is already immune to this, see paintPos()/
- * ancestorPos(), resizing needs the same guarantee). Pins each one to
- * whichever ancestor is actually its nearest positioned one (offsetParent)
- * so a doubly-nested tracked element (an icon inside a card inside the
- * section being resized) lands relative to the closest thing that makes
- * sense, not always the outer el. Two passes, same reason
- * applyPositionOverrides() is two passes: read every wrap's current rect
- * FIRST, then write the pins second, so pinning the first descendant (an
- * icon leaving the flex row) can't shift a not-yet-pinned sibling (the
- * label sliding over to fill the gap) before its own turn comes and it
- * gets measured already-wrong. A no-op past the first resize, since a
- * pinned element is already immune to every future one, its own or an
- * ancestor's. Skips a glued child (see isGluedChild()): pinning a theme
- * toggle's label absolute would freeze it at its pre-resize spot instead of
- * letting it reflow inside the button's own growing/shrinking flex box (same
- * as the plain, untracked icon markup beside it already does with no pinning
- * at all), and pinning a failure line's message would stop the text
- * rewrapping as a ta drags the line narrower, which is the whole point of
- * resizing a line of text.
+ * Freezes every tracked element inside el at its exact on-screen spot, right
+ * before el itself is resized.
  * @param el the element about to be resized
+ * @note Without this an untouched descendant is still governed by el's own
+ * layout, so growing el would drag it along - breaking "no attachment between
+ * elements" exactly as a leaked move would. Moving is already immune; resizing
+ * needs the same guarantee.
+ * @note Each one is pinned to its nearest positioned ancestor, so a doubly
+ * nested element lands relative to the closest thing that makes sense.
+ * @note Two passes: read every wrap's rect FIRST, then write the pins, so
+ * pinning one descendant can't shift a not-yet-pinned sibling before it gets
+ * measured. A no-op past the first resize.
+ * @note Skips a glued child - pinning a theme toggle's label would freeze it
+ * instead of letting it reflow inside the button, and pinning a failure
+ * line's message would stop the text rewrapping as the line is dragged
+ * narrower, which is the whole point of resizing a line of text.
  */
 function freezeDescendants(el) {
-  /* a live area (see isLiveAreaEl()) is the one container whose contents are
-     MEANT to move when it resizes: the whole point of dragging its width is
-     that the tile grid reflows to the new width ("when tiles do appear, they
-     should be properly proportional to however the area has been resized").
-     Pinning each tile's rect/icon/text/button to a fixed offset inside it -
-     the exact opposite guarantee every other container wants - froze them at
-     their old spots while the tiles themselves reflowed out from under them,
-     the resize half of the same tearing ancestorPos() describes. */
+  /* a live area is the one container whose contents are MEANT to move when it
+     resizes: the point of dragging its width is that the tile grid reflows to
+     it. Pinning each tile's pieces to a fixed offset - the opposite guarantee
+     every other container wants - froze them at their old spots while the
+     tiles reflowed out from under them. */
   if (isLiveAreaEl(el)) return;
-  /* a reel is the same shape of container, one step more literally: resizing
-     the panel resizes the VIEWPORT its tiles scroll/drift through (see
-     initReel() in js/learn-reel.js), and the tiles are supposed to keep
-     flowing in their track behind it exactly as they were. Pinning them
-     instead detached every tile out of that flex track and left the whole
-     reel visually empty the moment a ta grabbed a resize handle - the tiles
-     were still there, just absolutely positioned at their pre-drag spots
-     inside a track that had collapsed to nothing around them. */
+  /* a reel is the same shape of container, one step more literal: resizing
+     the panel resizes the VIEWPORT its tiles drift through, and they're
+     supposed to keep flowing behind it. Pinning them detached every tile from
+     the flex track and left the reel visually empty the moment a handle was
+     grabbed - the tiles were still there, absolutely positioned at their
+     pre-drag spots inside a track that had collapsed around them. */
   if (el.classList && el.classList.contains("reel")) return;
   var wraps = [];
   el.querySelectorAll(RESIZABLE_SEL).forEach(function (d) {
@@ -8403,44 +7610,32 @@ function freezeDescendants(el) {
 /* ---------------------------------------------------------------------------
    SNAPPING (SMART GUIDES)
 
-   Canva's kind of snapping: while something is dragged or resized, its edges
-   and its centre are pulled onto the edges and centres of the OTHER elements
-   around it, and a pink line is drawn through whatever it just lined up with,
-   so the ta can see WHY it stuck. What it snaps to depends entirely on what
-   happens to be near it.
+   Canva's kind of snapping: while something is dragged, its edges and centre
+   are pulled onto the edges and centres of the OTHER elements around it, and
+   a pink line is drawn through whatever it lined up with, so the ta can see
+   WHY it stuck.
 
-   This section used to round every drag to a fixed 8px grid instead, which
-   sounds like the same feature and isn't: a grid only ever lines two things
-   up when both of them already sit on it, and on a page built out of flowing
-   text, flex rows, percentage widths and a tile grid that re-tiles itself,
+   This used to round every drag to a fixed 8px grid, which sounds like the
+   same feature and isn't: a grid only lines two things up when both already
+   sit on it, and on a page of flowing text, flex rows and a self-tiling grid,
    almost nothing does. Lining a caption up under a photo means flush with
-   THAT photo's edge - no grid spacing is guaranteed to contain it.
+   THAT photo's edge.
 
    The lines a drag can stick to, per axis, are each nearby element's two
-   edges and its centre, plus the same three for the box the dragged element
-   lives in (its tile/live area if it's inside one, otherwise the nearest
-   tracked ancestor) - that last one is what gives "centred in its container",
-   Canva's page-centre guide. Nearby means "currently on screen": a line
-   through something the ta can't see reads as the drag sticking for no
-   reason. Everything is measured once at mousedown and held in document
-   coordinates, so a drag that scrolls the frame doesn't drag its own targets
-   along with it.
+   edges and centre, plus the same three for the box the dragged element lives
+   in - that last one is what gives "centred in its container". Nearby means
+   "currently on screen": a line through something invisible reads as the drag
+   sticking for no reason. Everything is measured once at mousedown and held
+   in document coordinates, so a drag that scrolls doesn't drag its targets.
 
-   Toggled with SHIFT+R (Canva's own rulers-and-guides shortcut - it has no
-   separate snap one - see the Snap switch in js/ta.js, which is the same
-   setting from the portal side).
-
-   Everything about it is editor-only and lives in localStorage rather than in
-   the saved content: it changes how a drag BEHAVES, not what the page is, so
-   it has no business in the snapshot a student's page is built from. That key
-   is also how the portal chrome outside the iframe and this code inside it
-   stay in agreement (same origin, one key, no message passing), and it's what
-   keeps the setting through the frame reloads Apply/Save trigger.
+   Toggled with SHIFT+R (Canva's own rulers shortcut). Editor-only and stored
+   in localStorage rather than in content: it changes how a drag BEHAVES, not
+   what the page is. That key is also how the portal chrome and this code
+   inside the iframe stay in agreement, and what survives Apply/Save reloads.
 
    Two things deliberately DON'T snap: the arrow-key nudge (1px a press, the
-   precise escape hatch for placing something a few px off an edge without
-   turning the whole thing off) and a reel tile's drag (it reorders a strip,
-   it has no free position to snap).
+   precise escape hatch) and a reel tile's drag (it reorders a strip and has
+   no free position to snap).
    --------------------------------------------------------------------------- */
 
 /* how close (css px) a moving edge has to come before it's pulled in. About
@@ -8469,10 +7664,9 @@ function snapOn() {
 }
 
 /**
- * Turns snapping on or off, tells the ta which it now is (the setting has no
- * visible effect at all until the next drag, so the toast is the only
- * confirmation there is), and re-syncs the portal's own Snap switch if this
- * page is running inside the editor's iframe.
+ * Turns snapping on or off, says which it now is (the setting has no visible
+ * effect until the next drag, so the toast is the only confirmation there
+ * is), and re-syncs the portal's Snap switch if this page is in the iframe.
  * @param on true to snap
  */
 function setSnapping(on) {
@@ -8490,12 +7684,13 @@ function setSnapping(on) {
 function toggleSnapping() { setSnapping(!snapOn()); }
 
 /**
- * One box's six snappable lines in DOCUMENT coordinates - both edges and the
- * centre, on each axis. Document rather than viewport coordinates so a drag
- * that scrolls the page doesn't drag its own targets along with it, and so
- * two elements lined up "in the same place" really are.
+ * One box's six snappable lines - both edges and the centre on each axis - in
+ * DOCUMENT coordinates.
  * @param r a getBoundingClientRect()
  * @return {x1, xc, x2, y1, yc, y2}
+ * @note Document rather than viewport coordinates, so a drag that scrolls
+ * doesn't drag its own targets along and two elements "in the same place"
+ * really are.
  */
 function snapLinesOf(r) {
   var x = r.left + window.scrollX, y = r.top + window.scrollY;
@@ -8507,12 +7702,12 @@ function snapLinesOf(r) {
 
 /**
  * The box a dragged element is placed WITHIN, whose edges and centre it can
- * also line up against: the tile or live area that already bounds its drag if
- * there is one (see moveBoundsContainer(), so the guides agree with the clamp
- * rather than fighting it), otherwise the nearest tracked ancestor - a card, a
- * section - and failing that the page's own column.
+ * also line up against.
  * @param el the element being dragged
  * @return the framing element, or null
+ * @note The tile or live area that already bounds its drag if there is one,
+ * so the guides agree with the clamp rather than fighting it; otherwise the
+ * nearest tracked ancestor, and failing that the page's own column.
  */
 function snapFrameFor(el) {
   if (!el || !el.closest) return null;
@@ -8524,17 +7719,15 @@ function snapFrameFor(el) {
 
 /**
  * Starts a snapping drag: measures everything the element could line up with,
- * once, here. Cheap enough at mousedown (one rect per tracked element) and far
- * too expensive per mousemove, which is the other reason the targets are held
- * in document coordinates - they stay true for the whole drag without being
- * re-measured, even as the thing being dragged moves through them.
- *
- * Ancestors and descendants are left out: an element can't sensibly line up
- * with something it contains or sits inside (its own framing box comes back
- * separately, above), and so are the other members of a rigid group, which
- * travel with it rather than standing still to be measured against.
+ * once, here.
  * @param el the element being dragged or resized
  * @param skipEls other elements moving with it, or null
+ * @note Cheap at mousedown and far too expensive per mousemove - which is the
+ * other reason the targets are held in document coordinates: they stay true
+ * for the whole drag without re-measuring.
+ * @note Ancestors and descendants are left out, since an element can't line
+ * up with something it contains or sits inside, and so are the other members
+ * of a rigid group, which travel with it rather than standing still.
  */
 function beginSnapDrag(el, skipEls) {
   SNAP_EL = el;
@@ -8563,13 +7756,13 @@ function endSnapDrag() {
 }
 
 /**
- * The pull on one axis: given where the moving element's lines would land
- * without snapping, the nudge that puts the closest of them onto the closest
- * target line. Zero when nothing is within tolerance, which is also what an
- * unsnapped drag gets, so callers need no branch of their own.
+ * The pull on one axis: given where the moving lines would land unsnapped,
+ * the nudge putting the closest of them onto the closest target line.
  * @param positions the moving lines' document coordinates on this axis
  * @param axis "x" or "y"
  * @return the correction to add to the drag delta
+ * @note Zero when nothing is within tolerance, which is also what an
+ * unsnapped drag gets, so callers need no branch of their own.
  */
 function snapPull(positions, axis) {
   if (!SNAP_TARGETS || !SNAP_TARGETS.length) return 0;
@@ -8589,21 +7782,18 @@ function snapPull(positions, axis) {
 }
 
 /**
- * Snaps a move drag. Takes the moving element's lines as they were at
- * mousedown and the raw pointer delta, and gives back the delta to actually
- * apply - each axis pulled independently, so an element can be flush with one
- * thing horizontally and something else vertically at the same time, exactly
- * as it can in Canva.
- *
- * Applied before the container clamp, never after, so an element dragged
- * against the edge of a tile/live area still grinds along that edge rather
- * than sticking short of it (see clampOwnPos()). The clamp gets the last
- * word, which is why the guides are painted from what actually landed rather
- * than from what was proposed here - see paintSnapGuides().
+ * Snaps a move drag: takes the element's lines as they were at mousedown and
+ * the raw pointer delta, and gives back the delta to actually apply.
  * @param lines snapLinesOf(the element's rect at mousedown)
  * @param dx the raw pointer delta, x
  * @param dy the raw pointer delta, y
  * @return {dx, dy} the deltas to apply
+ * @note Each axis is pulled independently, so an element can be flush with
+ * one thing horizontally and another vertically at once.
+ * @note Applied before the container clamp, never after, so an element
+ * dragged against a tile's edge still grinds along it rather than sticking
+ * short. The clamp gets the last word, which is why the guides are painted
+ * from what actually landed rather than what was proposed here.
  */
 function snapMoveDelta(lines, dx, dy) {
   if (!SNAP_TARGETS || !SNAP_TARGETS.length) return { dx: dx, dy: dy };
@@ -8614,14 +7804,14 @@ function snapMoveDelta(lines, dx, dy) {
 }
 
 /**
- * Snaps a resize drag: the same pull, but only ONE line is moving - the edge
- * the grabbed handle pulls. Snapped per edge rather than per size, because
- * rounding the width would only ever line the box up with something when the
- * edge it's pinned to already was.
+ * Snaps a resize drag: the same pull, but only ONE line moves - the edge the
+ * grabbed handle pulls.
  * @param axis "x" or "y"
  * @param edge that edge's document coordinate at mousedown
  * @param d the raw pointer delta on this axis
  * @return the delta to apply
+ * @note Snapped per edge rather than per size, since rounding the width would
+ * only line the box up when the edge it's pinned to already was.
  */
 function snapEdgeDelta(axis, edge, d) {
   if (!SNAP_TARGETS || !SNAP_TARGETS.length) return d;
@@ -8630,14 +7820,13 @@ function snapEdgeDelta(axis, edge, d) {
 
 /**
  * Draws a guide through every line the dragged element is currently flush
- * with, and nothing when it's flush with nothing. Measured from where the
- * element actually IS, not from what the snap proposed: the container clamp
- * can overrule a pull (see clampOwnPos()), and a guide drawn through a line
- * the element didn't reach would be a lie about why it stopped.
- *
- * Each guide runs the full extent of the two boxes it joins, the way Canva's
- * do, so it reads as "these two edges are the same edge" rather than as a
- * ruler mark floating somewhere near them.
+ * with, and nothing when it's flush with nothing.
+ * @note Measured from where the element actually IS, not from what the snap
+ * proposed: the container clamp can overrule a pull, and a guide through a
+ * line the element didn't reach would be a lie about why it stopped.
+ * @note Each guide runs the full extent of the two boxes it joins, so it
+ * reads as "these two edges are the same edge" rather than a floating ruler
+ * mark.
  */
 function paintSnapGuides() {
   if (!SNAP_EL || !SNAP_TARGETS || !SNAP_TARGETS.length) { clearSnapGuides(); return; }
@@ -8669,12 +7858,12 @@ function paintSnapGuides() {
 }
 
 /**
- * Puts the guide lines on screen. The overlay is fixed to the viewport (a
- * document-sized layer would have to be re-measured every time anything on
- * the page changed height) and the lines live in document coordinates, so
- * each one is converted by the current scroll as it's drawn - which is also
- * why a scroll mid-drag simply repaints, see wireResizable().
+ * Puts the guide lines on screen.
  * @param lines [{axis, at, from, to}] in document coordinates
+ * @note The overlay is fixed to the viewport (a document-sized layer would
+ * need re-measuring whenever anything changed height) while the lines are in
+ * document coordinates, so each is converted by the current scroll as it's
+ * drawn - which is also why a scroll mid-drag simply repaints.
  */
 function drawSnapGuides(lines) {
   if (!lines.length) { clearSnapGuides(); return; }
@@ -8710,19 +7899,16 @@ function clearSnapGuides() {
 
 /**
  * One resize drag from whichever of the 8 handles was grabbed. A real
- * width/height change (see setBox()), so text reflows inside its box at
- * its own size instead of stretching. Dragging a left/top handle keeps
- * the opposite edge pinned by sliding the element's own move offset while
- * the box grows/shrinks. Aspect ratio: HOLDING SHIFT locks the box's own
- * proportions for anything at all - icon, image, text box, card, section,
- * button, or a tile (which locks by re-tiling its container to a
- * proportional track, see setTileTrackSize()). An icon is additionally
- * locked with or without shift, since a squashed glyph is never what
- * anyone means; an image is free by default but keeps object-fit: cover
- * either way (whatever the box's new shape, the photo re-crops to fill it,
- * never stretched/warped pixel-for-pixel), so shift there steadies the
- * crop framing rather than protecting the pixels.
+ * width/height change, so text reflows inside its box at its own size instead
+ * of stretching.
  * @param e the handle's mousedown
+ * @note Dragging a left/top handle keeps the opposite edge pinned by sliding
+ * the element's own move offset while the box changes.
+ * @note HOLDING SHIFT locks the box's proportions for anything at all,
+ * including a tile (which locks by re-tiling its container to a proportional
+ * track). An icon is locked with or without shift, since a squashed glyph is
+ * never what anyone means; an image is free by default but keeps object-fit:
+ * cover either way, so shift there steadies the crop rather than the pixels.
  */
 function startResizeDrag(e) {
   if (!RING_EL || isPageEl(RING_EL)) return;
@@ -8739,12 +7925,10 @@ function startResizeDrag(e) {
   var dir = RING_DIRS[e.target.getAttribute("data-dir")];
   var kind = elKind(el);
   /* a tile resizes by re-tiling its container, not by taking a box of its
-     own (see setTileTrackSize()), so it must stay exactly where the grid put
-     it: detaching it would take it out of that grid entirely, and pinning its
-     descendants would freeze the rect/icon/text/button at their old spots
-     while the tile they belong to changes shape underneath them. A flow
-     container skips freezeDescendants() for the same reason it always has -
-     reflowing its contents IS the point of resizing it, see freezeDescendants(). */
+     own, so it must stay exactly where the grid put it: detaching would take
+     it out of that grid, and pinning its descendants would freeze them at
+     their old spots while the tile changed shape underneath. A flow container
+     skips freezeDescendants() for the reason it always has. */
   var tileBox = isTileBoxEl(el);
   /* a tile drag can take its container's saved height with it (see
      growFlowAreaForTiles()), and that grow-only path is not its own inverse -
@@ -8779,24 +7963,21 @@ function startResizeDrag(e) {
   var edgeY = (dir[1] === -1 ? startRect.top : startRect.bottom) + window.scrollY;
   beginSnapDrag(el, null);
   /* the last box a mousemove actually WROTE, which is how onUp tells the axes
-     the ta pulled from the ones that merely moved: a flow container measures
-     an unlocked axis live (see getSize()), and dragging such a container
-     NARROWER reflows its tiles onto more rows, so its height changes all on
-     its own. Comparing measured heights would read that as a height drag and
-     claim the axis (see lockDraggedFlowAxes()); the written box only ever
-     changes on an axis the handle actually pulls, shift-scaling included.
-     Stays null for a handle click with no drag at all. */
+     the ta pulled from the ones that merely moved: a container measures an
+     unlocked axis live, and dragging one NARROWER reflows its tiles onto more
+     rows, so its height changes on its own. Comparing measured heights would
+     read that as a height drag and claim the axis. Stays null for a handle
+     click with no drag at all. */
   var dragged = null;
   RING_DRAGGING = true;
 
   /**
    * Whether this moment of the drag should keep the box's proportions.
-   * Read per mousemove, not once at mousedown, so shift can be pressed or
-   * released mid-drag and take effect immediately. A zero starting side has
-   * no ratio to keep (nothing laid out yet), so it falls back to a free
-   * drag rather than scaling by NaN.
    * @param ev the mousemove
    * @return true to lock the aspect ratio
+   * @note Read per mousemove, not once at mousedown, so shift can be pressed
+   * or released mid-drag. A zero starting side has no ratio to keep, so it
+   * falls back to a free drag rather than scaling by NaN.
    */
   function aspectLocked(ev) {
     return (kind === "icon" || ev.shiftKey) && start.w > 0 && start.h > 0;
@@ -8843,12 +8024,10 @@ function startResizeDrag(e) {
     dragged = { w: w, h: h };
     if (isFlowAreaEl(el) && h === start.h) {
       /* a width drag on a container must leave its height alone rather than
-         pin it to the figure it happened to measure at mousedown: dragging one
-         narrower reflows its tiles onto more rows, so growing taller IS the
-         correct response, and a frozen inline height clips them against the
-         container's own overflow (see .tile-flow.flow-x-lock) for the rest of
-         the drag. The height axis re-derives itself either way the moment the
-         drag settles, see applyTileFlow(). */
+         pin it to whatever it measured at mousedown: dragging one narrower
+         reflows its tiles onto more rows, so growing taller IS correct, and a
+         frozen height clips them for the rest of the drag. The height axis
+         re-derives itself once the drag settles. */
       el.dataset.ovW = w;
       el.style.width = w + "px";
     } else setBox(el, w, h);
@@ -8867,13 +8046,11 @@ function startResizeDrag(e) {
     var s = getSize(el), p = getPos(el);
     commitSize(el);
     commitPosition(el);
-    /* a container's own new size changes what its tiles have to fit into (and
-       a locked y axis re-derives its pinned height from that), so re-run the
-       layout once the drag settles - a tile drag already did this on every
-       move, through setTileTrackSize(). The axes just dragged are claimed
-       before that pass runs (see lockDraggedFlowAxes()), since which axes the
-       container owns is what decides whether the size committed two lines up
-       is one the pass honours or one it throws straight back away. */
+    /* a container's new size changes what its tiles have to fit into, so
+       re-run the layout once the drag settles - a tile drag already did this
+       on every move. The axes just dragged are claimed before that pass, since
+       which axes the container owns decides whether the size committed above
+       is honoured or thrown straight back away. */
     if (isFlowAreaEl(el)) {
       if (dragged) lockDraggedFlowAxes(el, start, dragged);
       applyTileFlow();
@@ -8892,19 +8069,16 @@ function startResizeDrag(e) {
 }
 
 /**
- * One move drag from the ring's move handle: a pure translate on the
- * element itself, any direction. A block/inline-block element's own flow
- * slot is untouched by a translate (it's paint-only), but a naturally
- * *inline* element (a plain <span>, eg. the hero title text) is exempt from
- * `transform` by spec, CSS only honours it on block/inline-block/replaced
- * boxes, so it must still be detached first (see detachFromFlow()): that
- * forces a blockified, absolutely-positioned box, whose old flow slot is
- * held open by its frozen wrap, so nothing shifts either way. A no-op past
- * the first detach. Tracked elements inside a moved container visually stay
- * put, see setOwnPos(). Locked elements (see isLocked()) don't start a
- * drag at all, so a placed element can't be accidentally nudged out of
- * position; the handle itself is also dimmed/disabled via .sel-ring.locked.
+ * One move drag from the ring's move handle: a pure translate on the element
+ * itself, any direction.
  * @param e the handle's mousedown
+ * @note A translate is paint-only, so a block element's flow slot is
+ * untouched - but a naturally inline element is exempt from transform by
+ * spec, so it must be detached first: that forces a blockified, absolutely
+ * positioned box whose old slot is held open by its frozen wrap. A no-op past
+ * the first detach.
+ * @note Locked elements don't start a drag at all, so a placed element can't
+ * be accidentally nudged; the handle itself is also dimmed.
  */
 function startMoveDrag(e) {
   /* the page has nothing to move relative to, and its handles are hidden
@@ -8992,23 +8166,18 @@ function startMoveDrag(e) {
 }
 
 /**
- * One reel tile's drag: grab it anywhere on its background (or by the ring's
- * move handle) and carry it to a different place in the strip. A tile can't
- * be given a free position the way every other element can - it lives in the
- * reel's flex track, and where it sits IS its index in that track - so the
- * drag reorders instead: the tile follows the pointer along the reel's own
- * axis, and the moment its centre passes a neighbour's, the two swap places
- * for real in the dom, so the strip rearranges live under the cursor rather
- * than only settling on drop.
- *
- * The translate is re-derived against the tile's CURRENT slot on every move
- * (measure with the transform cleared, then re-apply), not accumulated from
- * the drag's start: a swap moves the slot out from under the tile, and an
- * offset measured against where it used to be would jump by a whole tile
- * width each time. Same 5px threshold the ordinary drag-anywhere handler
- * uses, so a plain click still just selects the tile.
+ * One reel tile's drag: grab it anywhere on its background and carry it to a
+ * different place in the strip.
  * @param e the mousedown that started it
  * @param tile the .reel-tile being dragged
+ * @note A tile can't be given a free position - it lives in the reel's flex
+ * track, and where it sits IS its index - so the drag reorders instead: the
+ * moment its centre passes a neighbour's, the two swap for real in the dom,
+ * so the strip rearranges live rather than settling only on drop.
+ * @note The translate is re-derived against the tile's CURRENT slot on every
+ * move, not accumulated from the start: a swap moves the slot out from under
+ * it, and an offset measured against where it used to be would jump by a
+ * whole tile width each time.
  */
 function startReelTileDrag(e, tile) {
   var panel = reelPanelOf(tile);
@@ -9091,20 +8260,17 @@ function startReelTileDrag(e, tile) {
 }
 
 /**
- * One reel tile's resize drag, from any of the ring's 8 handles. Per the spec
- * every tile in the reel follows the one being dragged, so this writes the
- * reel's single shared tile size (see setReelTileSize()) instead of a size
- * override for the tile that happens to be selected.
- *
- * No detachFromFlow()/freezeDescendants() and no opposite-edge pinning,
- * unlike the generic drag: the tiles stay in their track and the track
- * re-lays them out at the new size, which is exactly what "the rest mirror
- * it" looks like. Whatever a ta has bound onto a tile keeps its own position
- * inside it (they're absolutely placed against the tile, see placeInTile()),
- * so growing a tile reveals more room around its contents rather than
- * dragging them along.
+ * One reel tile's resize drag, from any of the ring's 8 handles. Every tile
+ * in the reel follows the one being dragged, so this writes the reel's single
+ * shared tile size rather than an override for the selected tile.
  * @param e the handle's mousedown
  * @param tile the .reel-tile being resized
+ * @note No detach, no descendant freezing and no opposite-edge pinning: the
+ * tiles stay in their track and the track re-lays them out at the new size,
+ * which is exactly what "the rest mirror it" looks like.
+ * @note Whatever a ta bound onto a tile keeps its own position inside it, so
+ * growing a tile reveals more room around its contents rather than dragging
+ * them along.
  */
 function startReelTileResize(e, tile) {
   var panel = reelPanelOf(tile);
@@ -9213,16 +8379,14 @@ function resetPosDbl(e) {
 }
 
 /**
- * Hides (or restores) every element sharing one data-edit-id/data-resize-id
- * and persists it, same "an id is one logical thing, not one specific DOM
- * node" rule mirrorEditedField() already applies to text (deleting the brand
- * wordmark takes it out of the nav and the footer together, not just
- * whichever copy was clicked). The actual hide/show is setHiddenVisual()
- * (display:none for a leaf element, invisible-but-present for a wrapper
- * around other tracked elements, see its doc comment); this just applies
- * that to every matching element and persists the change.
+ * Hides (or restores) every element sharing one id and persists it.
  * @param id the element's data-edit-id or data-resize-id
  * @param hidden true to hide/delete it, false to restore it
+ * @note Same "an id is one logical thing, not one DOM node" rule text edits
+ * follow: deleting the brand wordmark takes it out of the nav and the footer
+ * together, not just whichever copy was clicked.
+ * @note The actual hide/show is setHiddenVisual()'s job; this applies it to
+ * every match and persists the change.
  */
 function setElementHidden(id, hidden) {
   if (hidden) HIDDEN_IDS[id] = true; else delete HIDDEN_IDS[id];
@@ -9233,14 +8397,13 @@ function setElementHidden(id, hidden) {
 }
 
 /**
- * Deletes the currently-selected element (ring's trash handle, or the
- * Delete/Backspace key, see wireResizable()), and it really is deleted, same
- * as anything else in the editor (see setHiddenVisual() for how a wrapper
- * around other tracked elements, eg the brand link around the logo image
- * and brand text or a section around its own nested content, is handled
- * differently so it can't take them down with it). Pushed onto the same
- * undo stack as a text edit so Ctrl+Z brings it right back.
+ * Deletes the currently-selected element (the ring's trash handle, or the
+ * Delete key), and it really is deleted.
  * @param el the element to delete (always the current RING_EL)
+ * @note A wrapper around other tracked elements is handled differently by
+ * setHiddenVisual(), so it can't take them down with it.
+ * @note Pushed onto the same undo stack as a text edit, so Ctrl+Z brings it
+ * right back.
  */
 function deleteElement(el) {
   /* the page can't be deleted, there'd be nothing left to look at - covers
@@ -13754,7 +12917,11 @@ function renderCtxMenuRoot() {
         '<button type="button" data-link-edit="1">' +
         /* an "Apply Now" always has one (content.join_url, see
            setSharedJoinUrl()), it just isn't a content.links entry */
-        (LINKS[CTX_TARGET_ID] || isJoinLink(CTX_TARGET_EL) ? "Edit link" : "Add link") +
+        /* "Edit" for a template link too, not just a ta-set one: the nav's
+           links and the brand already go somewhere, and offering to "add" a
+           link to them read as though they didn't */
+        (elementLinkTarget(CTX_TARGET_EL, CTX_TARGET_ID) || isJoinLink(CTX_TARGET_EL)
+          ? "Edit link" : "Add link") +
         '</button>') +
       /* every tagged element can carry one, on every page - a tooltip is just
          words about whatever it's on, so there's nothing to gate it on (see
@@ -14137,6 +13304,14 @@ function renderCtxMenuRoot() {
  * anything else gets a click listener that navigates outside the editor.
  * A "Remove link" button only shows once one's actually set, same
  * pattern as the style popover's color/fill reset buttons.
+ *
+ * Opens on what the element already does, always: the target it has (see
+ * elementLinkTarget(), which counts the template's own href, not just a
+ * ta-set one) spelled out in words at the top, in the box below it, and
+ * ticked in the action list if it's one of those. This view used to answer
+ * "what is this link?" with an empty box no matter what the element was
+ * pointed at, which read as "there isn't one" for every link a ta hadn't set
+ * personally.
  */
 function renderCtxMenuLinkEditor() {
   var id = CTX_TARGET_ID;
@@ -14145,6 +13320,13 @@ function renderCtxMenuLinkEditor() {
   var joinLink = isJoinLink(CTX_TARGET_EL);
   if (joinLink) return renderCtxMenuJoinLinkEditor();
   var current = LINKS[id] || "";
+  /* what the element does with no ta link on it at all: the template's own
+     href. Shown and editable like any other target - overriding it is exactly
+     what typing in this box means - but tracked separately so the line at the
+     top can say whose link it is. */
+  var builtin = current ? "" : elementLinkTarget(CTX_TARGET_EL, id);
+  var now = current || builtin;
+  var fixed = hasFixedLink(id);
   /* the gallery's own actions, offered above the url box rather than instead
      of it: an element on that page can still be pointed at an ordinary url,
      it can just also be made to step an image pane. Each is one click, since
@@ -14153,17 +13335,30 @@ function renderCtxMenuLinkEditor() {
      they like into the back or forward button. */
   var actions = currentPageKey() === "gallery" ? galleryActionInventory() : [];
   CTX_MENU.innerHTML =
+    '<div class="ctx-file-msg">' +
+    (now
+      ? escapeHtml((galleryActionOf(now) ? "Does: " : "Goes to: ") + linkTargetLabel(now)) +
+        (builtin ? " (the page's own link)" : "")
+      : "Doesn't link anywhere yet.") +
+    '</div>' +
     (actions.length
       ? '<div class="ctx-title">This page</div>' +
         actions.map(function (a, i) {
           return '<button type="button" data-gallery-action="' + i + '"' +
-            (current === a.url ? ' class="ctx-on"' : "") + '>' + escapeHtml(a.label) + '</button>';
+            (now === a.url ? ' class="ctx-on"' : "") + '>' + escapeHtml(a.label) + '</button>';
         }).join("")
       : "") +
-    '<div class="ctx-title">Element link</div>' +
-    '<input type="url" class="ctx-link-input" placeholder="https://...">' +
-    '<button type="button" class="ctx-link-save">Save</button>' +
-    (current ? '<button type="button" class="ctx-link-remove">Remove link</button>' : "");
+    /* no url box on the two arrows the image pane ships with: a url typed
+       there would quietly replace the action, which is the removal
+       hasFixedLink() exists to prevent, just by another route. Everything
+       they can be - one pane's arrow or another's - is in the list above. */
+    (fixed
+      ? '<div class="ctx-file-msg">This arrow came with the image pane. Point it at a different pane if you like; it always steps one.</div>'
+      : '<div class="ctx-title">Element link</div>' +
+        '<input type="url" class="ctx-link-input" placeholder="https://...">' +
+        '<div class="ctx-link-msg"></div>' +
+        '<button type="button" class="ctx-link-save">Save</button>' +
+        (current ? '<button type="button" class="ctx-link-remove">Remove link</button>' : ""));
   CTX_MENU.querySelectorAll("[data-gallery-action]").forEach(function (btn) {
     btn.addEventListener("click", function () {
       setElementLink(id, actions[+btn.getAttribute("data-gallery-action")].url);
@@ -14171,12 +13366,19 @@ function renderCtxMenuLinkEditor() {
     });
   });
   var input = CTX_MENU.querySelector(".ctx-link-input");
+  if (!input) return;
   /* an action link has no url to show, and putting its raw token in the box
-     would invite a ta to edit it into something meaningless */
-  input.value = galleryActionOf(current) ? "" : current;
+     would invite a ta to edit it into something meaningless - the line at the
+     top says what it does instead */
+  input.value = galleryActionOf(now) ? "" : now;
   input.focus();
+  var msg = CTX_MENU.querySelector(".ctx-link-msg");
   function save() {
-    setElementLink(id, input.value.trim());
+    var res = resolveLinkInput(input.value);
+    /* the one case worth stopping on rather than saving something wrong: they
+       named an element that doesn't go anywhere, so there's nothing to copy */
+    if (res.error) { msg.textContent = res.error; return; }
+    setElementLink(id, res.url);
     hideCtxMenu();
   }
   CTX_MENU.querySelector(".ctx-link-save").addEventListener("click", save);
@@ -14245,6 +13447,96 @@ function navButtonAction(el) {
   return "";
 }
 
+/* the gallery page's own two arrows - app/db.py's _GALLERY_ENTRIES seeds the
+   buttons AND the gallery:prev/gallery:next links that make them step the
+   pane, so the action is part of what those elements are rather than
+   something a ta added to them. Re-pointable (a ta running two panes can aim
+   an arrow at either one, through the link editor's action picker) but never
+   removable: clearing one leaves an arrow that looks exactly as it did and
+   does nothing, on a page whose whole point is flipping through photos, and
+   nothing on screen would say why. Listed under "Built in" rather than "Set
+   here" for that reason - same shelf as the things this view explains but
+   doesn't hand over. Keyed by id, like BUILTIN_LINK_ACTIONS above. */
+var FIXED_LINK_IDS = { "seed.gallery.prev": 1, "seed.gallery.next": 1 };
+
+/**
+ * Whether an element's link is part of what the element is, rather than
+ * something a ta put on it and can take back off.
+ * @param id a data-edit-id/data-resize-id
+ * @return true if the link can be re-pointed but not removed
+ */
+function hasFixedLink(id) {
+  return !!FIXED_LINK_IDS[id];
+}
+
+/**
+ * Where one element actually goes when it's clicked, whether or not a ta is
+ * the one who decided that: their own content.links entry first, then the url
+ * every "Apply Now" shares, then the template's own href.
+ *
+ * The link editor and the right-click menu's own "Add link"/"Edit link"
+ * wording both used to read content.links and nothing else, so every element
+ * that ships with a link - the nav's scroll links, the brand, a placed nav
+ * button - opened an empty box that offered to "add" a link it already had.
+ * A ta then had no way to see, let alone edit, the target it really has.
+ * @param el the element, or null if it isn't on this page
+ * @param id its data-edit-id/data-resize-id
+ * @return the target, "" if it has none
+ */
+function elementLinkTarget(el, id) {
+  if (LINKS[id]) return LINKS[id];
+  if (isJoinLink(el)) return JOIN_URL;
+  if (!el) return "";
+  /* data-builtin-href is where a template link's real target survives the
+     editor, see stashBuiltinHref()/neuterLink() */
+  return el.getAttribute("href") || el.getAttribute("data-builtin-href") || "";
+}
+
+/**
+ * How one link target reads to a ta: an action by what it does, anything else
+ * as the url it is.
+ * @param url a links map value or href
+ * @return the label
+ */
+function linkTargetLabel(url) {
+  return galleryActionLabel(url) || url;
+}
+
+/**
+ * Works out what a ta meant by whatever they typed into a link box.
+ *
+ * Anything that doesn't name an element on this page is taken at face value -
+ * a url is a url. But the links view lists every row by its id, that id is
+ * the obvious thing to copy when the question is "how do I make THIS button
+ * do what THAT one does", and typing "seed.gallery.next" used to be saved as
+ * a url, which sent the visitor to /seed.gallery.next and a 404. Naming an
+ * element now means what it looks like it means: point this one wherever that
+ * one points, action included.
+ * @param text the raw box contents
+ * @return {url, error} - error non-empty means don't save, say this instead
+ */
+function resolveLinkInput(text) {
+  var v = (text || "").trim();
+  if (!v) return { url: "", error: "" };
+  /* nothing that couldn't BE an id is looked up: ids are dotted words (see
+     idSel()), and idSel() drops whatever it's given straight into an
+     attribute selector - a pasted url with a quote or a bracket in it would
+     throw out of querySelector() and take the save with it */
+  if (!/^[A-Za-z0-9._:-]+$/.test(v)) return { url: v, error: "" };
+  var named = styleMenuElById(v);
+  /* hasOwnProperty, not a truth test: LINKS is a plain object, so "toString"
+     or "constructor" would otherwise "have a link" and hand back a function
+     to save as a url */
+  var known = Object.prototype.hasOwnProperty.call(LINKS, v);
+  if (!named && !known) return { url: v, error: "" };
+  var target = elementLinkTarget(named, v);
+  if (typeof target !== "string") target = "";
+  if (!target) {
+    return { url: "", error: '"' + v + '" is an element on this page, but it doesn\'t link anywhere itself yet.' };
+  }
+  return { url: target, error: "" };
+}
+
 /**
  * Collects every link that exists on this page right now, split into the
  * three groups the links view renders as its own sections.
@@ -14282,7 +13574,12 @@ function pageLinkInventory() {
          removable exactly like any other entry they set */
       var actionLabel = galleryActionLabel(LINKS[id]);
       if (actionLabel) {
-        set.push({ id: id, el: el, url: "", editable: false, removable: true, note: actionLabel });
+        /* the pane's own two arrows are seeded with theirs and can't be left
+           pointing at nothing (see hasFixedLink()), so they're listed with
+           the other things this view explains rather than hands over */
+        var arow = { id: id, el: el, url: "", editable: false,
+          removable: !hasFixedLink(id), note: actionLabel };
+        if (hasFixedLink(id)) builtin.push(arow); else set.push(arow);
         return;
       }
       set.push({ id: id, el: el, url: LINKS[id], editable: true, removable: true, note: "" });
@@ -14406,7 +13703,17 @@ function buildLinkListRow(entry) {
   idLine.textContent = entry.id;
   go.appendChild(name);
   go.appendChild(idLine);
-  go.addEventListener("click", function () { revealElement(entry.el); });
+  go.addEventListener("click", function () {
+    /* an id is the one name for an element that means anything outside the
+       page, and this list is where a ta reads it - so it's selectable text
+       (see the .ctx-lnk-name rule in css/style.css), and a drag that ends
+       inside this button is someone copying it, not asking to be shown the
+       element. Acting on that click would close the menu and drop the
+       selection at the exact moment they reached for ctrl-c. */
+    var sel = window.getSelection();
+    if (sel && !sel.isCollapsed && sel.anchorNode && go.contains(sel.anchorNode)) return;
+    revealElement(entry.el);
+  });
   row.appendChild(go);
 
   if (!entry.editable) {
@@ -14443,7 +13750,12 @@ function buildLinkListRow(entry) {
   /* change (not input) so a half-typed url is never committed as an undo
      step, same as the style popover's own text fields */
   input.addEventListener("change", function () {
-    var next = input.value.trim();
+    var res = resolveLinkInput(input.value);
+    /* naming another element here means the same thing it means in the link
+       editor - point this row wherever that one points - and the same one
+       case is worth refusing rather than saving something broken */
+    if (res.error) { renderCtxMenuLinkList(res.error); return; }
+    var next = res.url;
     /* an "Apply Now" row edits the one url all of them share and never
        changes section, see the join branch in pageLinkInventory() */
     if (entry.join) {
@@ -14494,11 +13806,16 @@ function buildLinkListRow(entry) {
  * brand) drops the override, not the template's href: the element loses its
  * live target for the rest of this editor session and gets its own back on
  * the next load, since the href is markup, not content this editor stores.
+ * @param msg optional line to show above the list, for a row that refused to
+ *   save what was typed into it
  */
-function renderCtxMenuLinkList() {
+function renderCtxMenuLinkList(msg) {
   var inv = pageLinkInventory();
   CTX_MENU.innerHTML =
     '<div class="ctx-title">Links on this page</div>' +
+    /* a row has no room to explain itself, so one refusing to save what was
+       typed into it says so up here instead */
+    (typeof msg === "string" && msg ? '<div class="ctx-file-msg">' + escapeHtml(msg) + '</div>' : "") +
     '<div class="ctx-lnk-list"></div>' +
     '<button type="button" class="ctx-lnk-back">Back</button>';
   var list = CTX_MENU.querySelector(".ctx-lnk-list");
@@ -14521,8 +13838,7 @@ function renderCtxMenuLinkList() {
      at one: this is the "what can I make a button DO on this page?" half of
      the question, and placing another image pane is what makes the list grow.
      Read-only here - an action is attached to an element from that element's
-     own "Add link" editor, which is where the ta already is when they want
-     one. */
+     own link editor, which is where the ta already is when they want one. */
   var actions = galleryActionInventory();
   if (actions.length) {
     var head = document.createElement("div");
@@ -14537,7 +13853,7 @@ function renderCtxMenuLinkList() {
       name.textContent = a.label;
       var note = document.createElement("div");
       note.className = "ctx-lnk-note";
-      note.textContent = 'Right-click a button and choose "Add link" to point it here';
+      note.textContent = 'Right-click any element, open its link, and pick this to point it here';
       arow.appendChild(name);
       arow.appendChild(note);
       list.appendChild(arow);
@@ -16975,6 +16291,38 @@ function removeFormulaMenuToken() {
 }
 
 /**
+ * Whether a field paints a background of its own, and so already has a
+ * colour its own text was written to be legible against.
+ *
+ * Decides whether an open edit gets the flat ".editing-backdrop" surface
+ * behind it (see css/style.css). Text with nothing behind it wants that
+ * backdrop; a button or a tinted card must keep what it has, since the
+ * backdrop would replace a designed pairing with a colour the text was never
+ * chosen for - green button, dark label, surface-coloured backdrop, and the
+ * wording vanishes into it.
+ *
+ * Computed style rather than el.style, so a colour off a stylesheet rule or a
+ * ta's saved override counts the same as an inline one. A gradient or image
+ * counts as painted too - there's no single colour to reason about, but
+ * something is definitely there.
+ * @param el the field about to be edited
+ * @return true if the element paints its own background
+ */
+function hasOwnBackdrop(el) {
+  var cs = window.getComputedStyle(el);
+  if (cs.backgroundImage && cs.backgroundImage !== "none") return true;
+  var bg = cs.backgroundColor;
+  if (!bg || bg === "transparent") return false;
+  var parts = bg.match(/^rgba?\(([^)]+)\)$/);
+  /* a keyword or any form this doesn't recognise: something was asked for, so
+     treat it as painted and leave it alone - the worse mistake of the two is
+     covering up a real colour */
+  if (!parts) return true;
+  var vals = parts[1].split(/[,\/\s]+/);
+  return !(vals.length > 3 && parseFloat(vals[3]) === 0);
+}
+
+/**
  * Wires up one data-edit-id element as a click-to-edit field: shared by
  * wireClickToEdit()'s initial pass over every template field and
  * addCustomElement() for a text/button field created on the fly through
@@ -17014,6 +16362,9 @@ function wireTextField(el) {
        change at all */
     beforeEdit = el.innerHTML;
     el.contentEditable = "true";
+    /* asked BEFORE ".editing" goes on, so the answer is about the field as it
+       looks on the live page rather than as the editor has already dressed it */
+    if (!hasOwnBackdrop(el)) el.classList.add("editing-backdrop");
     el.classList.add("editing");
     /* every chip becomes the plain {variable} text it came from for as long
        as the field is being edited - ordinary, selectable, retypable text
@@ -17050,6 +16401,7 @@ function wireTextField(el) {
         (FX_MENU && FX_MENU.contains(e.relatedTarget)))) return;
     el.contentEditable = "false";
     el.classList.remove("editing");
+    el.classList.remove("editing-backdrop");
     hideTextToolbar();
     /* packs every {...} the field now holds - the ones chipsToNotation()
        unpacked on the way in, plus anything the ta typed or pasted - back

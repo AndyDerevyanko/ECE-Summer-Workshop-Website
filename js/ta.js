@@ -1,11 +1,9 @@
 /* ta portal. everything edits the in-memory STATE object below; loaded from
    and saved to /api/content, which is the single source of truth. */
 
-/* the landing page's photo slots' default urls, same keys/values as
-   home_images in DEFAULT_CONTENT, app/db.py. No ui here edits these any more
-   (the content manager's "Site images" list went with the rest of the Landing
-   page section) - they're kept so normalizeState() can fill the key in on a
-   blob saved before it existed, exactly as before. */
+/* the landing page's photo slots' default urls, same keys as home_images in
+   DEFAULT_CONTENT. No ui edits these any more; they're kept so
+   normalizeState() can fill the key in on a blob saved before it existed. */
 var HOME_IMAGE_DEFAULTS = {
   about_hero: "assets/gallery/group-main-alt.jpeg",
   about_1: "assets/gallery/class-closeup.jpeg",
@@ -14,11 +12,9 @@ var HOME_IMAGE_DEFAULTS = {
   certificate: "assets/certificate.png"
 };
 
-/* same default set js/main.js/app/db.py fall back to (NAV_FIXED_IDS): the
-   nav bar and everything inside it, promoted to "fixed" by default so it
-   always stacks above every non-fixed element and shows the red "fixed"
-   hitbox, see toggleFixed() in js/main.js. also what normalizeState() below
-   backfills for a content blob saved before this feature existed. */
+/* same default set main.js and app/db.py fall back to: the nav bar and its
+   contents, "fixed" by default so they stack above every non-fixed element
+   and show the red hitbox. Also what normalizeState() backfills. */
 var NAV_FIXED_IDS = [
   "box.nav", "box.brand", "img.brand.nav", "nav.brand",
   "nav.link.about", "nav.link.gallery", "nav.link.learn",
@@ -45,22 +41,17 @@ function seed() {
       { day: 2, date: "", opens_at: "", unlocked: false, title: "", blurb: "", files: [] }
     ],
     extras: [],
-    /* how many day tiles the student dashboard's grid shows at once: a floor
-       on the total, and a count of locked teasers on top of whatever is open
-       right now, both capped by the "total_days" variable below. See
-       renderDaysDisplay() further down for the controls, and
-       DAYS_DISPLAY_DEFAULTS in js/dashboard.js for the rule they drive - the
-       defaults here have to match that file's own. */
+    /* how many day tiles the dashboard grid shows at once: a floor on the
+       total, and a count of locked teasers on top of what's open, both capped
+       by "total_days". These defaults must match DAYS_DISPLAY_DEFAULTS in
+       js/dashboard.js, which is where the rule they drive lives. */
     days_display: { min_tiles: 0, extra_locked: 1 },
-    /* named, typed values other elements (right now, just the student
-       dashboard's progress bar) can bind to, see renderVariables() below
-       and app/db.py's DEFAULT_CONTENT["variables"] (same shape). type is
-       "string"/"number"/"boolean"/"datetime". "builtin" ones can be
-       renamed but never removed/retyped; "computed" ones have no
-       ta-editable value at all, "value" is overwritten server-side on
-       every load (see _refresh_computed_variables() in app/db.py). Everything
-       in here is site-wide: what this list holds is exactly what every page's
-       visual editor offers to bind. */
+    /* named, typed values other elements can bind to (right now just the
+       dashboard's progress bar). type is "string"/"number"/"boolean"/
+       "datetime". "builtin" ones can be renamed but never removed or
+       retyped; "computed" ones have no ta-editable value at all - "value" is
+       overwritten server-side on every load. Everything here is site-wide:
+       this list is exactly what every page's editor offers to bind. */
     variables: [
       {
         key: "total_days", name: "TotalDays", type: "number", value: 10,
@@ -157,12 +148,10 @@ function seed() {
     /* ids with the shared drop-shadow (style popover's Shadow checkbox)
        turned on, flat list, same shape as fixed_elements/locked */
     shadow: [],
-    /* the three per-video playback switches on a placed video's right-click
-       menu, flat lists of ids in the same shape as shadow above - a placed
-       video autoplays muted on a loop with no player chrome, so each list
-       only names the clips that deviate. See VIDEO_PLAYBACK_KEYS in
-       js/main.js; a clip shown in a gallery pane has its own equivalent
-       setting, per clip, in the Gallery section (STATE.gallery.video_opts). */
+    /* the three per-video playback switches from a placed video's right-click
+       menu, flat id lists like shadow above - a placed video autoplays muted
+       on a loop with no chrome, so each list only names the clips that
+       deviate. A clip in a gallery pane has its own per-clip setting. */
     video_no_autoplay: [],
     video_controls: [],
     video_pausable: [],
@@ -185,11 +174,9 @@ function seed() {
     progress_track: {},
     dark_progress_track: {},
     /* per-element hover tooltips, keyed by data-edit-id/data-resize-id, one
-       whole descriptor each (the words plus where the bubble sits and how it
-       looks) rather than a map per property - added and edited from the visual
-       editor's right-click menu, see the ELEMENT TOOLTIPS section in
-       js/main.js. This is what replaced the old apply_tooltip field that used
-       to live in the Landing page section of this page. */
+       whole descriptor each (the words, where the bubble sits, how it looks)
+       rather than a map per property. Added from the editor's right-click
+       menu; this replaced the old apply_tooltip field. */
     tooltips: {}
   };
 }
@@ -206,16 +193,15 @@ var CP1252_C1 = [
 ];
 
 /**
- * Reverses one level of "typed/pasted as utf-8, misread as windows-1252"
- * mojibake (eg. an en dash that shows up as "Ã¢â‚¬â€œ"), without touching
- * genuinely accented text: only fires if every character in the string
- * maps to a single cp1252 byte AND those bytes form valid utf-8, which
- * plain latin-1 text almost never does by chance. A snapshot that got
- * corrupted before ever reaching the server (eg. a stale unsaved draft
- * restored by tryRestoreFromPreview()) fixes itself here instead of
- * resurfacing forever.
+ * Reverses one level of "typed as utf-8, misread as windows-1252" mojibake
+ * (eg. an en dash showing up as "â€“"), without touching genuinely accented
+ * text.
  * @param str the string to check/repair
  * @return the repaired string, or the original untouched if it wasn't mojibake
+ * @note Only fires if every character maps to a single cp1252 byte AND those
+ * bytes form valid utf-8, which plain latin-1 text almost never does by
+ * chance. Lets a snapshot corrupted before it ever reached the server fix
+ * itself instead of resurfacing forever.
  */
 function repairMojibake(str) {
   if (typeof str !== "string" || !str.length) return str;
@@ -260,9 +246,7 @@ function repairMojibakeOnce(str) {
 }
 
 /**
- * Walks a content blob and runs repairMojibake() on every string in it, so
- * corrupted text anywhere in a loaded/restored blob (day panels, extras,
- * logistics labels, etc) fixes itself.
+ * Walks a content blob and runs repairMojibake() on every string in it.
  * @param val any content value (object, array, string, or other)
  * @return the same shape with any mojibake strings repaired
  */
@@ -278,9 +262,8 @@ function repairMojibakeDeep(val) {
 }
 
 /**
- * Fills in fields that may be missing from content saved before these were
- * added (or before the workshop-dates tile got folded into the generic
- * logistics list), so older saved blobs don't blow up the ta portal.
+ * Fills in fields missing from content saved before they were added, so an
+ * older blob doesn't blow up the ta portal.
  */
 function normalizeState() {
   STATE = repairMojibakeDeep(STATE);
@@ -301,20 +284,15 @@ function normalizeState() {
   delete STATE.date_mode;
   delete STATE.start_date;
   delete STATE.end_date;
-  /* nothing here should ever be handed a blob with no day panels/extras
-     array at all, but if one turns up (an old save, a hand-edited profile),
-     the manager's renderers and its "New panel" button both walk these
-     unguarded, so an undefined here takes the whole section down rather
-     than showing an empty one */
+  /* a blob with no days/extras array at all shouldn't happen, but an old save
+     or hand-edited profile can produce one, and the renderers walk these
+     unguarded - an undefined takes the whole section down */
   if (!Array.isArray(STATE.days)) STATE.days = seed().days;
   if (!Array.isArray(STATE.extras)) STATE.extras = [];
-  /* both counts defaulted individually rather than as one object: a blob from
-     before either existed has no days_display at all, but one saved by a tab
-     running an older build can have the key with a field missing, and the
-     renderer below reads them straight into number inputs. Mirrors
-     _backfill_days_display() in app/db.py, which does the same on every
-     read/write - this covers the localStorage draft/import path that never
-     goes through the server. */
+  /* both counts defaulted individually: a blob from before either existed has
+     no days_display at all, but one saved by an older build can have the key
+     with a field missing. Mirrors _backfill_days_display() in app/db.py, for
+     the localStorage draft/import path that never sees the server. */
   var daysDisplay = (STATE.days_display && typeof STATE.days_display === "object") ?
     STATE.days_display : {};
   STATE.days_display = {
@@ -333,12 +311,9 @@ function normalizeState() {
       if (!STATE.variables.some(function (v) { return v.key === sv.key; })) STATE.variables.push(sv);
     });
   }
-  /* self-heals a name saved before the {}/:/whitespace rule existed (see
-     sanitizeVariableName()) - the server already enforces this on every
-     read/write (app/db.py's _sanitize_variable_name()), but a profile
-     loaded straight from localStorage's own draft/import path can reach
-     here without going through that, same "never trust an old save" stance
-     as everything else in this function. */
+  /* self-heals a name saved before the {}/:/whitespace rule existed. The
+     server enforces it on every read/write, but a profile loaded straight
+     from a localStorage draft can reach here without going through that. */
   STATE.variables.forEach(function (v) { v.name = sanitizeVariableName(v.name); });
   if (STATE.hero_video_url === undefined) STATE.hero_video_url = "assets/cover-video.mp4";
   if (!STATE.home_images || typeof STATE.home_images !== "object") STATE.home_images = {};
@@ -355,10 +330,8 @@ function normalizeState() {
     pausable: !!galleryVideo.pausable
   };
   /* the per-clip overrides on top of that baseline. Left EMPTY for an old
-     blob rather than filled in per clip: with no entry every clip resolves to
-     the baseline above, which is exactly how it was playing before, so an old
-     save carries over untouched and only the clips a ta actually opens get an
-     entry of their own. */
+     blob: with no entry every clip resolves to the baseline, which is exactly
+     how it was already playing, so only clips a ta opens get an entry. */
   if (!STATE.gallery.video_opts || typeof STATE.gallery.video_opts !== "object") {
     STATE.gallery.video_opts = {};
   }
@@ -373,13 +346,11 @@ function normalizeState() {
   if (!Array.isArray(STATE.custom_elements)) STATE.custom_elements = [];
   if (!Array.isArray(STATE.layers)) STATE.layers = [];
   if (!Array.isArray(STATE.fixed_elements)) STATE.fixed_elements = NAV_FIXED_IDS.slice();
-  /* the same one-time top-up _migrate_landing_nav_states() does server side,
-     for a draft that never went through it: an unsaved snapshot left in
-     localStorage from before the landing page's signed-in navbar existed has a
-     fixed_elements list, so the fallback above doesn't fire, and its navbar
-     would come up missing the red "fixed" hitboxes the signed-out one has.
-     Marker-gated exactly like the server's meta flag, so a ta who deliberately
-     un-promotes one of these ids doesn't get it forced back on the next load. */
+  /* the same one-time top-up the server does, for a draft that never went
+     through it: a snapshot from before the signed-in navbar existed has a
+     fixed_elements list, so the fallback above doesn't fire and its navbar
+     comes up with no red hitboxes. Marker-gated like the server's flag, so a
+     deliberate un-promote isn't forced back on the next load. */
   if (!STATE.migrations || typeof STATE.migrations !== "object") STATE.migrations = {};
   if (!STATE.migrations.landing_nav_states) {
     STATE.migrations.landing_nav_states = true;
@@ -418,13 +389,11 @@ function normalizeState() {
     STATE.text["footer.contact"] = STATE.contact_text;
   }
   delete STATE.contact_text;
-  /* the Apply Now hover tooltip was the same kind of leftover: one string, one
-     form field, because a tooltip had no element in the editor to click on.
-     Every element can carry its own now (see STATE.tooltips above), so an
-     already-saved value folds into one per Apply Now button and the field goes
-     away. The server does the same fold for the live site, see
-     _migrate_apply_tooltip() in app/db.py - this is for a draft or a profile
-     that's already in a ta's hands here. */
+  /* the Apply Now tooltip was the same kind of leftover: one string, one form
+     field, because a tooltip had no element to click on. Every element can
+     carry its own now, so a saved value folds into one per Apply Now button
+     and the field goes away. The server does the same fold for the live
+     site; this is for a draft already in a ta's hands. */
   if (STATE.apply_tooltip) {
     APPLY_TOOLTIP_IDS.forEach(function (id) {
       if (!STATE.tooltips[id]) STATE.tooltips[id] = { text: STATE.apply_tooltip, pos: "bottom" };
@@ -439,15 +408,12 @@ function normalizeState() {
 var APPLY_TOOLTIP_IDS = ["nav.link.apply", "hero.cta.primary", "prizes.cta"];
 
 /* seed() is a PLACEHOLDER, not content: it's what STATE holds for the few
-   hundred ms between this file parsing and /api/content (or a restored
-   preview snapshot) coming back, and it holds none of this site's actual
-   panels/extras/gallery/visual edits. STATE_LOADED says whether that has
-   happened yet, and guards the two places a wrong answer is destructive:
-   writePreviewSnapshot() (publishing the placeholder as the draft the
-   Visual editor's iframe renders and Apply/Save read back out of) and
-   showMode() (entering the editor tab before there's anything to edit).
-   CONTENT_READY resolves at the same moment, for callers that would rather
-   wait than be turned away - see whenContentReady(). */
+   hundred ms before /api/content (or a restored snapshot) comes back.
+   STATE_LOADED says whether that has happened, and guards the two places a
+   wrong answer is destructive: writePreviewSnapshot() (publishing the
+   placeholder as the draft Apply/Save read back out of) and showMode()
+   (entering the editor before there's anything to edit). CONTENT_READY
+   resolves at the same moment, for callers that would rather wait. */
 var STATE = seed();
 var STATE_LOADED = false;
 var CONTENT_READY = null;
@@ -470,9 +436,8 @@ function authHeaders() {
 }
 
 /**
- * The server says the session's gone (idle timeout, or the account got
- * removed): clears local state and bounces to login with a message instead
- * of quietly failing every button on the page.
+ * Clears local state and bounces to login with a message, for when the
+ * server says the session is gone (idle timeout, or the account was removed).
  */
 function handleExpiredSession() {
   if (window.IdleClock) window.IdleClock.flush();
@@ -513,9 +478,8 @@ function showMsg(text, ok) {
 
 /**
  * Same thing for the gallery's "Add a directory" row, which has its own
- * message line under the field: the shared one above sits with the
- * Apply/Save buttons at the very top of the page, far enough from this
- * section that a complaint about what was just typed there can go unseen.
+ * message line - the shared one sits at the very top of the page, far enough
+ * away that a complaint about what was just typed here can go unseen.
  * @param text the message ("" clears it)
  * @param ok true for the good colour, false for the error one
  */
@@ -705,14 +669,12 @@ function gateCheck() {
 }
 
 /**
- * Picks a key for a freshly-added variable that doesn't collide with any
- * existing one: the base word, or base_2/base_3/... the first time it
- * would. A key is the stable, typeable identifier a formula/binding refers
- * to (see the Variables section's "easy to name" ask) - unlike "name" (the
- * freely-renameable display label a ta edits directly), it's never
- * hand-typed, just picked once here and left alone.
+ * Picks a key for a freshly-added variable that doesn't collide: the base
+ * word, or base_2/base_3/... the first time it would.
  * @param base a starting key (plain lowercase word, no spaces)
  * @return a key not already used by any STATE.variables entry
+ * @note A key is the stable, typeable identifier formulas refer to - unlike
+ * "name", the freely-renameable display label, it's never hand-typed.
  */
 function uniqueVariableKey(base) {
   var existing = STATE.variables.map(function (v) { return v.key; });
@@ -732,17 +694,13 @@ var VARIABLE_PAGE_LABELS = {
 };
 
 /**
- * Strips the characters a variable's "name" isn't allowed to contain: "{"
- * and "}" are the visual editor's own {Name}/{Name:flags} inline notation
- * delimiters (see parseVariableTokens() in js/main.js, which matches a typed
- * token against this exact field), ":" separates the identifier from its
- * format flags there, and whitespace would make a bare identifier ambiguous
- * right up against a trailing :flag. Same rule app/db.py's
- * _sanitize_variable_name() enforces server-side on every read/write - this
- * copy just keeps a ta's typing clean live instead of only self-correcting
- * on the next save.
+ * Strips the characters a variable's "name" isn't allowed to contain.
  * @param name a variable's typed "name", any type (coerced to string)
  * @return name with every "{", "}", ":" and whitespace character removed
+ * @note "{" and "}" delimit the editor's {Name}/{Name:flags} notation, ":"
+ * separates the identifier from its flags, and whitespace would make a bare
+ * identifier ambiguous against a trailing :flag. Same rule the server
+ * enforces on every read/write; this copy keeps typing clean live.
  */
 function sanitizeVariableName(name) {
   return String(name === undefined || name === null ? "" : name).replace(/[{}:\s]/g, "");
@@ -750,20 +708,14 @@ function sanitizeVariableName(name) {
 
 /**
  * Recalculates every "computed" variable's value in place off the rest of
- * STATE - the client-side mirror of _refresh_computed_variables() in
- * app/db.py, deliberately the same one-key if-chain rather than a registry
- * for the same reason (there is still only days_progressed).
- *
- * The server already does this on every load and every save, so the number is
- * right either side of a round trip. Nothing did it in between, and a ta
- * spends the whole session in between: opening or closing a day (a panel's
- * Open/Close button, the Value box on this variable, a deleted panel) changes
- * what days_progressed is worth right then, while STATE went on carrying
- * whatever the server last worked out. Everything downstream reads that stale
- * number - this section's own Value box, and, through writePreviewSnapshot(),
- * every progress bar bound to it in the Visual editor and on the preview page
- * (paintProgressElement() in js/main.js) - which is how the dashboard's bar
- * came to sit part-filled with every day on the page locked.
+ * STATE - the client mirror of _refresh_computed_variables() in app/db.py,
+ * deliberately the same one-key if-chain rather than a registry.
+ * @note The server does this on every load and save, so the number is right
+ * either side of a round trip - but nothing did it in between, and a ta
+ * spends the whole session in between. Opening or closing a day changes what
+ * days_progressed is worth right then, while STATE carried the server's last
+ * answer; that stale number is how the dashboard's bar came to sit
+ * part-filled with every day on the page locked.
  */
 function refreshComputedVariables() {
   (STATE.variables || []).forEach(function (v) {
@@ -775,15 +727,12 @@ function refreshComputedVariables() {
 }
 
 /**
- * Renders every named variable into #variablesList and wires up its
- * controls - name/description/type/value all write straight back into the
- * matching STATE.variables[i] entry, same "the input already IS the state"
- * pattern renderPanels() uses for day panels just below. A builtin's type
- * can't be changed (it's load-bearing for whatever's already bound to it,
- * eg the progress bar's Current/Total selects, see js/main.js) and only a
- * non-builtin can be removed at all. A computed one has no editable value
- * at all - shows its live, server-calculated number instead of an input,
- * see _refresh_computed_variables() in app/db.py.
+ * Renders every named variable into #variablesList and wires up its controls,
+ * which write straight back into STATE.variables[i] - the same "the input
+ * already IS the state" pattern renderPanels() uses.
+ * @note A builtin's type can't be changed (it's load-bearing for whatever is
+ * bound to it) and only a non-builtin can be removed. A computed one shows
+ * its live server-calculated number instead of an input.
  */
 function renderVariables() {
   var list = document.getElementById("variablesList");
@@ -803,11 +752,9 @@ function renderVariables() {
     var valueField;
     if (v.computed && v.key === "days_progressed") {
       /* the one computed variable that's also ta-editable: typing a number
-         here is a shortcut for opening/closing days 1..N in bulk (see the
-         .v-days-progressed handler below) rather than a second, disconnected
-         value - v.value itself stays fully server-recomputed from
-         STATE.days on every save/load (_refresh_computed_variables() in
-         app/db.py), same as it always has. */
+         here is a shortcut for opening/closing days 1..N in bulk, not a
+         second disconnected value - v.value itself stays fully recomputed
+         server-side from STATE.days on every save/load */
       valueField = '<div class="field"><label>Value</label>' +
         '<input type="number" min="0" max="' + STATE.days.length + '" class="v-days-progressed" ' +
         'value="' + (v.value === null || v.value === undefined ? 0 : v.value) + '">' +
@@ -859,12 +806,10 @@ function renderVariables() {
     var v = STATE.variables[+card.getAttribute("data-i")];
 
     card.querySelector(".v-name").addEventListener("input", function () {
-      /* strips live rather than validating on save/blur, so a name can never
-         even briefly exist with a character that would break {Name:flags}
-         (see sanitizeVariableName()) - same immediate-strip feel as
-         mostly-any "no spaces allowed" username field. Only writes the input
-         back when something was actually stripped, so a keystroke that
-         needed no correction never fights the caret. */
+      /* strips live rather than validating on blur, so a name can never even
+         briefly hold a character that would break {Name:flags}. Only writes
+         the input back when something was actually stripped, so a keystroke
+         needing no correction never fights the caret. */
       var clean = sanitizeVariableName(this.value);
       if (clean !== this.value) this.value = clean;
       v.name = clean;
@@ -911,26 +856,22 @@ function renderVariables() {
   });
 }
 
-/* NOTE: links used to be listed and edited here too (a "Links" section under
-   Day panels). They aren't anymore: a link only means anything next to the
-   element it's on, so the whole inventory lives in the Visual editor's own
-   right-click menu instead ("This page > Links on this page", see
-   renderCtxMenuLinkList() in js/main.js) - which can also show the links
-   this page never knew about, the ones baked into the templates (the nav's
-   own scroll links, the brand, "Log out"), not just the ones a ta added.
+/* NOTE: links used to be listed and edited here too. They aren't: a link only
+   means anything next to the element it's on, so the whole inventory lives in
+   the Visual editor's right-click menu instead - which can also show the
+   links this page never knew about, the ones baked into the templates.
    STATE.links is still the same content.links map, just edited from there. */
 
 /**
- * Builds the little "variable · string" tag shown next to a day panel field
- * whose value isn't just text on a card anymore: on the student dashboard
- * that field renders through a per-tile variable inside an ordinary,
- * restyleable text box (see buildDayOpenTileHtml() in js/dashboard.js), and
- * THIS field is the only place its value can be changed - a ta editing the
- * dashboard in the visual editor sees ${Day3Header} inline and can move,
- * resize and restyle the box around it, but never overwrite the words. The
- * tag says which name that is, so the two views are obviously the same thing.
+ * Builds the little "variable -> string" tag shown beside a day panel field
+ * whose value isn't just text on a card any more.
  * @param name the variable's name, without the ${} wrapper
  * @return an HTML string for one tag
+ * @note On the dashboard that field renders through a per-tile variable
+ * inside a restyleable text box, and THIS field is the only place its value
+ * can be changed - in the editor a ta sees ${Day3Header} inline and can move
+ * or restyle the box, but never overwrite the words. The tag says which name
+ * that is, so the two views are obviously the same thing.
  */
 function varFlag(name) {
   return '<span class="ta-varflag" title="Shown on the student dashboard as the ' +
@@ -939,14 +880,13 @@ function varFlag(name) {
 }
 
 /**
- * Coerces one of the two days_display counts, so a half-typed or hand-edited
- * value can never reach the dashboard's arithmetic. Same rule as
- * daysDisplayNum() in js/dashboard.js and _backfill_days_display() in
- * app/db.py - duplicated rather than shared because this page loads ta.js and
- * nothing else (see the script tags in templates/instructor.html).
+ * Coerces one of the two days_display counts, so a half-typed value can never
+ * reach the dashboard's arithmetic.
  * @param value whatever was typed or saved
  * @param fallback what to use if it isn't a count at all
  * @return a whole number >= 0
+ * @note Same rule as daysDisplayNum() in js/dashboard.js, duplicated because
+ * this page loads ta.js and nothing else.
  */
 function daysDisplayNum(value, fallback) {
   var n = Math.floor(+value);
@@ -1010,14 +950,11 @@ function updateDaysDisplaySummary() {
 
 /**
  * Renders the two "how many day cards do students see" controls into
- * #daysDisplay and wires them straight back into STATE.days_display, same
- * "the input already IS the state" pattern as the panels below.
- *
- * These sit above the panel list rather than in the visual editor with the
- * grid's spacing and stacking, because they aren't a layout choice: they
- * decide how much of the workshop a student is shown, which is the same kind
- * of decision as opening a day. The editor picks them up anyway - it renders
- * the dashboard from this same content.
+ * #daysDisplay, wired straight back into STATE.days_display.
+ * @note These sit above the panel list rather than in the visual editor
+ * because they aren't a layout choice: they decide how much of the workshop a
+ * student is shown, the same kind of decision as opening a day. The editor
+ * picks them up anyway, since it renders the dashboard from this content.
  */
 function renderDaysDisplay() {
   var host = document.getElementById("daysDisplay");
@@ -1219,11 +1156,11 @@ function isVidUrl(u) { return /\.mov$/i.test(u); }
 
 /**
  * Escapes a value being dropped into a double-quoted attribute in one of this
- * file's innerHTML strings. Needed since directory names became free text (see
- * renderGallery()): "2026" could never break out of an attribute, but a name a
- * ta types themselves can.
+ * file's innerHTML strings.
  * @param str any value, coerced to string
  * @return str with &<>" replaced by entities
+ * @note Needed since directory names became free text: "2026" could never
+ * break out of an attribute, but a name a ta types can.
  */
 function escapeAttr(str) {
   return String(str).replace(/[&<>"]/g, function (c) {
@@ -1261,20 +1198,15 @@ var GY_IDX = {};
 var GY_REORDER = {};
 
 /**
- * Renames one gallery directory everywhere it's referenced at once: the
- * directory list itself, its image list, and - crucially - every visual-editor
- * thing that names it by string. An image pane a ta bound to "2026"
- * (custom_elements[].dir) and a back/forward button pointed at that pane's
- * action (links, "gallery:next:2026") both have to follow the rename, or a
- * directory a ta simply retitled would silently leave a blank stage and two
- * dead arrows behind it.
- *
- * Editor state is only remapped in STATE, not in the editor iframe: renaming
- * happens in the content manager, and the iframe reloads off STATE the next
- * time it's opened. That's the same one-way flow every other Content tab edit
- * already has.
+ * Renames one gallery directory everywhere it's referenced: the directory
+ * list, its image list, and every visual-editor thing that names it by
+ * string - a pane bound to "2026" and the buttons pointed at that pane's
+ * action both have to follow, or a retitled directory silently leaves a blank
+ * stage and two dead arrows behind it.
  * @param from the current directory name
  * @param to the new name
+ * @note Only remapped in STATE, not in the editor iframe: renaming happens in
+ * the content manager, and the iframe reloads off STATE when next opened.
  */
 function renameGalleryDir(from, to) {
   var i = STATE.gallery.years.indexOf(from);
@@ -1308,12 +1240,11 @@ var GALLERY_VIDEO_SWITCHES = [
 ];
 
 /**
- * How one particular clip plays, for the editor's own copy of the content:
- * its own saved settings if a ta has set any, otherwise the gallery-wide
- * baseline. Mirrors galleryVideoOptsFor() in js/gallery.js, which is what the
- * public page paints from - they have to agree, so keep them in step.
+ * How one clip plays, for the editor's own copy of the content.
  * @param url the clip's media url
  * @return {autoplay, controls, pausable}
+ * @note Mirrors galleryVideoOptsFor() in js/gallery.js, which is what the
+ * public page paints from - they have to agree, so keep them in step.
  */
 function galleryVideoOptsFor(url) {
   var own = (STATE.gallery.video_opts || {})[url];
@@ -1327,14 +1258,12 @@ function galleryVideoOptsFor(url) {
 
 /**
  * Writes one of a clip's three playback switches.
- *
- * Materializes the whole entry on first touch (from whatever the clip was
- * already resolving to, so flipping one switch can't silently move the other
- * two), which is what makes galleryVideoOptsFor()'s all-or-nothing lookup
- * safe on the reading side.
  * @param url the clip's media url
  * @param key "autoplay", "controls" or "pausable"
  * @param on the new value
+ * @note Materializes the whole entry on first touch, from whatever the clip
+ * was already resolving to, so flipping one switch can't silently move the
+ * other two - which is what makes the all-or-nothing lookup safe to read.
  */
 function setGalleryVideoOpt(url, key, on) {
   var opts = STATE.gallery.video_opts;
@@ -1343,12 +1272,12 @@ function setGalleryVideoOpt(url, key, on) {
 }
 
 /**
- * Drops a clip's saved playback settings once nothing in the gallery points at
- * that url any more - otherwise removing an image would leave an entry behind
- * that no ui can ever reach again, and re-adding the same file later would
- * silently come back with the old settings. Only when the url is gone from
- * EVERY directory: the same clip can be filed under two of them.
+ * Drops a clip's saved playback settings once nothing points at that url any
+ * more, so removing an image doesn't strand an entry no ui can reach and
+ * re-adding the file later doesn't silently bring the old settings back.
  * @param url the media url that was just removed from somewhere
+ * @note Only when the url is gone from EVERY directory - the same clip can be
+ * filed under two of them.
  */
 function pruneGalleryVideoOpt(url) {
   if (!STATE.gallery.video_opts[url]) return;
@@ -1385,18 +1314,14 @@ function galleryVideoSwitchesHtml(url) {
 }
 
 /**
- * Renders the editable per-directory photo/clip lists shown on gallery.html.
- * One image at a time per directory, same flip-through idea as the public
- * gallery page. A directory with 2+ images gets a "Reorder" toggle that swaps
- * the viewer for a flat list of filenames, no <img>/<video> elements, so
- * dragging things around never has to render every photo at once (some of
- * these are 8-20mb phone shots, a thumbnail grid of all of them would lag).
- *
- * A directory is just a NAME with images under it - "2026" and "Field trip"
- * are equally valid - so its name is an ordinary editable input here rather
- * than a fixed label, the same "the input already IS the state" pattern the
- * rest of this page uses. content.gallery.years keeps its key for storage
- * compatibility; it's a list of directory names, not of years.
+ * Renders the editable per-directory photo/clip lists shown on gallery.html,
+ * one image at a time, same flip-through idea as the public page.
+ * @note A directory with 2+ images gets a "Reorder" toggle that swaps the
+ * viewer for a flat list of filenames, so dragging never has to render every
+ * photo at once (some are 8-20mb phone shots).
+ * @note A directory is just a NAME with images under it, so its name is an
+ * ordinary editable input rather than a fixed label. content.gallery.years
+ * keeps its key for storage compatibility; it holds names, not years.
  */
 function renderGallery() {
   var list = document.getElementById("galleryList");
@@ -1452,11 +1377,9 @@ function renderGallery() {
           '<span class="gy-kind">' + (isVidUrl(cur) ? VID_SVG_CHIP + 'Video clip' : IMAGE_SVG_CHIP + 'Photo') + '</span>' +
           '<button class="btn btn-ghost gy-rm" type="button">Remove</button>' +
         '</div>' +
-        /* this clip's own playback switches, under the clip they belong to
-           rather than in a card above the whole list - a setting that applies
-           to one thing belongs next to that thing, and there's no other way to
-           say WHICH clip a set of checkboxes is about once they're per clip.
-           Photos get nothing here; there's nothing to play. */
+        /* this clip's own switches, under the clip they belong to rather than
+           in a card above the list - once they're per clip there's no other
+           way to say WHICH clip they're about. Photos get nothing. */
         (isVidUrl(cur) ? galleryVideoSwitchesHtml(cur) : "");
     }
 
@@ -1637,13 +1560,11 @@ function renderGallery() {
   });
 }
 
-/* There is no Landing page section on this page any more. It was down to one
-   control - the Apply Now hover tooltip - which was only here because a
-   tooltip had no element in the visual editor to right-click: it doesn't
-   exist until someone hovers. Tooltips are per-element there now (see the
-   ELEMENT TOOLTIPS section in js/main.js), so those three buttons are edited
-   where the rest of that page is, and the section is gone rather than left
-   standing empty. */
+/* There is no Landing page section here any more. It was down to one control
+   - the Apply Now hover tooltip - which only lived here because a tooltip had
+   no element to right-click: it doesn't exist until someone hovers. Tooltips
+   are per-element now, so those buttons are edited where the rest of that
+   page is. */
 
 /** Re-renders every editor section from STATE. */
 function renderAll() {
@@ -1654,15 +1575,13 @@ function renderAll() {
 }
 
 /**
- * Snapshots the in-editor STATE (and which profile, if any, is being
- * edited) into localStorage and opens preview.html (or, if a preview tab
- * from an earlier click is still open, refreshes it) so the ta can see
- * unsaved edits rendered in the real landing page and dashboard before
- * applying them. The snapshot also doubles as a "keep my edits" draft:
- * see tryRestoreFromPreview(). Pulls in whatever the Visual editor tab's
- * iframe last wrote first, if that's the tab currently open, so clicking
- * Preview from there can't clobber an in-progress click-to-edit with the
- * parent's now-stale copy of STATE.
+ * Snapshots the in-editor STATE (and the open profile) into localStorage and
+ * opens preview.html, refreshing an already-open preview tab instead of
+ * piling up new ones.
+ * @note The snapshot doubles as a "keep my edits" draft, see
+ * tryRestoreFromPreview().
+ * @note Pulls in whatever the editor iframe last wrote first, so clicking
+ * Preview from that tab can't clobber an in-progress edit with a stale STATE.
  */
 function openPreview() {
   if (TA_MODE === "editor") pullStateFromEditor();
@@ -1680,14 +1599,19 @@ var EDITOR_TAB_PAGES = {
   landing: "index.html?preview=1&edit=1",
   dashboard: "dashboard.html?preview=1&edit=1",
   login: "login.html?preview=1&edit=1",
-  gallery: "gallery.html?preview=1&edit=1"
+  gallery: "gallery.html?preview=1&edit=1",
+  /* the page a visitor gets for a url that matches nothing (app/main.py's
+     handle_http_exception()). Edited here like any other page - it's the one
+     the site shows someone who's already lost, so the wording on it is worth
+     a ta's attention more than most */
+  notfound: "404.html?preview=1&edit=1"
 };
 var editorSubTab = "landing";
 
 /**
  * Points the Visual editor's iframe at the given sub-tab's page and marks
  * it active.
- * @param name "landing", "dashboard", "login", or "gallery"
+ * @param name "landing", "dashboard", "login", "gallery", or "notfound"
  */
 function showEditorSubTab(name) {
   if (!EDITOR_TAB_PAGES[name]) name = "landing";
@@ -1710,19 +1634,15 @@ function showEditorSubTab(name) {
 /* ---------------------------------------------------------------------------
    THE LANDING PAGE'S NAVBAR SWITCH
 
-   The landing page ships two navbars - one for a signed-out visitor (Access
-   portal) and one for a signed-in one (Dashboard, Log out) - and only one is in
-   the document at a time (js/main.js's applyNavState()). A ta editing the page
-   needs to be able to look at either, so this switch, next to the page tabs,
-   picks which. It's view state, not a setting: what a real visitor gets is
-   decided by whether they're actually signed in, and nothing here is saved.
+   The landing page ships two navbars - signed-out and signed-in - and only one
+   is in the document at a time, so this switch picks which one a ta is
+   looking at. View state, never saved: what a real visitor gets depends on
+   whether they're actually signed in.
 
-   It lives in the portal chrome rather than inside the iframe because it's the
-   sort of thing you flip repeatedly while working - buried in the editor's
-   right-click menu it was two clicks and a guess away every time. The state is
-   held here, in the parent, so it survives the iframe reloads that Apply/Save
-   and a profile switch trigger; the iframe would otherwise come back
-   signed-out under a switch still reading "Signed in".
+   It lives in the portal chrome, not the iframe, because it's flipped
+   constantly while working, and because the state has to survive the iframe
+   reloads Apply/Save and a profile switch trigger - the frame would otherwise
+   come back signed-out under a switch still reading "Signed in".
    --------------------------------------------------------------------------- */
 
 /* which navbar the editor is showing, "out" (signed out) or "in" */
@@ -1762,10 +1682,9 @@ function toggleEditorNavState() {
 }
 
 /**
- * Re-asserts the switch onto a freshly (re)loaded editor iframe, which always
- * starts on the signed-out navbar. Runs on the frame's load event, before the
- * content fetch inside it resolves, so the override pipeline in there applies
- * saved geometry with the state already correct.
+ * Re-asserts the switch onto a freshly (re)loaded iframe, which always starts
+ * signed-out. Runs on the frame's load event, before the fetch inside it
+ * resolves, so the override pipeline applies geometry with the state correct.
  */
 function pushNavStateToFrame() {
   if (editorNavState !== "in") return;
@@ -1776,14 +1695,11 @@ function pushNavStateToFrame() {
 /* ---------------------------------------------------------------------------
    THE STUDENT DASHBOARD'S PAGE SWITCH
 
-   The dashboard is two pages in one file - the dashboard itself and the "You
-   need to log in" page a visitor with no session gets - and only one is in the
-   document at a time (js/main.js's applyDashView()). A ta is always signed in
-   while they're editing, so the locked-out half would otherwise be unreachable
-   in the editor, exactly the dead end the signed-in navbar used to be in. Same
-   switch, same reasons for living out here in the portal chrome rather than in
-   the iframe, same "view state, never saved" rule: what a real student gets is
-   decided by whether they're actually logged in.
+   The dashboard is two pages in one file - itself and the "you need to log in"
+   page - and only one is in the document at a time. A ta is always signed in
+   while editing, so the locked-out half would otherwise be unreachable. Same
+   switch, same reasons for living in the portal chrome, same "view state,
+   never saved" rule as the navbar switch above.
    --------------------------------------------------------------------------- */
 
 /* which half of the dashboard the editor is showing, "app" or "gate" */
@@ -1817,11 +1733,9 @@ function toggleEditorDashView() {
 }
 
 /**
- * Re-asserts the switch onto a freshly (re)loaded editor iframe, which always
- * starts on the dashboard itself. Runs on the frame's load event for the same
- * reason pushNavStateToFrame() does - before the content fetch inside it
- * resolves, so the override pipeline in there applies saved geometry with the
- * state already correct.
+ * Re-asserts the switch onto a freshly (re)loaded iframe, which always starts
+ * on the dashboard itself - same timing and reasons as
+ * pushNavStateToFrame().
  */
 function pushDashViewToFrame() {
   if (editorDashView !== "gate") return;
@@ -1832,14 +1746,12 @@ function pushDashViewToFrame() {
 /* ---------------------------------------------------------------------------
    THE EDITOR'S SNAP SWITCH
 
-   The portal-side face of js/main.js's SNAPPING section: whether drags in the
-   editor line themselves up with the elements around them. Unlike the two
-   switches above it, this one isn't a view of the page being edited - it's how
-   editing itself behaves - so it's shown on every tab and it IS remembered, in
-   the same localStorage key the frame reads (same origin, so the two sides
-   need no message passing at all). Shift+R inside the frame flips the same
-   setting, which is why main.js calls syncSnapSwitch() back out here
-   afterwards.
+   Whether drags in the editor line up with the elements around them. Unlike
+   the two switches above, this isn't a view of the page being edited but how
+   editing itself behaves - so it shows on every tab and it IS remembered, in
+   the same localStorage key the frame reads (same origin, no message passing).
+   Shift+R inside the frame flips it too, which is why main.js calls
+   syncSnapSwitch() back out here afterwards.
    --------------------------------------------------------------------------- */
 
 /* the key js/main.js's snapOn() reads - kept in step by hand rather than
@@ -1884,21 +1796,17 @@ function toggleEditorSnapping() {
 /* ---------------------------------------------------------------------------
    THE EDITOR'S THEME SWITCH
 
-   Which theme the page in the frame is being edited in. The site's real
-   light/dark button can't do this job from inside the editor - in there every
-   click on it is a ta selecting, dragging or retyping it, so js/theme.js makes
-   it inert under .edit-mode - and the frame's right-click menu entry that
-   covered the gap is two clicks and a guess away from something you flip
-   constantly while picking colours (every colour row in the style popover has
-   a separate dark-mode swatch, and the only way to judge one is to look at it).
+   Which theme the framed page is being edited in. The site's real light/dark
+   button can't do this from inside the editor - every click there is a ta
+   selecting or dragging it, so theme.js makes it inert under .edit-mode - and
+   the frame's right-click entry is two clicks away from something you flip
+   constantly while picking colours.
 
-   A view of the page, not a saved setting, so it behaves like the navbar and
-   dashboard switches rather than like Snap: the state lives out here in the
-   parent so it survives the iframe reloads Apply/Save trigger, and nothing
-   about it is ever written to content. It can't live in the frame's own
-   localStorage either - the editor loads its pages with ?preview=1, which is
-   exactly the flag telling setTheme() not to persist (js/theme.js), so that a
-   ta previewing light mode doesn't flip the real site out from under itself.
+   A view of the page, not a setting, so it behaves like the two switches
+   above: held in the parent so it survives Apply/Save reloads, never written
+   to content. It can't live in the frame's own localStorage either, since the
+   editor loads pages with ?preview=1 - the exact flag telling setTheme() not
+   to persist, so a ta previewing light mode doesn't flip the real site.
    --------------------------------------------------------------------------- */
 
 /* "light"/"dark" once a ta has actually used the switch, "" while the frame is
@@ -1935,10 +1843,9 @@ function toggleEditorTheme() {
 }
 
 /**
- * Adopts a flip the frame made on its own - its right-click "Preview in
- * light/dark mode" entry, which is still there and still works. Without this
- * the switch would sit there reading the old theme, and the next frame reload
- * would drop the ta's choice on the floor.
+ * Adopts a flip the frame made on its own, via its right-click "Preview in
+ * light/dark mode" entry - otherwise the switch would sit reading the old
+ * theme and the next reload would drop the ta's choice on the floor.
  * @param t "light" or "dark"
  */
 function noteEditorTheme(t) {
@@ -1948,11 +1855,11 @@ function noteEditorTheme(t) {
 }
 
 /**
- * Re-asserts the switch onto the frame - on a flip, and on every (re)load,
- * which always comes back on the portal's own theme. Goes through the frame's
- * own setTheme() (js/theme.js) rather than stamping data-theme from out here,
- * so the sun/moon icons, every ta-picked dark colour and the style popover's
- * light/dark swatch swap all re-resolve exactly as they do for a visitor.
+ * Re-asserts the switch onto the frame - on a flip, and on every reload,
+ * which always comes back on the portal's theme.
+ * @note Goes through the frame's own setTheme() rather than stamping
+ * data-theme from out here, so the icons, ta-picked dark colours and the
+ * style popover's swatches all re-resolve exactly as they do for a visitor.
  */
 function pushThemeToFrame() {
   if (!editorTheme) return;
@@ -1963,48 +1870,33 @@ function pushThemeToFrame() {
 /* ---------------------------------------------------------------------------
    THE EDITOR FRAME'S VIEWPORT WIDTH
 
-   An iframe lays its page out at the iframe's OWN width, and this one used to
-   be `width: 100%` of a pane that is nowhere near as wide as the browser
-   window it sits in: the portal's column is capped at --maxw (1120px, less 22
-   of padding either side), so on a 1294px window the editor was rendering the
-   landing page into a ~1076px viewport. Every responsive thing on the page
-   then resolved to the wrong answer - and the site has plenty of them: the
-   hero title is `clamp(2.4rem, 6vw, 4.4rem)`, section headings are
-   `clamp(1.8rem, 4vw, 2.6rem)`, .wrap columns cap out at --maxw, .hero-row and
-   .hero-btns wrap on available width, and the media queries switch layouts
-   outright.
+   An iframe lays its page out at its OWN width, and this one used to be 100%
+   of a pane capped at --maxw - so on a 1294px window the editor rendered the
+   landing page into a ~1076px viewport, and every responsive thing on the
+   page (clamp()ed headings, wrapping rows, the media queries) resolved to the
+   wrong answer.
 
-   That is not a cosmetic difference, because everything a ta places is stored
-   in absolute pixels (content.positions/content.sizes). Take the real case
-   this was written for: hero.title.accent was dragged into place and sized to
-   a 279px box while the editor's 1076px viewport put 6vw at 63px, so
-   "Gubernatorial" wrapped onto two lines and cleared the buttons under it.
-   The same 279px box on a real 1294px window puts 6vw past the 4.4rem cap at
-   70px - six characters a line instead of seven, three lines instead of two -
-   and the third line lands on top of "Apply Now". Nothing was saved wrong and
-   nothing was lost; the ta was simply shown the page at a width no visitor was
-   ever going to see it at, and laid their pixels out against that.
+   That matters because everything a ta places is stored in absolute pixels.
+   A title sized to a 279px box against a 1076px viewport wrapped onto two
+   lines; at a real 1294px the same box wraps onto three and the last one
+   lands on top of the button under it. Nothing was saved wrong - the ta was
+   shown the page at a width no visitor would ever see.
 
-   So: lay the frame out at the width a visitor actually gets, and scale the
-   result down to fit whatever room the pane has. The page inside reflows
-   exactly as it will for real, and the ta sees a true (if slightly reduced)
-   miniature of it rather than a full-size render of a narrower window. In
-   practice the reduction is small - ~81% in the normal 72vh pane, ~96% in
-   fullscreen - because the pane was never far off the window's width to begin
-   with; what it buys is that the reflow is right, which is the whole point.
+   So: lay the frame out at the width a visitor actually gets, then scale the
+   result down to fit the pane. The reflow is right, and the ta sees a true
+   (~81% in the normal pane, ~96% fullscreen) miniature rather than a
+   full-size render of a narrower window.
 
-   The width is taken from THIS window, so the editor matches what the ta gets
-   when they open the site in the same browser. It can't match every visitor at
-   once: absolute-pixel geometry over a responsive page has one correct width
-   and this is the only one the ta can check their work against.
+   The width comes from THIS window, so the editor matches what the ta gets in
+   the same browser. It can't match every visitor at once: absolute-pixel
+   geometry over a responsive page has one correct width.
    --------------------------------------------------------------------------- */
 
-/* the vertical scrollbar the frame's own document is taking, measured off the
-   live frame rather than assumed (0 on overlay-scrollbar platforms, ~15px on
-   classic ones). It comes out of the frame's content width, so the target
-   below has to add it back or the page inside lays out one scrollbar narrower
-   than the real window does - not much on its own, but enough to flip a line
-   that was already sitting on its wrap threshold. */
+/* the vertical scrollbar the frame's document is taking, measured off the live
+   frame rather than assumed (0 on overlay-scrollbar platforms, ~15px on
+   classic). It comes out of the frame's content width, so the target below has
+   to add it back or the page lays out one scrollbar narrower than the real
+   window - enough to flip a line already sitting on its wrap threshold. */
 var frameScrollbarW = 0;
 
 /** @return the viewport width to lay the frame's page out at */
@@ -2035,11 +1927,10 @@ function measureFrameScrollbar() {
 }
 
 /**
- * Sizes the Visual editor's iframe to a real visitor's viewport and scales it
- * to fit the pane (see the section comment above). Cheap and idempotent, so
- * every event that could have changed either measurement just calls it:
- * window resize, the fullscreen toggle, switching into the editor, each frame
- * load.
+ * Sizes the editor's iframe to a real visitor's viewport and scales it to fit
+ * the pane (see the section comment above).
+ * @note Cheap and idempotent, so every event that could have moved either
+ * measurement just calls it: resize, fullscreen, tab switch, frame load.
  */
 function syncFrameViewport() {
   var frame = document.getElementById("edFrame");
@@ -2073,11 +1964,9 @@ function syncFrameViewport() {
 }
 
 /**
- * Toggles the Visual editor's frame section between its normal spot in the
- * page and a fixed overlay that covers the whole viewport, so a ta editing
- * fiddly small details (text, icons, resize handles) can work with more
- * screen space than the 72vh frame normally gets. "Fullscreen" is the only
- * way in, "Exit fullscreen" (same button) or Escape is the only way out.
+ * Toggles the editor's frame between its normal spot and a fixed overlay
+ * covering the viewport, for fiddly work that wants more than the 72vh pane.
+ * "Fullscreen" is the only way in, the same button or Escape the only way out.
  */
 function toggleEditorFullscreen() {
   var section = document.getElementById("edSection");
@@ -2096,14 +1985,12 @@ function reloadEditorFrame() {
 }
 
 /**
- * Reads whatever the Visual editor's iframe last wrote into the shared
- * localStorage snapshot (js/main.js's saveEditedField()) back into STATE,
- * the same way tryRestoreFromPreview() does for a fresh page load. The
- * iframe is a separate document, so its edits only ever land in
- * localStorage, never directly in this page's STATE variable; call this
- * before reading STATE (Apply/Save/Reset/Preview, or switching back to
- * the Content manager tab) whenever the Visual editor was the active tab,
- * so an in-progress click-to-edit is never silently dropped.
+ * Reads whatever the editor iframe last wrote into the shared localStorage
+ * snapshot back into STATE, as tryRestoreFromPreview() does on a page load.
+ * @note The iframe is a separate document, so its edits only ever land in
+ * localStorage, never in this page's STATE. Call this before reading STATE
+ * (Apply/Save/Reset/Preview, or switching back to the manager) whenever the
+ * editor was the active tab, so an in-progress edit is never dropped.
  */
 function pullStateFromEditor() {
   var raw;
@@ -2118,14 +2005,11 @@ function pullStateFromEditor() {
     var newState = JSON.parse(raw);
     var editingRaw;
     try { editingRaw = localStorage.getItem("preview_editing"); } catch (e) { editingRaw = null; }
-    /* any top-level key the draft doesn't carry at all keeps whatever
-       STATE already had. js/ta.js always writes the WHOLE blob, so a
-       missing key never means "the ta emptied this" (that shows up as an
-       empty array/object, which is present and comes across as-is) - it
-       means the draft was built up key-by-key by the editor's own
-       incremental writers (js/main.js's save*(), which merge into
-       whatever's in localStorage) starting from nothing. Losing the day
-       panels, extras and gallery to that is exactly the wipe this guards. */
+    /* a top-level key the draft doesn't carry keeps whatever STATE had. This
+       file always writes the WHOLE blob, so a missing key never means "the ta
+       emptied this" (that arrives as an empty array/object) - it means the
+       draft was built up key-by-key by the editor's incremental writers.
+       Losing the panels, extras and gallery to that is the wipe this guards. */
     Object.keys(STATE).forEach(function (k) {
       if (newState[k] === undefined) newState[k] = STATE[k];
     });
@@ -2137,13 +2021,11 @@ function pullStateFromEditor() {
 
 /**
  * Switches between the Content manager form and the Visual editor iframe.
- * Both are views of the same in-memory STATE/EDITING, not two separate
- * drafts: leaving the Visual editor tab pulls its edits back into STATE
- * (see pullStateFromEditor()) before showing the form, and entering it
- * pushes the current STATE into the shared snapshot the iframe reads.
- * This is also how a profile opened via the Profiles list carries over:
- * whichever tab you're on, it's the same STATE/EDITING underneath.
  * @param mode "manager" or "editor"
+ * @note Both are views of one in-memory STATE/EDITING, not two drafts:
+ * leaving the editor pulls its edits back into STATE, entering it pushes
+ * STATE into the snapshot the iframe reads. That's also how a profile opened
+ * from the Profiles list carries over between the two.
  */
 function showMode(mode) {
   if (mode !== "editor") mode = "manager";
@@ -2162,13 +2044,11 @@ function showMode(mode) {
   document.querySelectorAll("#taModeTabs .ta-mode-tab").forEach(function (b) {
     b.classList.toggle("active", b.getAttribute("data-mode") === mode);
   });
-  /* the iframe renders the snapshot, so it can't be pointed at a page until
-     there IS one - landing straight on this tab (?tab=editor, the link
-     preview.html offers) used to fire while /api/content was still in
-     flight, handing the editor the placeholder seed() as if it were the
-     site's content. writePreviewSnapshot() refuses to write that now, which
-     stops the wipe but would leave the editor showing a stock page, so wait
-     the fetch out instead. */
+  /* the iframe renders the snapshot, so it can't be pointed anywhere until
+     there is one - landing straight on this tab used to fire while
+     /api/content was in flight, handing the editor the placeholder seed().
+     writePreviewSnapshot() refuses to write that now, which stops the wipe
+     but would leave a stock page on screen, so wait the fetch out instead. */
   if (mode === "editor") {
     whenContentReady(function () {
       if (TA_MODE !== "editor") return; /* switched back while it loaded */
@@ -2182,10 +2062,9 @@ function showMode(mode) {
 }
 
 /**
- * Reads the Visual editor iframe's undo/redo stack (js/main.js's
- * window.ClickEditHistory) and enables/disables the toolbar buttons to
- * match. Polled on an interval since edits happen inside the iframe with
- * no event wired back out.
+ * Reads the editor iframe's undo/redo stack and enables/disables the toolbar
+ * buttons to match. Polled on an interval, since edits happen inside the
+ * iframe with no event wired back out.
  */
 function syncUndoButtons() {
   var frame = document.getElementById("edFrame");
@@ -2213,17 +2092,14 @@ function clickEditRedo() {
 }
 
 /**
- * Snapshots STATE (and the open profile, if any) into localStorage, the
- * hand-off preview.html and the Visual editor's iframe both read from and
- * tryRestoreFromPreview() restores back out of.
- *
- * Refuses to write while STATE is still the placeholder seed() (see
- * STATE_LOADED): that snapshot isn't just what the iframe renders, it's
- * what Apply/Save read back out of it (pullStateFromEditor()), so
- * publishing the placeholder would quietly stage "no day panels, no
- * extras, no gallery directories, none of the visual edits" as the ta's
- * work - and then save exactly that over the real thing.
+ * Snapshots STATE (and the open profile) into localStorage - the hand-off
+ * preview.html and the editor iframe read from, and tryRestoreFromPreview()
+ * restores back out of.
  * @return true if the snapshot was written
+ * @note Refuses to write while STATE is still the placeholder seed(). That
+ * snapshot is also what Apply/Save read back out, so publishing the
+ * placeholder would stage "no panels, no extras, no gallery, no visual edits"
+ * as the ta's work - and then save exactly that over the real thing.
  */
 function writePreviewSnapshot() {
   if (!STATE_LOADED) return false;
@@ -2241,13 +2117,10 @@ function writePreviewSnapshot() {
   return true;
 }
 
-/* The manager keeps a ta's typing in STATE and nothing else - the fields
-   don't snapshot as you go, only whole actions do (mode switch, profile
-   ops, Preview) - so an idle logout used to take every unapplied edit with
-   it. This is the last thing to run before the session is torn down; see
-   flushAutosaves() in js/idle.js. In editor mode pull the frame's own work
-   in first, exactly as showMode() does, so the two halves land in one
-   snapshot and tryRestoreFromPreview() hands the lot back at next login. */
+/* the manager keeps a ta's typing in STATE and nothing else - the fields
+   don't snapshot as you go, only whole actions do - so an idle logout used to
+   take every unapplied edit with it. In editor mode pull the frame's own work
+   in first, as showMode() does, so both halves land in one snapshot. */
 (window.IdleSaveHooks = window.IdleSaveHooks || []).push(function () {
   if (TA_MODE === "editor") pullStateFromEditor();
   writePreviewSnapshot();
@@ -2271,24 +2144,19 @@ function clearPreviewSnapshot() {
 }
 
 /**
- * If the ta previewed unsaved edits and came back (a fresh page load of
- * instructor.html, e.g. via the preview page's "Content manager" link)
- * without applying or resetting them first, restores STATE from that
- * snapshot instead of fetching the live content, so a trip through
- * Preview never discards in-progress work.
+ * Restores STATE from the preview snapshot instead of fetching live content,
+ * when a ta previewed unsaved edits and came back to a fresh page load
+ * without applying or resetting - so a trip through Preview discards nothing.
  * @return true if STATE was restored from a snapshot
  */
 function tryRestoreFromPreview() {
   var raw;
   try { raw = localStorage.getItem("preview_content"); } catch (e) { raw = null; }
   if (!raw) return false;
-  /* a corrupt snapshot (bad json, or a shape normalizeState()/renderAll()
-     chokes on) must never throw here: this runs synchronously at the top
-     of the DOMContentLoaded handler, before any button gets wired up, so
-     an uncaught exception here used to silently kill every control on the
-     page (visual editor tab, preview, apply, save, reset, all of it) with
-     nothing shown to the ta except a console error. fall back to the live
-     content instead, and drop the bad snapshot so it can't keep happening. */
+  /* a corrupt snapshot must never throw here: this runs synchronously at the
+     top of DOMContentLoaded, before any button is wired, so an exception used
+     to kill every control on the page with nothing shown but a console error.
+     Fall back to live content, and drop the bad snapshot. */
   try {
     var newState = JSON.parse(raw);
     var editingRaw;
@@ -2473,11 +2341,9 @@ function renderProfiles() {
     var open = EDITING && EDITING.id === p.id;
     html += '<div class="res-row prof-row" data-i="' + i + '">';
     /* a Most recently applied row is owned by the ta looking at it, so p.mine
-       is true for it - but nothing about it is theirs to change: the server
-       refuses a rename, a share and a delete on it alike (see
-       api_update_profile()/api_delete_profile() in app/main.py). Rendered as a
-       plain label with no owner controls, so the ui doesn't offer three
-       buttons that can only come back as errors. */
+       is true - but nothing about it is theirs to change: the server refuses
+       rename, share and delete alike. Rendered as a plain label, so the ui
+       doesn't offer three buttons that can only come back as errors. */
     if (p.mine && !p.is_last_applied) {
       html += '<input type="text" class="pr-name" value="' + p.name + '" aria-label="Profile name">';
     } else {
@@ -2494,12 +2360,10 @@ function renderProfiles() {
         '<button class="btn btn-ghost pr-unshare" type="button">Unshare</button>';
     }
     html += '<span class="prof-btns">';
-    /* the original-theme row gets this button too, and it's the only way into
-       that profile: it can't be edited, but loading it is what puts the
-       original look on screen to compare against or to hit Apply on. Labelled
-       "Open" rather than "Edit" since nothing typed into it can be saved back
-       (Save is disabled for it, see syncProfileBar(), and the server refuses
-       the write anyway) - Apply is what it's there for. */
+    /* the original-theme row gets this too, and it's the only way in: it
+       can't be edited, but loading it is what puts the original look on
+       screen to compare against or Apply. Labelled "Open" rather than "Edit"
+       since nothing typed into it can be saved back. */
     html += '<button class="btn btn-ghost pr-edit" type="button"' + (open ? " disabled" : "") + '>' +
       (p.is_default ? (open ? "Opened" : "Open") : (open ? "Editing" : "Edit")) + '</button>';
     /* no Delete on the original theme at any point: it seeds once ever, so
@@ -2579,13 +2443,11 @@ function renderProfiles() {
 var objectEditorWindow = null;
 
 /**
- * Opens the reusable-object mini editor, reusing an already-open tab from
- * an earlier click instead of piling up new ones (same pattern
- * openPreview() uses for previewWindow). Objects are their own shared
- * library independent of STATE/profiles entirely (see /api/objects in
- * app/main.py), so there's no snapshot to hand off here, the editor page
- * loads its own data straight from the server.
+ * Opens the reusable-object mini editor, reusing an already-open tab from an
+ * earlier click rather than piling up new ones.
  * @param id the object to edit, or omit/null to start a brand new one
+ * @note Objects are their own shared library, independent of STATE and
+ * profiles, so there's no snapshot to hand off - that page loads its own data.
  */
 function openObjectEditor(id) {
   var url = id ? ("object-editor.html?object=1&id=" + id) : "object-editor.html?object=1";
@@ -2598,13 +2460,11 @@ function openObjectEditor(id) {
 }
 
 /**
- * Loads the shared reusable-objects library and renders it into
- * #objectsList: a name plus, same "visible/usable by every ta, but only
- * its owner can change it" rule a ta-uploaded icon/font/video already
- * follows (see the Icon library bullet in CLAUDE.md), Edit and Delete only
- * show on a row for the ta who added it (both are owner-only server-side
- * too, see api_update_object()/api_delete_object() in app/main.py, this
- * just keeps a non-owner from seeing a button that would only ever 403).
+ * Loads the shared reusable-objects library and renders it into #objectsList.
+ * @note Same "every ta can use it, only its owner can change it" rule as a
+ * ta-uploaded icon or font: Edit and Delete only show on a row for the ta who
+ * added it. Both are owner-only server-side too; this just keeps a non-owner
+ * from seeing a button that would only ever 403.
  */
 function fetchObjects() {
   var wrap = document.getElementById("objectsList");
@@ -2657,11 +2517,10 @@ function fetchObjects() {
 }
 
 /**
- * Apply = make what's on screen live for students. In profile mode it
- * also saves the profile first so the two can't drift apart. Works from
- * either tab: if the Visual editor is open, pulls in whatever it's
- * written to the shared snapshot first, so an in-progress click-to-edit
- * isn't dropped.
+ * Apply = make what's on screen live for students. In profile mode it saves
+ * the profile first, so the two can't drift apart.
+ * @note Works from either tab: with the editor open it pulls in whatever that
+ * wrote to the shared snapshot first, so an in-progress edit isn't dropped.
  */
 function applyContent() {
   if (TA_MODE === "editor") pullStateFromEditor();
@@ -2679,12 +2538,10 @@ function applyContent() {
       else clearPreviewSnapshot();
       if (EDITING) {
         EDITING.data = JSON.parse(JSON.stringify(STATE));
-        /* the original theme profile's own data never changes, and the "Most
-           recently applied" profile's data is server-managed (overwritten
-           by snapshot_last_applied() on every apply, see app/db.py), never
-           by a direct edit; the server rejects writes to either anyway, so
-           skip the resave here rather than trigger a doomed updateProfile()
-           and a confusing error */
+        /* the original theme's data never changes, and "Most recently
+           applied" is server-managed, overwritten on every apply. The server
+           rejects writes to either, so skip the resave rather than trigger a
+           doomed update and a confusing error. */
         if (!EDITING.is_default && !EDITING.is_last_applied) updateProfile(EDITING.id, { data: STATE });
         showMsg("Profile applied. Students see it now.", true);
       } else {
@@ -2737,9 +2594,8 @@ function saveToProfile() {
 
 /**
  * Reset = throw away unsaved edits: back to the live site, or the open
- * profile's last saved data if one's being edited. Doesn't need an
- * editor-tab pull first, unlike the other three actions: it's discarding
- * whatever's unsaved anyway, in either tab.
+ * profile's last saved data. Needs no editor-tab pull first, unlike the other
+ * three actions - it's discarding whatever's unsaved either way.
  */
 function resetContent() {
   if (!confirm("Reset everything back to how it was last saved? This throws away your edits.")) return;
@@ -2906,12 +2762,10 @@ document.addEventListener("DOMContentLoaded", function () {
   });
   syncThemeSwitch();
 
-  /* the frame's emulated viewport width. Re-fitted whenever either of the two
-     measurements it's built from can have moved: the window (resize) or the
-     pane (fullscreen, handled in toggleEditorFullscreen(), and first reveal,
-     handled in showEditorSubTab()). The load handler is the one that isn't
-     about size at all - it's the frame's own scrollbar, which can only be
-     measured once there's a document in there to measure. */
+  /* the frame's emulated viewport width, re-fitted whenever either
+     measurement behind it can have moved: the window (resize) or the pane
+     (fullscreen, first reveal). The load handler isn't about size at all -
+     it's the frame's scrollbar, measurable only once a document is in there. */
   window.addEventListener("resize", syncFrameViewport);
   document.getElementById("edFrame").addEventListener("load", function () {
     if (measureFrameScrollbar()) syncFrameViewport();

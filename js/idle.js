@@ -1,25 +1,17 @@
-/* idle logout. real input (clicks, keys, scrolling, moving the mouse) counts
-   as activity; sitting idle past the limit logs you out with a message. tas
-   get a short window since their key edits the site, students just lose the
-   dashboard so theirs is lazier. limits match TA_IDLE_SECONDS/
-   STUDENT_IDLE_SECONDS in app/db.py.
+/* idle logout. Real input (clicks, keys, scrolling, mouse movement) counts as
+   activity; sitting idle past the limit logs you out with a message. Limits
+   match TA_IDLE_SECONDS/STUDENT_IDLE_SECONDS in app/db.py - tas get a short
+   window since their key edits the site, students only lose the dashboard.
 
-   Loaded by every template except login.html, whose whole job is the state
-   this script puts you in. That includes the public pages: a signed-in ta
-   reads and edits those too, and the first line below means a visitor with no
-   session pays for nothing. The clock is per origin (localStorage), not per
-   tab, so all of them share one.
-
-   Two things make "idle" mean what it says:
-   - activity has to count from wherever the ta actually is, which in the
-     portal is inside an iframe. see watchFrame().
-   - being logged out must never cost them work. see flushAutosaves(). */
+   Loaded by every template except login.html. The clock is per origin
+   (localStorage), not per tab, so every tab shares one. Two things make
+   "idle" mean what it says: activity has to count from inside the editor's
+   iframe (watchFrame()), and a logout must never cost work (flushAutosaves()). */
 
 (function () {
   /* exported before the session check below, so the 401 paths that log a ta
-     out without this clock's help (handleExpiredSession() in js/ta.js and
-     js/accounts.js, authedFetch() in js/object-editor.js) can flush through
-     the same one place. */
+     out without this clock's help (handleExpiredSession() in ta.js and
+     accounts.js, authedFetch() in object-editor.js) flush through one place */
   window.IdleClock = { flush: flushAutosaves };
 
   if (!localStorage.getItem("session")) return;
@@ -27,12 +19,10 @@
   var IDLE_LIMIT_MS = (localStorage.getItem("role") === "ta" ? 20 : 240) * 60 * 1000;
   var PING_EVERY_MS = 5 * 60 * 1000;
 
-  /* whether this copy is running inside a frame. The portal loads a whole
-     page into one for both the Visual editor and Preview, so a page carrying
-     this script can find itself framed. A framed copy feeds the shared clock
-     and does nothing else: the top window is already checking and pinging for
-     both, and expiring from in here would swap the editor's canvas for a login
-     form while the portal chrome around it carried on as if nothing happened. */
+  /* whether this copy is running inside a frame. A framed copy feeds the
+     shared clock and does nothing else: the top window already checks and
+     pings for both, and expiring from in here would swap the editor's canvas
+     for a login form while the portal chrome carried on regardless. */
   var NESTED = true;
   try { NESTED = window.top !== window; } catch (e) { NESTED = true; }
 
@@ -40,7 +30,7 @@
   /** Stamps last_active with now, throttled so it doesn't hammer localStorage. */
   function touch() {
     var now = Date.now();
-    if (now - lastWrite < 15000) return; /* don't hammer localStorage */
+    if (now - lastWrite < 15000) return;
     lastWrite = now;
     localStorage.setItem("last_active", String(now));
   }
@@ -69,19 +59,14 @@
   /**
    * Gives every page a last chance to stash unsaved work before the session
    * goes. A page registers with
-   *
    *   (window.IdleSaveHooks = window.IdleSaveHooks || []).push(fn);
-   *
-   * which depends on no load order and works even in a window where this
-   * script bailed out early for want of a session.
-   *
-   * Hooks save LOCALLY, to the same localStorage drafts tryRestoreFromPreview()
-   * (js/ta.js) and loadObject() (js/object-editor.js) already pick back up on
-   * the next login. Deliberately not to the server: being timed out isn't a ta
-   * saying "publish this", and Apply/Save stay the only things that reach the
-   * live site. It still runs before the token is cleared, so a hook that needs
-   * it has it, and it runs the frames too - in the portal the ta's work is
-   * happening a document down from the window doing the expiring.
+   * which depends on no load order, and works even where this script bailed
+   * out early for want of a session.
+   * @note Hooks save LOCALLY, to the same drafts the next login restores
+   * from - never to the server. Being timed out isn't a ta saying "publish",
+   * so Apply/Save stay the only things that reach the live site.
+   * @note Runs before the token is cleared, and reaches into frames: in the
+   * portal the work is happening a document below the window expiring it.
    */
   function flushAutosaves() {
     runSaveHooks(window);
@@ -109,7 +94,7 @@
   }
 
   /* while a ta is actually here, ping so the server-side session slides
-     along with the client one. goes quiet as soon as input stops. */
+     along with the client one. Goes quiet as soon as input stops. */
   var lastPing = Date.now();
   /** Sends a keep-alive ping to the server if a ta is active and due for one. */
   function maybePing() {
@@ -126,8 +111,8 @@
     }).catch(function () {});
   }
 
-  /* the input that counts as "still here". pointermove is in there so reading
-     a long page with the mouse drifting counts, not just clicking things. */
+  /* pointermove is in there so reading a long page with the mouse drifting
+     counts, not just clicking things */
   var ACTIVITY = ["pointerdown", "keydown", "scroll", "pointermove"];
 
   /**
@@ -141,8 +126,7 @@
   }
 
   /**
-   * Returns a frame's document, or null if it isn't reachable (cross-origin,
-   * or nothing loaded in it yet).
+   * Returns a frame's document, or null if it isn't reachable.
    * @param frame the iframe element
    */
   function frameDoc(frame) {
@@ -151,17 +135,12 @@
 
   /**
    * Counts input inside a same-origin frame as activity out here.
-   *
-   * Events don't cross a frame boundary, so listening on this window alone
-   * misses everything a ta does in the portal's Visual editor and Preview
-   * panes - which is nearly everything they do. Only the dashboard sub-tab
-   * carries a copy of this script of its own; on the landing, gallery and
-   * login tabs nobody was watching at all, so twenty minutes of editing
-   * looked exactly like twenty minutes of having walked away, and both the
-   * clock here and the server heartbeat (which goes quiet once last_active
-   * is stale) ran out mid-edit. Re-bound on every load, since each sub-tab
-   * and every Apply/profile-switch reload is a fresh document.
    * @param frame the iframe element to watch
+   * @note Events don't cross a frame boundary, so listening on this window
+   * alone missed nearly everything a ta does - twenty minutes of editing in
+   * the Visual editor looked exactly like twenty minutes away from the desk.
+   * @note Re-bound on every load: each sub-tab and every Apply/profile-switch
+   * reload is a fresh document.
    */
   function watchFrame(frame) {
     var doc = frameDoc(frame);

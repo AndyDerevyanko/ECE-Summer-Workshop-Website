@@ -1,21 +1,12 @@
-/* gallery viewer, one photo or clip at a time.
-   Media lists come from /api/content (content.gallery), ta-editable from
-   instructor.html's Gallery section.
+/* gallery viewer, one photo or clip at a time. Media lists come from
+   /api/content (content.gallery), ta-editable from instructor.html.
 
-   This file no longer owns any markup. The directory rail, the photo stage(s),
-   the arrows and the counter are all placed custom elements built by
-   js/main.js (see buildCustomElementNode()'s "galleryDirArea"/"galleryPane"
-   kinds and app/db.py's _GALLERY_ENTRIES), exactly like the student
-   dashboard's tile areas - so a ta can move, resize, restyle, delete and
-   re-add every one of them from the visual editor. What's left here is the
-   part that can't be expressed as an element: which directories exist, which
-   image each pane is sitting on, and what the page's own two variables
-   therefore read. */
+   This file owns no markup: the rail, the stages, the arrows and the counter
+   are all placed custom elements built by main.js, so a ta can move, restyle
+   and delete every one of them. What's left here is the part that can't be an
+   element - which directories exist, which image each pane sits on, and what
+   the page's two variables therefore read. */
 
-/* used if /api/content can't be reached, same shape/values as DEFAULT_CONTENT
-   in app/db.py. "years" is the storage key a directory list has always had -
-   the names in it are free text now (a ta can call one "Field trip"), the key
-   just isn't worth a migration to rename. */
 var DEFAULT_GALLERY = {
   video: { autoplay: true, controls: false, pausable: false },
   video_opts: {},
@@ -34,19 +25,17 @@ var DIRS = [];
    ignores it entirely, which is what lets one page show 2025 beside 2026. */
 var selectedDir = "";
 
-/* which image each pane BINDING is sitting on, keyed by directory name ("" for
-   the rail-following binding). Keyed by binding rather than by element so two
-   panes showing the same directory stay in step - they're two views of one
-   thing, and the page's variables/actions name that thing, not the elements. */
+/* which image each pane BINDING is on, keyed by directory ("" for the
+   rail-following one). Keyed by binding, not element, so two panes on the same
+   directory stay in step - they're two views of one thing. */
 var GALLERY_IDX = {};
 
 /**
- * Checks whether this page was opened from the ta portal's preview page
- * (see js/preview.js, js/ta.js) rather than by a real visitor. The gallery
- * gets its own preview tab, separate from the landing page, so unsaved
- * gallery edits (new directories/images not yet applied) can be checked on
- * their own instead of only showing whatever was last saved live.
+ * Whether this page was opened from the portal's preview rather than by a
+ * real visitor.
  * @return true if ?preview=1 is set
+ * @note The gallery gets its own preview tab so unsaved directory/image edits
+ * can be checked on their own.
  */
 function isGalleryPreview() {
   return /[?&]preview=1(&|$)/.test(window.location.search);
@@ -59,10 +48,9 @@ function isGalleryPreview() {
  */
 function isVid(u) { return /\.mov$/i.test(u); }
 
-/* the baseline every clip plays by, straight out of content.gallery.video (see
-   DEFAULT_CONTENT["gallery"] in app/db.py). Held here rather than read off
-   GALLERY_CONTENT every time so the fallback path, which never sees a content
-   blob at all, has the same defaults to paint from. */
+/* the baseline every clip plays by, out of content.gallery.video. Held here
+   rather than read off GALLERY_CONTENT each time so the fallback path, which
+   never sees a content blob, paints from the same defaults. */
 var GALLERY_VIDEO_OPTS = { autoplay: true, controls: false, pausable: false };
 
 /* the per-clip choices on top of it, {url: {autoplay, controls, pausable}},
@@ -71,11 +59,11 @@ var GALLERY_VIDEO_OPTS = { autoplay: true, controls: false, pausable: false };
 var GALLERY_VIDEO_BY_URL = {};
 
 /**
- * Loads the gallery's video playback settings out of a content blob. A blob
- * saved before these existed has no "video" key at all, so anything missing
- * falls back to how the gallery has always behaved: muted clips that start on
- * their own, loop, and show no player chrome.
+ * Loads the gallery's video playback settings out of a content blob.
  * @param gallery content.gallery
+ * @note A blob saved before these existed has no "video" key, so anything
+ * missing falls back to how the gallery always behaved: muted clips that
+ * start on their own, loop, and show no player chrome.
  */
 function initGalleryVideoOpts(gallery) {
   var v = (gallery && gallery.video) || {};
@@ -88,15 +76,13 @@ function initGalleryVideoOpts(gallery) {
 }
 
 /**
- * How one particular clip plays: its own saved settings if a ta has set any,
- * otherwise the gallery-wide baseline.
- *
- * All-or-nothing per clip rather than per flag - an entry carries all three
- * switches, because that's what the content manager writes when a ta touches
- * any one of them. Per-flag merging would mean a clip that "inherits autoplay
- * but not controls", a state nothing in the ui can show and nobody asked for.
+ * How one clip plays: its own saved settings if a ta set any, else the
+ * gallery-wide baseline.
  * @param url the clip's media url
  * @return {autoplay, controls, pausable}
+ * @note All-or-nothing per clip rather than per flag, because that's what the
+ * content manager writes. Per-flag merging would allow a clip that "inherits
+ * autoplay but not controls" - a state no ui can show.
  */
 function galleryVideoOptsFor(url) {
   var own = url && GALLERY_VIDEO_BY_URL[url];
@@ -109,10 +95,10 @@ function galleryVideoOptsFor(url) {
 }
 
 /**
- * Every directory name currently defined, in the order the content manager
- * lists them. Exposed to js/main.js so the right-click menu's "Image pane..."
- * picker can offer them without knowing anything about gallery content.
+ * Every directory name currently defined, in content-manager order.
  * @return an array of directory names
+ * @note Exposed to main.js so the right-click "Image pane..." picker can
+ * offer them without knowing anything about gallery content.
  */
 function galleryDirNames() { return DIRS.slice(); }
 window.galleryDirNames = galleryDirNames;
@@ -133,13 +119,11 @@ function resolveDir(dir) { return dir || selectedDir; }
 function listFor(dir) { return PHOTOS[resolveDir(dir)] || []; }
 
 /**
- * Reads one of the page's two exclusive variables for one pane binding - what
- * js/main.js's gallery chips (${Gallery2026Current}/${Gallery2026Total}) print.
- * Kept here rather than in main.js because only this file knows where each
- * binding currently is; main.js just asks.
+ * Reads one of the page's two exclusive variables for one pane binding.
  * @param local "gallery-current" or "gallery-total"
  * @param dir the binding's directory name, "" for the rail-following one
  * @return the value as a display string
+ * @note Lives here because only this file knows where each binding is.
  */
 function galleryChipValue(local, dir) {
   var list = listFor(dir);
@@ -149,12 +133,11 @@ function galleryChipValue(local, dir) {
 window.galleryChipValue = galleryChipValue;
 
 /**
- * Moves one pane binding forward or back through its directory, wrapping at
- * both ends - what an element linked to a "gallery:prev"/"gallery:next" action
- * actually does when clicked (see applyOneLink() in js/main.js). Any number of
- * buttons can be pointed at the same action; they all land here.
+ * Moves one pane binding through its directory, wrapping at both ends - what
+ * a "gallery:prev"/"gallery:next" action does when clicked.
  * @param dir the binding's directory name, "" for the rail-following one
  * @param step -1 for previous, 1 for next
+ * @note Any number of buttons can point at the same action; all land here.
  */
 function stepGallery(dir, step) {
   var list = listFor(dir);
@@ -165,9 +148,9 @@ function stepGallery(dir, step) {
 window.stepGallery = stepGallery;
 
 /**
- * Paints every placed image pane with whichever media its binding is on, and
- * repaints the page's variable chips to match. Preloads each pane's
- * neighbouring photos so the arrows feel instant, same as the old viewer did.
+ * Paints every placed pane with whichever media its binding is on, repaints
+ * the variable chips, and preloads each pane's neighbours so arrows feel
+ * instant.
  */
 function paintPanes() {
   document.querySelectorAll("[data-gallery-pane]").forEach(function (pane) {
@@ -193,10 +176,10 @@ function paintPanes() {
       vid.controls = vopts.controls;
       vid.autoplay = vopts.autoplay;
       if (vid.getAttribute("src") !== cur) vid.src = cur;
-      /* flipping to a clip is a fresh start either way: autoplay off means it
-         waits on the visitor (its first frame is already showing, so the pane
-         doesn't go black), and autoplay on has to be asked for explicitly -
-         the attribute alone only covers a clip that was in the markup at load */
+      /* a fresh start either way: autoplay off waits on the visitor (the
+         first frame is already up, so the pane doesn't go black), and
+         autoplay on has to be asked for - the attribute only covers a clip
+         that was in the markup at load */
       if (vopts.autoplay) vid.play().catch(function () {});
       else vid.pause();
     } else {
@@ -216,35 +199,24 @@ function paintPanes() {
 }
 
 /* the shared template default for a directory tile's label - just the local
-   name chip (js/main.js's buildGalleryDirChipHtml(), the rail's equivalent of
-   the attachment filename chip), computed once here since main.js is
-   guaranteed to have already run (script tag order) by the time this file's
-   own top-level code executes. */
+   name chip. Computed here since script order guarantees main.js has run. */
 var DEFAULT_GALLERY_LABEL_HTML = buildGalleryDirChipHtml();
 var DEFAULT_GALLERY_EMPTY_HTML = "<strong>No directories yet.</strong>";
 
 /**
- * Builds one directory tile's markup: a wrapper (data-gallery-tile, bound to
- * this specific directory via data-gallery-dir, tracked under the shared
- * "gallery.dir.tile" id so a ta can resize it and re-tile the rail around it)
- * holding TWO INDEPENDENT SIBLING elements - the coloured rect and the label -
- * rather than nesting the label inside the rect, so a ta deleting the rect
- * never cascades into deleting the text on top of it. Both carry a SHARED,
- * fixed id, so this is one shared template rendered once per directory: a
- * style or text edit to any single tile applies to all of them, live and after
- * reload alike, exactly like the attachments tiles on the dashboard (see
- * buildExtrasTileHtml() in js/dashboard.js).
- *
- * The label defaults to a name chip rather than to the directory's literal
- * text: the words are real content a ta types in the content manager, and
- * routing them through a variable means the shared template can be restyled,
- * moved and typed around without any one tile's edit being able to overwrite
- * another directory's actual name - the same treatment a day tile's title got.
+ * Builds one directory tile's markup.
  * @param dir the directory name
  * @param style {rectColor, rectDarkColor, rectRadius} (reads "gallery.dir.*")
  * @param labelHtml content.text["gallery.dir.label"], or undefined for the
  *   shared default
  * @return an HTML string for one tile
+ * @note The rect and label are INDEPENDENT SIBLINGS, not nested, so deleting
+ * the rect never cascades into the text on top of it. Both carry a shared
+ * fixed id: this is one template rendered per directory, so a style or text
+ * edit to any tile applies to all of them, as with the dashboard's tiles.
+ * @note The label defaults to a name chip rather than the literal text, so
+ * the template can be restyled and typed around without one tile's edit
+ * overwriting another directory's actual name.
  */
 function buildGalleryDirTileHtml(dir, style, labelHtml) {
   var rectStyle = "";
@@ -266,19 +238,16 @@ function buildGalleryDirTileHtml(dir, style, labelHtml) {
   );
 }
 
-/* the full /api/content response, stashed so renderDirs() can read
-   content.colors/radius/text/hidden itself - it can't rely on js/main.js's own
-   sweeps to paint its tiles, since those run against whatever's already in the
-   DOM at the time they're called and these tiles are built later. Same
-   reasoning (and same fix, applyLiveAreaOverrides()) as EXTRAS_CONTENT in
-   js/dashboard.js. */
+/* the full /api/content response, stashed so renderDirs() can read the
+   colors/radius/text/hidden itself: main.js's sweeps run against whatever is
+   in the DOM at the time, and these tiles are built later. */
 var GALLERY_CONTENT = null;
 
 /**
- * Renders the directory rail's live area: the always-present empty-state text
- * plus one tile per directory, inside the placed "galleryDirArea" custom
- * element. Rebuilds the whole area's innerHTML every time it runs, same "no
- * incremental diffing, this section is small" reasoning as renderExtras().
+ * Renders the rail's live area: the empty-state text plus one tile per
+ * directory, inside the placed "galleryDirArea" element.
+ * @note Rebuilds the whole area's innerHTML each run - this section is small
+ * enough that incremental diffing isn't worth it.
  */
 function renderDirs() {
   var host = document.querySelector("[data-gallery-dirs-area]");
@@ -293,16 +262,12 @@ function renderDirs() {
   var emptyHtml = text["gallery.dirs.empty"] !== undefined
     ? text["gallery.dirs.empty"] : DEFAULT_GALLERY_EMPTY_HTML;
 
-  /* the tiles are DIRECT children of the area, not wrapped in a list of their
-     own: the area itself is the tile flow container (see applyTileFlow() in
-     js/main.js), and an intermediate wrapper would be the thing the tiles
-     actually tiled inside, leaving the container a ta resizes with nothing to
-     lay out. The empty-state text isn't a tile, so it spans the whole line.
-     It borrows .extras-empty/.has-attachments verbatim from the dashboard's
-     own placeholder rather than getting a near-identical rule of its own: the
-     behaviour wanted is exactly the same one ("hidden to a visitor once there
-     IS content, still faintly visible in the editor so it stays reachable"),
-     and one rule means the three live areas can't drift apart. */
+  /* the tiles are DIRECT children of the area: the area itself is the tile
+     flow container, and a wrapper would become the thing tiles laid out
+     inside, leaving the container a ta resizes with nothing to arrange. The
+     empty-state text isn't a tile, so it spans the line - it borrows
+     .extras-empty from the dashboard verbatim so the three live areas can't
+     drift apart. */
   var html =
     '<p class="muted extras-empty tile-flow-full' + (DIRS.length ? " has-attachments" : "") +
       '" data-edit-id="gallery.dirs.empty" ' +
@@ -322,12 +287,10 @@ function renderDirs() {
     });
   });
 
-  /* whatever a ta has dropped onto a directory tile, rebuilt into EVERY tile:
-     the rail has no per-directory content entry to hang a child off, so these
-     are stored against the shared template and belong to all of them, exactly
-     like the rect and the label above (see TILE_CHILDREN in js/main.js).
-     Repainting their saved overrides is applyLiveAreaOverrides()'s job below,
-     same division of labour renderExtras()/renderDays() follow. */
+  /* whatever a ta dropped onto a directory tile, rebuilt into EVERY tile: the
+     rail has no per-directory entry to hang a child off, so these belong to
+     the shared template. Repainting their overrides is the job of
+     applyLiveAreaOverrides() below. */
   if (window.renderTileChildren && window.tileChildrenFor) {
     var dirChildren = window.tileChildrenFor("gallery.dir.tile");
     host.querySelectorAll("[data-gallery-tile]").forEach(function (tileEl) {
@@ -346,10 +309,8 @@ function renderDirs() {
      areas need, see applyLiveAreaOverrides() in js/main.js */
   if (window.applyLiveAreaOverrides) window.applyLiveAreaOverrides(data);
 
-  /* host is out of flow (it's absolutely positioned inside its .free-wrap),
-     so grow the in-flow spacer it anchors to, then re-anchor everything once
-     more so the stage beside it picks up its now-correct rect - see
-     renderExtras()'s matching comment in js/dashboard.js */
+  /* host is out of flow, so grow the in-flow spacer it anchors to, then
+     re-anchor once more so the stage beside it sees the corrected rect */
   var anchor = document.getElementById("galleryDirsAnchor");
   if (anchor) anchor.style.minHeight = host.offsetHeight + "px";
   if (window.applyElementAnchors) window.applyElementAnchors();
@@ -357,10 +318,9 @@ function renderDirs() {
 
 /**
  * Rebuilds everything this file owns: the rail's tiles, then each pane's
- * media and the variable chips that read off them. Called via the
- * window.renderGallery hook from js/main.js's applySharedOverridePasses()
- * (which is what builds the elements being rendered into) and again whenever
- * a ta places a new pane.
+ * media and the chips that read off them.
+ * @note Called via the window.renderGallery hook once main.js has built the
+ * elements, and again whenever a ta places a new pane.
  */
 function renderGallery() {
   renderDirs();
@@ -378,8 +338,8 @@ window.renderGallery = renderGallery;
 
 /**
  * Loads the directory list out of a content blob and points the rail at the
- * first one. Split from renderGallery() so the fallback path below can feed it
- * the hardcoded default without going near the network.
+ * first one. Split out so the fallback below can feed it the hardcoded
+ * default without going near the network.
  * @param gallery content.gallery, {years, images}
  */
 function initGalleryContent(gallery) {
@@ -390,15 +350,12 @@ function initGalleryContent(gallery) {
 }
 
 /**
- * Puts the directory rail into the order its tiles are now in, after a ta has
- * dragged one to a different place in the visual editor (js/main.js's
- * startFlowTileDrag()). The order IS content - it's what a visitor sees down
- * the rail and what "the first directory" means to initGalleryContent() - so
- * it's written back into content.gallery.years and saved.
- *
- * The tiles are already in their new order in the dom by the time this runs,
- * so nothing re-renders: DIRS is brought into line with them and left there.
+ * Puts the rail into the order its tiles are now in, after a ta dragged one
+ * elsewhere in the visual editor.
  * @param slots each tile's original index in DIRS, in the tiles' new order
+ * @note The order IS content - it's what a visitor sees and what "the first
+ * directory" means - so it's written back to content.gallery.years and saved.
+ * @note The dom is already in the new order, so nothing re-renders.
  */
 function reorderGalleryDirs(slots) {
   var out = [];
@@ -419,10 +376,10 @@ function reorderGalleryDirs(slots) {
 window.reorderGalleryDirs = reorderGalleryDirs;
 
 /**
- * Points the rail at a different directory. Only panes bound to "" move with
- * it; their index resets, since "image 40 of 57" means nothing in a directory
- * that has eleven.
+ * Points the rail at a different directory.
  * @param dir the directory to select
+ * @note Only panes bound to "" move with it, and their index resets: "image
+ * 40 of 57" means nothing in a directory that has eleven.
  */
 function selectDir(dir) {
   if (dir === selectedDir) return;
@@ -434,21 +391,18 @@ function selectDir(dir) {
   paintPanes();
 }
 
-/* clicking a directory tile selects it, clicking a pane steps it forward -
-   both delegated off document, so tiles and panes rendered later (or placed
-   mid-session by a ta) work with no re-wiring, the same convention
-   wireNavButtons() follows. Inert inside the visual editor, where a click is
-   how an element gets selected and edited. */
+/* clicking a tile selects it, clicking a pane steps it forward - both
+   delegated off document, so tiles and panes rendered later work with no
+   re-wiring. Inert in the visual editor, where a click selects an element. */
 document.addEventListener("click", function (e) {
   if (isEditMode && isEditMode()) return;
   var tile = e.target.closest && e.target.closest("[data-gallery-tile]");
   if (tile) { selectDir(tile.getAttribute("data-gallery-dir") || ""); return; }
   var pane = e.target.closest && e.target.closest("[data-gallery-pane]");
   if (!pane) return;
-  /* a click on the clip ITSELF belongs to the player as soon as a ta has
-     handed the visitor any control over playback: stepping to the next image
-     on the same click that pauses (or that reaches for the scrub bar) would
-     make both unusable. Everywhere else in the pane still steps as always. */
+  /* a click on the clip ITSELF belongs to the player once a ta has handed the
+     visitor any control over playback: stepping to the next image on the same
+     click that pauses would make both unusable */
   var vid = e.target.closest('[data-gallery-media="vid"]');
   /* whichever clip this pane is actually sitting on - paintPanes() puts its
      url on the element, so the settings that decide this are the same ones it
@@ -475,12 +429,11 @@ document.addEventListener("keydown", function (e) {
 });
 
 /**
- * Renders the seeded viewer from js/main.js's own copy of the gallery
- * elements, for the one case where /api/content is unreachable: the page's
- * content IS those elements now, so without this the gallery would load as an
- * empty column rather than degrading to its hardcoded default photo. Only on
- * that path - a ta who deliberately deleted the rail is making a real choice,
- * and this must never undo it.
+ * Renders the seeded viewer from main.js's own copy of the gallery elements,
+ * for the one case where /api/content is unreachable - the page's content IS
+ * those elements now, so otherwise it would load as an empty column.
+ * @note Only on that path: a ta who deliberately deleted the rail made a real
+ * choice, and this must never undo it.
  */
 function buildGalleryFallback() {
   GALLERY_CONTENT = { text: {}, colors: {}, dark_colors: {}, radius: {}, hidden: [] };
@@ -491,22 +444,18 @@ window.buildGalleryFallback = buildGalleryFallback;
 
 document.addEventListener("DOMContentLoaded", function () {
   if (isGalleryPreview()) {
-    /* previewing isn't a real visit: don't let the brand logo or the other nav
-       links wander the ta off to a non-preview page while they're just
-       checking unsaved gallery edits. dim=false throughout: the nav is
-       editable in the visual editor, so it has to render in its real colours
-       rather than looking half-disabled (see neuterLink() in js/main.js). */
+    /* previewing isn't a real visit: don't let the nav wander the ta off to a
+       non-preview page. dim=false - the nav is editable here, so it has to
+       render in its real colours rather than looking half-disabled. */
     neuterLink(document.querySelector(".brand"), false);
     neuterLink(document.querySelector(".nav-back"), false);
     document.querySelectorAll(".nav-links a").forEach(function (a) { neuterLink(a, false); });
   }
 
-  /* the directory list rides along in the same content blob js/main.js is
-     already fetching for the override pipeline, and that pipeline is what
-     builds the elements rendered into here - so this stashes the content and
-     lets main.js's window.renderGallery hook do the rendering, rather than
-     racing it with a second fetch of its own (the mistake js/dashboard.js used
-     to make, see its EXTRAS_CONTENT note). */
+  /* the directory list rides along in the content blob main.js already
+     fetches, and that pipeline builds the elements rendered into here - so
+     stash it and let main.js's window.renderGallery hook do the rendering,
+     rather than racing it with a second fetch */
   fetchContent()
     .then(function (data) {
       GALLERY_CONTENT = data;

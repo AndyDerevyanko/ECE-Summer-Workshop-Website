@@ -18,7 +18,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/style.css?v=35" />
+  <link rel="stylesheet" href="css/style.css?v=37" />
 </head>
 <body class="mono">
 
@@ -274,6 +274,11 @@
                 <button class="pv-tab" data-tab="dashboard" type="button" role="tab">Student dashboard</button>
                 <button class="pv-tab" data-tab="login" type="button" role="tab">Login page</button>
                 <button class="pv-tab" data-tab="gallery" type="button" role="tab">Gallery</button>
+                <!-- the page a visitor lands on when a url matches nothing
+                     (app/main.py's handle_http_exception()) - editable here
+                     like every other page, since it's the one that has to
+                     talk someone out of a dead end -->
+                <button class="pv-tab" data-tab="notfound" type="button" role="tab">Not found</button>
               </div>
               <!-- which of the landing page's two navbars the editor is showing.
                    Landing tab only: it's the only page whose nav has two states,
@@ -357,6 +362,6 @@
 
   <script src="js/theme.js?v=4"></script>
   <script src="js/idle.js?v=5"></script>
-  <script src="js/ta.js?v=20"></script>
+  <script src="js/ta.js?v=21"></script>
 </body>
 </html>

@@ -1,13 +1,9 @@
-/* reusable-object mini editor (templates/object-editor.html): a slim
-   toolbar (name/save/new/delete/undo/redo) wrapped around the exact same
-   visual-editor engine js/main.js already provides for the real Visual
-   editor tab, just aimed at a blank canvas (object mode, see
-   isObjectMode()/snapshotKey()/initObjectCanvas() in js/main.js) instead of
-   editing the live page. Objects are their own shared, ta-uploadable-style
-   library (GET/POST/DELETE /api/objects, app/main.py), independent of the
-   content blob/profiles system entirely, same "visible to every ta right
-   away, owner-only delete" model custom_assets already uses for icons/
-   fonts/videos. */
+/* reusable-object mini editor: a slim toolbar wrapped around the same
+   visual-editor engine main.js drives the real Visual editor tab with, aimed
+   at a blank canvas (object mode) instead of the live page. Objects are their
+   own shared library (/api/objects), independent of the content blob and
+   profiles, on the same "every ta sees it, owner-only delete" model as the
+   custom icon/font/video assets. */
 
 /** Shows or hides the gate depending on whether a ta session is present. */
 function gateCheck() {
@@ -22,10 +18,7 @@ function gateCheck() {
 }
 
 /**
- * Bearer-authed fetch, same token-straight-out-of-localStorage convention
- * js/main.js's assetFetch() uses (this page never loads js/ta.js, so its
- * authedFetch() isn't available here either). On a 401 it clears the
- * session and bounces to login, same as every other ta-only page.
+ * Bearer-authed fetch. On a 401 it clears the session and bounces to login.
  * @param url request url
  * @param opts fetch options
  * @return the fetch promise (rejects on a 401, after redirecting)
@@ -59,26 +52,20 @@ function showMsg(text, ok) {
   el.className = "form-msg " + (ok ? "ok" : "err");
 }
 
-/* the object currently being edited, if it already exists on the server (see /api/objects); null while building a brand new one that's never been saved yet */
+/* id of the object being edited; null while building a never-saved one */
 var CURRENT_ID = null;
 
-/* localStorage key for a rolling local draft of whatever's on the canvas
-   right now: {id, name, data}, id mirrors CURRENT_ID (null for a
-   never-saved object). Refreshed every few seconds (persistDraft(), via
-   DRAFT_INTERVAL) independently of Save, since the whole point is
-   surviving a ta idle-logout mid-edit (js/idle.js's redirect to
-   login.html only clears session/role/token/last_active, never this key,
-   see loadObject()'s own restore check below) or just a closed tab, not
-   only an explicit save. */
+/* localStorage key for a rolling draft of the canvas: {id, name, data}.
+   Refreshed every few seconds independently of Save, so an idle logout or a
+   closed tab mid-edit is recoverable (see loadObject()'s restore check). */
 var DRAFT_KEY = "object_editor_draft";
 var DRAFT_INTERVAL = null;
 
 /**
- * Snapshots the canvas's current scene (object_content, kept live-updated
- * by js/main.js's whole editor engine, see snapshotKey()) plus the name
- * field into the rolling local draft. Cheap and local only, no server
- * round trip, so it can run on a plain interval regardless of session
- * state.
+ * Snapshots the canvas's scene (object_content, kept up to date by main.js)
+ * plus the name field into the rolling local draft.
+ * @note Local only, no server round trip, so it can run on a plain interval
+ * regardless of session state.
  */
 function persistDraft() {
   var raw;
@@ -91,9 +78,8 @@ function persistDraft() {
   } catch (e) {}
 }
 
-/* the rolling draft below is only ever a few seconds old, but "a few seconds"
-   is exactly the window a logout lands in, so take one more on the way out
-   (see flushAutosaves() in js/idle.js) */
+/* the draft is only seconds old, but seconds is exactly the window a logout
+   lands in, so take one more on the way out (idle.js's flushAutosaves()) */
 (window.IdleSaveHooks = window.IdleSaveHooks || []).push(function () {
   if (DRAFT_INTERVAL) persistDraft(); /* only while there's really a canvas being edited */
 });
@@ -134,9 +120,7 @@ function syncUndoButtons() {
 }
 
 /**
- * Saves the canvas's current scene (js/main.js has already been persisting
- * every edit into localStorage's "object_content" key throughout, see
- * snapshotKey()) to the shared objects library: creates a new row the
+ * Saves the canvas's scene to the shared objects library: creates a row the
  * first time, updates the same one on every save after that.
  */
 function saveObject() {
@@ -158,18 +142,13 @@ function saveObject() {
       window.history.replaceState(null, "", "object-editor.html?object=1&id=" + CURRENT_ID);
       document.getElementById("objDelete").style.display = "";
     }
-    /* refresh the local draft's own id right away rather than waiting for
-       the next 4s tick, so a just-assigned CURRENT_ID (a brand new
-       object's first save) is reflected immediately; the draft itself is
-       deliberately NOT cleared on save, editing continues on the same page
-       afterward and a later idle-logout should still be recoverable, see
-       loadObject() */
+    /* pick up a just-assigned CURRENT_ID now rather than on the next 4s
+       tick. Deliberately not cleared on save: editing carries on afterward
+       and a later idle-logout should still be recoverable. */
     persistDraft();
-    /* lets any other open tab (the Visual editor's right-click "Add
-       element" picker, or instructor.html's own Objects list) know a save
-       just happened, see the "storage" listener in js/main.js's
-       wireAddElementMenu(); the value itself is never read, only the
-       change fires the event, and only in OTHER tabs, never this one */
+    /* tells other open tabs (the Add-element picker, the Objects list) that
+       a save happened - the value is never read, only the change matters,
+       and "storage" fires in other tabs, never this one */
     try { localStorage.setItem("objects_updated", String(Date.now())); } catch (e) {}
     showMsg("Saved.", true);
   }).catch(function () {
@@ -183,15 +162,14 @@ function deleteObject() {
   if (!window.confirm("Delete this object? This can't be undone.")) return;
   authedFetch("/api/objects/" + CURRENT_ID, { method: "DELETE" }).then(function (res) {
     if (!res.ok) throw new Error("delete failed");
-    /* the object this draft pointed at is gone, don't resurrect it on a
-       later "New" load, see loadObject()'s restore check */
+    /* the object this draft pointed at is gone; don't resurrect it later */
     var d = readDraft();
     if (d && d.id === CURRENT_ID) { try { localStorage.removeItem(DRAFT_KEY); } catch (e) {} }
     window.location.href = "instructor.html#objects";
   }).catch(function () { showMsg("Couldn't delete it, try again.", false); });
 }
 
-/** Starts a brand new, unsaved object: a blank canvas with no id yet, discarding any recoverable local draft too, since this is an explicit "start over" action. */
+/** Starts a blank unsaved object, discarding any recoverable draft - this is an explicit "start over". */
 function startNew() {
   try { localStorage.removeItem("object_content"); } catch (e) {}
   try { localStorage.removeItem(DRAFT_KEY); } catch (e) {}
@@ -199,21 +177,12 @@ function startNew() {
 }
 
 /**
- * Resolves which object (if any) this session is editing, stashes its data
- * into "object_content" for the canvas engine to render, then hands off to
- * js/main.js's initObjectCanvas() (a plain top-level function declaration,
- * already reachable as window.initObjectCanvas) now that it's safe: doing
- * this before that server round trip finishes would race it, see the
- * isObjectMode() branch of js/main.js's own DOMContentLoaded handler.
- *
- * Before doing either, checks the rolling local draft (see persistDraft()/
- * DRAFT_KEY): a ta logged out mid-edit by the idle timer never gets a
- * chance to click Save, and js/idle.js's redirect only clears the session
- * itself, never this key, so the last few seconds of unsaved work are
- * still sitting in localStorage the next time this page loads. A draft
- * matching what's being opened here (the same known id, or a leftover
- * never-saved one when opening fresh with no id at all) wins over a plain
- * server refetch/blank canvas.
+ * Resolves which object this session is editing, stashes its data into
+ * "object_content", then hands off to main.js's initObjectCanvas() - which
+ * has to wait until after the server round trip, or it races it.
+ * @note Checks the rolling draft first: a ta logged out mid-edit never got
+ * to click Save, so a draft matching what's being opened (same id, or a
+ * leftover never-saved one) wins over a refetch or a blank canvas.
  */
 function loadObject() {
   CURRENT_ID = idFromUrl();
@@ -262,8 +231,7 @@ function loadObject() {
 }
 
 /**
- * Reopens a leftover unsaved draft (see loadObject()) instead of the blank
- * canvas a fresh "New object" load would otherwise show.
+ * Reopens a leftover unsaved draft instead of a blank canvas.
  * @param draft {id, name, data}, as read from DRAFT_KEY
  */
 function restoreFromDraft(draft) {
@@ -280,11 +248,9 @@ function restoreFromDraft(draft) {
 }
 
 document.addEventListener("DOMContentLoaded", function () {
-  /* isObjectMode()/snapshotKey() (js/main.js) key every canvas action off
-     ?object=1 being in the url; a direct or bookmarked load without it
-     needs fixing up first (a full reload, so js/main.js's own
-     DOMContentLoaded handler, registered before this file's, sees the
-     corrected url from a clean start rather than needing to be poked) */
+  /* main.js keys every canvas action off ?object=1 being in the url, so a
+     bookmarked load without it gets a full reload rather than a poke -
+     main.js's own handler runs before this one and needs the fixed url */
   if (!/[?&]object=1(&|$)/.test(window.location.search)) {
     var sep = window.location.search ? "&" : "?";
     window.location.replace(window.location.pathname + window.location.search + sep + "object=1" + window.location.hash);

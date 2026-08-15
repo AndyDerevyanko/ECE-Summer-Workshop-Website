@@ -2283,8 +2283,18 @@ body.edit-mode [data-edit-id].editing {
   cursor: text;
   outline: 2px solid var(--accent);
   outline-offset: 3px;
-  background: var(--surface);
 }
+/* a plain backdrop to type against, but ONLY behind a field that paints
+   nothing of its own - words sitting straight on the page or over a hero
+   image, where the caret and the selection highlight would otherwise be
+   fighting whatever is underneath. A field WITH its own background (a
+   button, a tinted card) already has a colour its text was written to be
+   readable on, and painting over that was actively harmful: the access
+   portal button is green with dark text, so a surface-coloured backdrop
+   turned it into dark-on-dark the moment it was clicked into. hasOwnBackdrop()
+   in js/main.js decides which of the two a field is and adds this class only
+   for the first. */
+body.edit-mode [data-edit-id].editing-backdrop { background: var(--surface); }
 
 /* images/icons get the same always-visible dashed outline as text fields,
    so it's obvious at a glance they're resizable too (see data-resize-id in
@@ -3372,6 +3382,18 @@ body.edit-mode .fx-chip { cursor: pointer; border-bottom: 1px dashed currentColo
   font-size: .7rem;
   line-height: 1;
 }
+/* the link editor's refusal line - only ever filled in when what was typed
+   into the box above names an element that goes nowhere itself (see
+   resolveLinkInput() in js/main.js), so it's empty and takes no room the rest
+   of the time. Accent-coloured rather than red: nothing has gone wrong, the
+   box just needs a different answer. */
+.ctx-menu .ctx-link-msg {
+  margin: 0 8px;
+  color: var(--accent);
+  font-family: var(--font-body);
+  font-size: .75rem;
+}
+.ctx-menu .ctx-link-msg:empty { display: none; }
 .ctx-menu .ctx-link-input {
   margin: 2px 8px 8px;
   padding: 6px 8px;
@@ -3432,12 +3454,21 @@ body.edit-mode .fx-chip { cursor: pointer; border-bottom: 1px dashed currentColo
 }
 .ctx-menu .ctx-lnk-go:disabled { cursor: default; opacity: .6; }
 .ctx-menu .ctx-lnk-go:disabled:hover { background: none; }
+/* selectable, unlike every other word in this menu: an id is the one name for
+   an element that means anything outside the page - it's what content.* is
+   keyed by, what a second ta gets told over a message, and what gets typed
+   into another element's link box to point it at the same place - so it has
+   to be copyable, and text inside a <button> isn't by default. The click
+   handler in buildLinkListRow() stands down while a selection is live so
+   copying doesn't also fire "show me this element". */
 .ctx-menu .ctx-lnk-name,
 .ctx-menu .ctx-lnk-id {
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  -webkit-user-select: text;
+  user-select: text;
 }
 .ctx-menu .ctx-lnk-id {
   color: var(--muted);

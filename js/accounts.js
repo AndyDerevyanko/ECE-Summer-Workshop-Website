@@ -13,9 +13,8 @@ function authHeaders() {
 }
 
 /**
- * The server says the session's gone (idle timeout, or the account got
- * removed): clears local state and bounces to login with a message instead
- * of quietly failing every button on the page.
+ * Clears local state and bounces to login with a message, for when the
+ * server says the session is gone (idle timeout, or the account was removed).
  */
 function handleExpiredSession() {
   localStorage.removeItem("session");
@@ -112,8 +111,7 @@ function removeUser(u) {
 }
 
 /**
- * Sends a new password for an account to the server (both a ta's own and
- * anyone else's go through this same call, see api_change_password()).
+ * Sends a new password for an account to the server.
  * @param u the user row {username, role, password}
  * @param password the new plaintext password
  * @param onDone called with (ok) once the request settles
@@ -135,12 +133,11 @@ function changePassword(u, password, onDone) {
 }
 
 /**
- * Swaps a row's action area (Change password / Remove buttons) for an
- * inline password field + Save/Cancel, and wires them up. Works the same
- * for a ta's own row as for anyone else's, that's what lets a ta change
- * their own password from this same list.
+ * Swaps a row's action area for an inline password field + Save/Cancel.
  * @param u the user row {username, role, password}
  * @param actions the row's action container to replace
+ * @note Works the same on a ta's own row, which is what lets them change
+ * their own password from this list.
  */
 function openPasswordEditor(u, actions) {
   actions.innerHTML =
@@ -203,10 +200,8 @@ function renderList(el, role, emptyText) {
       meTag.textContent = "that's you";
       row.appendChild(meTag);
     }
-    /* actions live in their own span so openPasswordEditor() can swap just
-       this part out for an inline field, leaving the name/password/"that's
-       you" tag above alone; every row gets Change password, including a
-       ta's own, that's what lets them change their own from here too */
+    /* their own span so openPasswordEditor() can swap just this part out,
+       leaving the name and tags alone */
     var actions = document.createElement("span");
     actions.className = "rmeta racts";
     var pwBtn = document.createElement("button");

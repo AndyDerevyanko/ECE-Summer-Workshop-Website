@@ -5,10 +5,12 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, UploadFile
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.db import (
     DEFAULT_PROFILE_NAME,
@@ -486,3 +488,42 @@ def page_accounts(request: Request):
 def page_object_editor(request: Request):
     """renders the ta-only reusable-object mini editor (see js/object-editor.js)."""
     return templates.TemplateResponse(request, "object-editor.html")
+
+
+@app.get("/404.html")
+def page_not_found(request: Request):
+    """renders the not-found page at a url of its own, with a normal 200.
+
+    The handler below is what a visitor actually reaches it through, but that
+    one only ever fires on a miss, and the visual editor has to be able to ASK
+    for a page: its iframe loads 404.html?preview=1&edit=1 like every other
+    tab (see EDITOR_TAB_PAGES in js/ta.js). 200 rather than 404 because
+    nothing is missing here - this url is a request for the page itself.
+    """
+    return templates.TemplateResponse(request, "404.html")
+
+
+@app.exception_handler(StarletteHTTPException)
+async def handle_http_exception(request: Request, exc: StarletteHTTPException):
+    """serves templates/404.html for a url that matches no page.
+
+    Without this, mistyping a url - or following a link a ta pointed at
+    something that isn't a page - landed on fastapi's own {"detail":"Not
+    Found"} json, which tells a student nothing and looks like the site is
+    broken rather than like they took a wrong turn.
+
+    Only page requests get the html. /api/* keeps its json: those responses
+    are read by js/ta.js and friends, and handing a fetch() an html document
+    where it expects {detail} would turn a clean "No such object." into a
+    parse error. The static mounts keep it too - a missing script or image
+    should fail as a missing file, not answer 200-shaped html to a <script>
+    tag. Everything else (405, 403 on a page route) goes to fastapi's own
+    handler untouched.
+    @param request the incoming request
+    @param exc the raised HTTPException
+    @return the not-found page, or whatever fastapi would have sent
+    """
+    is_page = not request.url.path.startswith(("/api/", "/js/", "/css/", "/assets/", "/uploads/"))
+    if exc.status_code == 404 and is_page:
+        return templates.TemplateResponse(request, "404.html", status_code=404)
+    return await http_exception_handler(request, exc)

@@ -786,6 +786,14 @@ var TILE_GAP_DEFAULT = 10;
 function areaFlowFor(id) {
   var saved = AREA_FLOW[id] || {};
   var def = AREA_FLOW_DEFAULTS[id] || { x: "lock", y: "expand" };
+  /* a responsive band changing this container's stacking at the current width
+     wins over the saved answer, and loses to nothing - it IS the saved answer
+     re-read for today's width. Merged in here rather than painted by
+     paintResponsive() so the whole tile pipeline (applyTileFlow(), the drag
+     and reorder paths, minContentWidthOf()) picks it up without a single one
+     of them needing to know this layer exists. */
+  var rs = RESPONSIVE_FLOW[id];
+  if (rs) saved = Object.assign({}, saved, rs);
   /* 0 is a real, deliberate answer here ("tiles flush against each other"), so
      the gap is tested for undefined rather than for falsiness the way the four
      string fields can safely be */
@@ -797,7 +805,13 @@ function areaFlowFor(id) {
     y: saved.y || def.y,
     dir: saved.dir || def.dir || "row",
     wrap: saved.wrap || def.wrap || "normal",
-    gap: gap
+    gap: gap,
+    /* where the tiles sit when the container is wider (justify) or taller
+       (align) than they need. Only ever set by a responsive band right now -
+       "" means "leave it to the stylesheet", which is the stretch-to-fill
+       grid every container has always laid out as. */
+    justify: saved.justify || "",
+    align: saved.align || ""
   };
 }
 
@@ -1067,6 +1081,12 @@ function applyTileFlow() {
          survives a stacking change instead of being a separate figure per
          layout mode */
       area.style.setProperty("--tile-gap", flow.gap + "px");
+      /* both axes' alignment, written as real properties rather than classes
+         because they're free-form values a band interpolates between - and
+         cleared back to "" (not to a default) when no band is in force, so
+         the stylesheet's own stretch behaviour comes back untouched */
+      area.style.justifyContent = flow.justify || "";
+      area.style.alignItems = flow.align || "";
       area.style.setProperty("--tile-w", tw || defW);
       area.style.setProperty("--tile-wa", tw || (defW === "100%" ? "max-content" : defW));
       area.style.setProperty("--tile-h", th || "auto");
@@ -2001,7 +2021,21 @@ function paintPos(el) {
   var own = getPos(el);
   var anc = ancestorPos(el);
   var tx = own.tx - anc.tx, ty = own.ty - anc.ty;
+  /* the responsive layer's own delta, composed over the ta's saved offset
+     rather than folded into it - see the RESPONSIVE BEHAVIOUR section. Kept
+     out of getPos() on purpose: the editor's drag maths, the ring and every
+     undo entry all work in the authored coordinate space, and a window resize
+     must not be able to move what a ta thinks they placed. */
+  /* unless the delta is being painted on the element's wrap instead, which is
+     what a free-placed element gets - see paintResponsive(). Adding it here
+     too would move the element twice. */
+  if (el.dataset.rsOnWrap !== "1") {
+    tx += parseFloat(el.dataset.rsDx) || 0;
+    ty += parseFloat(el.dataset.rsDy) || 0;
+  }
   var xf = tx || ty ? "translate(" + tx + "px, " + ty + "px)" : "";
+  var rsScale = parseFloat(el.dataset.rsScale);
+  if (rsScale > 0 && rsScale !== 1) xf = (xf ? xf + " " : "") + "scale(" + rsScale + ")";
   var ovXf = flipRotateTransform(el);
   if (ovXf) xf = (xf ? xf + " " : "") + ovXf;
   if (el.dataset.baseXf) xf = (xf ? xf + " " : "") + el.dataset.baseXf;
@@ -2494,6 +2528,12 @@ function currentPaddingValues(el) {
  */
 function applyPositionOverrides(positions) {
   positions = positions || {};
+  /* the live mirror the responsive fallback reads each entry's `bw` back out
+     of - the container width the drag was measured against, which is the
+     denominator that turns a frozen pixel offset into a proportion (see
+     responsiveFallbackFor()). Kept here rather than re-read from the content
+     blob so a drag saved this session is accounted for immediately. */
+  EDIT_POSITIONS = positions;
   var els = document.querySelectorAll(RESIZABLE_SEL);
   els.forEach(function (el) {
     var p = positions[elId(el)];
@@ -2511,6 +2551,10 @@ function applyPositionOverrides(positions) {
     if (c.tx !== own.tx || c.ty !== own.ty) setOwnPos(el, c.tx, c.ty);
   });
 }
+
+/* content.positions as last applied, {id: {tx, ty, bw}}. See the assignment
+   in applyPositionOverrides() for what reads it. */
+var EDIT_POSITIONS = {};
 
 /* every id currently deleted (data-edit-id/data-resize-id), kept in sync by
    applyHiddenOverrides()/setElementHidden() below. setHiddenVisual() checks
@@ -7458,6 +7502,91 @@ function selectPage() {
   positionRing();
 }
 
+/* ---------------------------------------------------------------------------
+   RESPONSIVE MODE
+
+   The Responsive switch in the editor chrome (js/ta.js) puts the frame into a
+   mode where an element can still be SELECTED but not moved, resized, styled,
+   layered, deleted or typed into. Everything a click normally does to an
+   element is suspended; the click's only job is to say which element the
+   plane pane out in the portal is authoring bands for.
+
+   A mode rather than a second editor, which is what this started as: the
+   elements, the ring and the selection logic are all already here, and the
+   only thing that genuinely differs is what a drag means. Splitting it into
+   its own pane would have meant a second copy of all of that.
+
+   The frame is deliberately obvious about being in it (see .rs-armed in
+   css/style.css) - a ta whose drags silently stop working assumes the editor
+   has broken, not that they flipped a switch two minutes ago.
+   --------------------------------------------------------------------------- */
+
+/* whether the Responsive switch is on. Frame-side view state only: never
+   saved, and reset by any reload, exactly like the Navbar/Theme switches. */
+var RESPONSIVE_MODE = false;
+
+/* what reportSelectionToPortal() last told the portal, so it can skip the
+   hops that would tell it the same thing again */
+var RS_REPORTED_ID = undefined;
+var RS_REPORTED_MODE = false;
+
+/**
+ * Enters or leaves responsive mode.
+ * @param on true to suspend the editing affordances and author bands instead
+ * @note Called from the portal chrome across the iframe boundary, the same
+ * direct-call route toggleNavState()/toggleSnapping() use.
+ */
+function setResponsiveMode(on) {
+  RESPONSIVE_MODE = !!on;
+  document.body.classList.toggle("rs-armed", RESPONSIVE_MODE);
+  /* any popover that edits the element has to go with the affordances that
+     opened it - leaving a style popover up over a frame that won't accept
+     style changes is worse than not offering it */
+  hideCtxMenu();
+  hideLayerMenu();
+  if (window.hideStyleMenu) hideStyleMenu();
+  /* the selection deliberately SURVIVES the flip in both directions: a ta
+     clicks the element they want and then reaches for the switch at least as
+     often as the other way round, and losing it would make the switch feel
+     like it threw their work away */
+  positionRing();
+  reportSelectionToPortal();
+}
+window.setResponsiveMode = setResponsiveMode;
+
+/**
+ * Tells the portal chrome which element is selected, so the plane pane can
+ * follow the frame's own selection instead of keeping a second one.
+ * @note Guarded on every hop: this file also runs on the live site, where
+ * there's no parent frame at all, and cross-origin access would throw.
+ */
+function reportSelectionToPortal() {
+  var id = RING_EL ? elId(RING_EL) : null;
+  /* positionRing() also runs on every scroll and resize event, and the pane
+     out in the portal rebuilds its whole plane on each of these - so only
+     the hops that actually change the answer are worth making */
+  if (id === RS_REPORTED_ID && RESPONSIVE_MODE === RS_REPORTED_MODE) return;
+  RS_REPORTED_ID = id;
+  RS_REPORTED_MODE = RESPONSIVE_MODE;
+  try {
+    if (window.parent && window.parent !== window && window.parent.onFrameSelectionChanged) {
+      window.parent.onFrameSelectionChanged(id, RESPONSIVE_MODE);
+    }
+  } catch (e) {}
+}
+
+/**
+ * Whether an editing gesture should be refused because the frame is in
+ * responsive mode.
+ * @param e an optional event to swallow
+ * @return true if the caller should return without doing anything
+ */
+function responsiveModeBlocks(e) {
+  if (!RESPONSIVE_MODE) return false;
+  if (e) { e.preventDefault(); e.stopPropagation(); }
+  return true;
+}
+
 /** Drops the selection entirely - no ring, nothing queued for grouping. */
 function deselectAll() {
   RING_EL = null;
@@ -7508,6 +7637,11 @@ function positionRing() {
     RING_EL.hasAttribute("data-extras-fixed") || RING_EL.hasAttribute("data-days-fixed"));
   /* a tile resizes but never moves, see isMoveLockedTileRole() */
   RING.classList.toggle("tile-box", isTileBoxEl(RING_EL));
+  /* strips the ring down to a plain outline in responsive mode: every handle
+     on it edits something the mode has suspended, and a handle that silently
+     refuses to drag is worse than no handle */
+  RING.classList.toggle("rs-mode", RESPONSIVE_MODE);
+  reportSelectionToPortal();
   var parent = parentSelectableOf(RING_EL);
   RING.classList.toggle("has-parent", !!parent);
   /* an up arrow on a reel tile reads as "move this tile up the running order",
@@ -7911,6 +8045,10 @@ function clearSnapGuides() {
  * cover either way, so shift there steadies the crop rather than the pixels.
  */
 function startResizeDrag(e) {
+  /* the ring's handles are hidden in responsive mode (see .rs-armed in
+     css/style.css), so this is the same defense in depth every other gate
+     here is - a keyboard-driven or synthetic mousedown can still arrive */
+  if (responsiveModeBlocks(e)) return;
   if (!RING_EL || isPageEl(RING_EL)) return;
   /* a reel tile's handles resize every tile in the reel at once, through the
      reel's own entry rather than through a size override of its own, so it
@@ -8081,6 +8219,7 @@ function startResizeDrag(e) {
  * be accidentally nudged; the handle itself is also dimmed.
  */
 function startMoveDrag(e) {
+  if (responsiveModeBlocks(e)) return;
   /* the page has nothing to move relative to, and its handles are hidden
      anyway - this is the same defense in depth the resize path gets above,
      see isPageEl() */
@@ -8406,6 +8545,10 @@ function setElementHidden(id, hidden) {
  * right back.
  */
 function deleteElement(el) {
+  /* responsive mode can't delete anything - same defense in depth as the
+     drag paths, since both routes in here (the ring's trash handle, the
+     Delete key) are already gated before they call this */
+  if (RESPONSIVE_MODE) return;
   /* the page can't be deleted, there'd be nothing left to look at - covers
      the ring's trash handle and the Delete/Backspace key alike (both land
      here), though the handle is hidden on it anyway, see isPageEl() */
@@ -11404,6 +11547,783 @@ function applyElementAnchors() {
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(applyElementAnchors);
 })();
 
+/* ---------------------------------------------------------------------------
+   RESPONSIVE BEHAVIOUR
+
+   Everything a ta places is stored as an absolute pixel offset and an absolute
+   pixel box, measured against ONE viewport width - whatever their own window
+   happened to be (see editorTargetWidth() in js/ta.js, and the section comment
+   above it spelling out why the editor lays the frame out at that width rather
+   than at the pane's). That geometry is exactly right at that width and wrong
+   at every other one: an element 600px from the left edge is centred on a
+   1440px page and hanging off a 768px one.
+
+   This section is what happens instead. Two layers, in this order:
+
+     1. responsiveFallbackFor() - the automatic one. Applies to EVERY tracked
+        element, with no authoring at all: offsets scale with the container
+        they were measured in, and boxes clamp so nothing overhangs. This is
+        what makes an untouched page broadly correct at widths nobody edited
+        it at, and it is deliberately the layer that does the heavy lifting.
+
+     2. content.responsive - the per-element override on top, drawn as bands
+        along a width axis in the editor's Responsive mode (see the RESPONSIVE
+        PLANE section in js/ta.js). A band names the properties in force
+        across a stretch of widths.
+
+   Three rules decide what a stack of bands resolves to, all of them chosen in
+   the design conversation this came out of:
+
+     UNION      every band covering the current width applies at once. A band
+                that hides and a band that recolours both fire; the recolour
+                is invisible under the hide, which is the wanted answer rather
+                than a conflict to resolve. Only two bands setting the SAME
+                property need a tiebreak, and there the later one in the array
+                (drawn later, higher in the pane's list) wins.
+
+     HOLD       a width no band covers does not snap back to the authored
+                geometry - it keeps the value of the nearest band on the WIDE
+                side of it, taken at that band's narrow edge. So a band that
+                shrinks to 60% between 800 and 900 leaves the element at 60%
+                all the way down to 320 without anyone drawing a second band.
+
+                Resolved by looking along the axis, never by remembering what
+                the element was doing a moment ago: state that depended on
+                which direction the window was dragged from would render a
+                fresh load at 700px differently from a drag down to 700px.
+
+     RAMP       a band with ramp "linear" interpolates each numeric property
+                from its value at `from` (the narrow edge) to its value in
+                `propsTo` at `to`. ramp "none" holds one flat value across the
+                whole band, which is the same thing with a zero-length ramp.
+
+   Runs last in applySharedOverridePasses(), and again on every resize, so it
+   is always painting on top of finished geometry. It never writes to the
+   saved override datasets (ovTx/ovW/...) - those stay the ta's authored
+   answer, and everything here is a separate layer composed over them, so
+   resizing a visitor's window can't rewrite what a ta saved.
+   --------------------------------------------------------------------------- */
+
+/* content.responsive, {id: {axis, regions}} - only elements a ta has actually
+   drawn bands for */
+var RESPONSIVE = {};
+
+/* content.responsive_waivers, {"<id>|<rule>": reason} - see runResponsiveDrc() */
+var RESPONSIVE_WAIVERS = {};
+
+/* the viewport width the saved geometry was authored against, used as the
+   denominator for the fallback's proportional scaling whenever a position
+   entry doesn't carry its own measured container width (`bw`). Overwritten
+   from content.authored_width on load; this figure is only what a blob saved
+   before that field existed is assumed to have been drawn at. */
+var AUTHORED_WIDTH = 1440;
+
+/* the smallest and largest widths the plane can be drawn over, and so the
+   range every resolved value is clamped into. Shared with the pane in
+   js/ta.js through window.RESPONSIVE_RANGE so the two can't drift. */
+var RESPONSIVE_RANGE = { min: 320, max: 2560 };
+window.RESPONSIVE_RANGE = RESPONSIVE_RANGE;
+
+/* the widths css/style.css already reflows the page at, drawn as snap guides
+   on the plane. A band edge that misses one of these by a few px gives a
+   visitor two separate layout jolts a hair apart instead of one - see the
+   @media blocks in css/style.css, which this list mirrors. */
+var RESPONSIVE_BREAKPOINTS = [540, 700, 860, 940, 1000, 1150, 1300];
+window.RESPONSIVE_BREAKPOINTS = RESPONSIVE_BREAKPOINTS;
+
+/* every property a band can carry, and how to resolve it.
+     num   interpolates on a "linear" ramp; anything else is held flat
+     paint how paintResponsive() writes it, or null for the ones read by
+           another system instead of painted directly (the flow fields are
+           merged into areaFlowFor(), position into paintResponsivePos()) */
+var RESPONSIVE_PROPS = {
+  hide:      { num: false },
+  hideMode:  { num: false },
+  scale:     { num: true },
+  widthPct:  { num: true },
+  minW:      { num: true },
+  maxW:      { num: true },
+  minH:      { num: true },
+  maxH:      { num: true },
+  fontSize:  { num: true },
+  opacity:   { num: true },
+  radius:    { num: true },
+  color:     { num: false },
+  textColor: { num: false },
+  padding:   { num: false },
+  anchor:    { num: false },
+  overflow:  { num: false },
+  /* container fields, merged into areaFlowFor() rather than painted */
+  dir:       { num: false, flow: true },
+  wrap:      { num: false, flow: true },
+  gap:       { num: true,  flow: true },
+  justify:   { num: false, flow: true },
+  align:     { num: false, flow: true }
+};
+
+/* resolved flow overrides for this frame, {id: {dir, wrap, gap, justify,
+   align}}. areaFlowFor() merges this over a container's saved area_flow, so a
+   band changing a container's stacking flows through applyTileFlow() and the
+   whole tile pipeline without any of it knowing this section exists. */
+var RESPONSIVE_FLOW = {};
+
+/**
+ * Loads content.responsive/content.responsive_waivers/content.authored_width
+ * into this section, so the resolver has something to resolve against.
+ * @param map content.responsive
+ * @param waivers content.responsive_waivers
+ * @param authoredWidth content.authored_width, the viewport the blob's
+ *   geometry was drawn at
+ */
+function applyResponsiveOverrides(map, waivers, authoredWidth) {
+  RESPONSIVE = map && typeof map === "object" ? map : {};
+  RESPONSIVE_WAIVERS = waivers && typeof waivers === "object" ? waivers : {};
+  if (authoredWidth > 0) AUTHORED_WIDTH = authoredWidth;
+  applyResponsiveBehaviour();
+}
+
+/**
+ * The element whose width one element's bands are measured against.
+ * @param el the element
+ * @param axis "auto", "viewport" or "parent"
+ * @return an element to measure, or null to mean the window itself
+ * @note "auto" is the default and picks per element, the way the design
+ * conversation settled it: an element sitting in a flow container is measured
+ * against THAT container, because a tile in a six-across row has ~280px to
+ * work with on a 1400px page and keying its bands off the window would be
+ * asking a ta to do the tiles-per-row arithmetic in their head. Anything not
+ * in a container - free-placed, nav chrome, the page itself - is measured
+ * against the window, which is the only meaningful box it has.
+ * @note A container's own bands are measured against ITS parent, never
+ * itself: an element that resized itself in response to its own width would
+ * be a feedback loop, which is the same reason css container queries refuse
+ * to let an element query itself.
+ */
+function responsiveAxisEl(el, axis) {
+  if (axis === "viewport") return null;
+  var area = flowAreaForEl(el);
+  /* a container resolves against its own parent container, one step up */
+  if (area === el) area = el.parentElement ? flowAreaForEl(el.parentElement) : null;
+  if (area && area !== el) return area;
+  if (axis === "parent") {
+    var p = el.parentElement;
+    while (p && p !== document.body) {
+      if (p.classList && p.classList.contains("free-wrap")) { p = p.parentElement; continue; }
+      return p;
+    }
+  }
+  return null;
+}
+
+/**
+ * The width one element's bands are being measured against right now.
+ * @param el the element
+ * @param axis "auto", "viewport" or "parent"
+ * @return a width in css px
+ */
+function responsiveAxisWidth(el, axis) {
+  var host = responsiveAxisEl(el, axis);
+  if (host) {
+    var w = host.getBoundingClientRect().width;
+    /* a container mid-rebuild can measure zero, and resolving every band
+       against 0 would hide half the page for one frame */
+    if (w > 0) return w;
+  }
+  return document.documentElement.clientWidth || window.innerWidth || AUTHORED_WIDTH;
+}
+
+/**
+ * One band's contribution at a given width.
+ * @param region a content.responsive region ({from, to, ramp, props, propsTo})
+ * @param w the width being resolved, assumed inside [from, to]
+ * @return a props object
+ * @note Only numeric properties interpolate. A ramp between two colours or
+ * two flex directions has no meaning, so those hold their `props` value for
+ * the whole band and only swap at its edge.
+ */
+function responsiveRegionProps(region, w) {
+  var props = region.props || {};
+  if (region.ramp !== "linear" || !region.propsTo) return props;
+  var span = region.to - region.from;
+  var t = span > 0 ? (w - region.from) / span : 0;
+  if (t < 0) t = 0;
+  if (t > 1) t = 1;
+  var out = {};
+  Object.keys(props).forEach(function (k) { out[k] = props[k]; });
+  Object.keys(region.propsTo).forEach(function (k) {
+    var spec = RESPONSIVE_PROPS[k];
+    var a = props[k], b = region.propsTo[k];
+    if (spec && spec.num && isFinite(a) && isFinite(b)) out[k] = a + (b - a) * t;
+    else if (out[k] === undefined) out[k] = b;
+  });
+  return out;
+}
+
+/**
+ * Resolves every band on one element down to the properties in force at a
+ * width, applying the union/tiebreak/hold rules in this section's header.
+ * @param id the element's data-edit-id/data-resize-id
+ * @param w the width to resolve at
+ * @return a props object (empty if the element has no bands at all)
+ */
+function resolveResponsiveProps(id, w) {
+  var entry = RESPONSIVE[id];
+  if (!entry || !entry.regions || !entry.regions.length) return {};
+  var out = {};
+  var covered = {};
+  /* UNION, in array order, so a later band setting the same property wins */
+  entry.regions.forEach(function (r) {
+    if (w < r.from || w > r.to) return;
+    var props = responsiveRegionProps(r, w);
+    Object.keys(props).forEach(function (k) {
+      out[k] = props[k];
+      covered[k] = true;
+    });
+  });
+  /* HOLD: for anything no covering band set, the nearest band on the wide
+     side keeps its narrow-edge value. Nearest means smallest `from` at or
+     above w - walk them all rather than assuming the array is sorted, since
+     bands are stored in draw order (which is also their tiebreak order) and
+     a ta can draw a wide one after a narrow one. */
+  entry.regions.forEach(function (r) {
+    if (r.from < w) return;
+    var props = responsiveRegionProps(r, r.from);
+    Object.keys(props).forEach(function (k) {
+      if (covered[k]) return;
+      var held = out["__from_" + k];
+      if (held !== undefined && held <= r.from) return;
+      out[k] = props[k];
+      out["__from_" + k] = r.from;
+    });
+  });
+  Object.keys(out).forEach(function (k) { if (k.indexOf("__from_") === 0) delete out[k]; });
+  return out;
+}
+window.resolveResponsiveProps = resolveResponsiveProps;
+
+/**
+ * The automatic layer under every band: what an element with no authoring at
+ * all should do as its container changes width.
+ *
+ * A ta's saved {tx, ty} is a pixel offset measured inside a container of a
+ * particular width - `bw`, recorded by the drag that saved it (see
+ * saveEditedPos()). The same offset inside a container half that wide is not
+ * the same placement, it's the same NUMBER, which is the whole bug this
+ * feature exists to fix. So the offset travels as a proportion of the
+ * container instead: an element a third of the way across stays a third of
+ * the way across.
+ *
+ * On top of that, two clamps that only ever pull things back on screen:
+ * a box wider than its container is capped to it, and an element whose right
+ * edge would land past the container's is slid back inside. Between them
+ * these are what stop an unauthored page overflowing horizontally at widths
+ * nobody drew a band for - which, on the day this ships, is every width.
+ *
+ * @param el the element
+ * @param axisW the width its container measures right now
+ * @return {dx, dy, maxW} - a position delta to compose over the saved
+ *   offset, and a width cap (0 for none)
+ * @note Returns a DELTA, never an absolute position. The saved offset stays
+ * the ta's authored answer and this rides on top, so nothing here can leak
+ * back into what gets saved.
+ */
+function responsiveFallbackFor(el, axisW) {
+  var out = { dx: 0, dy: 0, maxW: 0 };
+  var id = elId(el);
+  var saved = id ? EDIT_POSITIONS[id] : null;
+  var host = responsiveAxisEl(el, "auto");
+  /* an element with no flow container is measured against the viewport, and
+     the viewport is a real box with a real left edge (0) - not "no box".
+     Leaving this null sent every free-placed element down the in-flow branch
+     below, which scales only the drag delta: the landing page's placed portal
+     button has a leftward drag saved on it, so shrinking that delta pushed the
+     button RIGHT as the page narrowed, off the edge it was already past. */
+  var hostRect = host ? host.getBoundingClientRect()
+    : { left: 0, width: document.documentElement.clientWidth || window.innerWidth || axisW };
+  var hostW = hostRect.width || axisW;
+  if (!(hostW > 0)) return out;
+
+  /* the proportional offset, and WHICH number is proportional depends on how
+     the element is positioned - the two cases are genuinely different:
+
+       free-placed (its wrap is a .free-wrap carrying an absolute left, which
+       covers both a placed custom element and anything detachFromFlow() has
+       pulled out of flow) - its ENTIRE offset inside the host is a frozen
+       pixel measured at one width, so the whole thing scales. This is the
+       case that was leaving the nav's placed portal button 271px off the
+       right of a 375px page.
+
+       still in flow - the layout already puts it in the right place at any
+       width, and only the ta's drag delta on top of that is a frozen pixel.
+       Scaling the whole offset here would move the part the browser had
+       already got right, twice.
+
+     `bw` is the container width the drag measured; an entry saved before that
+     field existed falls back to the blob's authoring viewport, which is the
+     best guess available and still far better than treating the pixel as
+     absolute. */
+  var base = (saved && saved.bw > 0) ? saved.bw : AUTHORED_WIDTH;
+  var ratio = hostW / base;
+  var freePlaced = !!(el.parentElement && el.parentElement.classList.contains("free-wrap"));
+  /* isFinite guards a container measured mid-rebuild; a ratio of exactly 1 is
+     the authoring width itself, where this whole layer must be a no-op */
+  if (isFinite(ratio) && ratio !== 1) {
+    if (freePlaced && hostRect) {
+      var prev = parseFloat(el.dataset.rsDx) || 0;
+      var authoredLeft = el.getBoundingClientRect().left - hostRect.left - prev;
+      out.dx = authoredLeft * (ratio - 1);
+    } else if (saved && saved.tx) {
+      out.dx = saved.tx * (ratio - 1);
+    }
+  }
+  /* vertical is deliberately left alone. Height is content-driven - a section
+     that rewraps onto more lines pushes everything below it down by the right
+     amount on its own - so scaling a vertical offset by a WIDTH ratio would
+     be applying an unrelated number to an axis that was already correct. */
+
+  /* the box cap, for the two kinds of element that carry a frozen pixel width
+     and so cannot resize themselves: one a ta dragged (ovW), and one placed
+     free of the document flow, whose seeded width (natW) was hand-measured at
+     one viewport and has been that number ever since - the landing page's
+     "What You'll Learn" reel is the standing example, seeded at 1160px and
+     overhanging a 375px page by 785 of them.
+
+     Deliberately NOT applied to a template element sized by the stylesheet:
+     those already resize on their own, and capping them would make this pass
+     self-referential, since getSize() falls back to a live rect for them and
+     the cap would then be computed from a width the previous cap produced. */
+  var ownW = parseFloat(el.dataset.ovW);
+  if (!(ownW > 0) && el.parentElement && el.parentElement.classList.contains("free-wrap")) {
+    ownW = parseFloat(el.dataset.natW);
+  }
+  if (ownW > 0 && ownW > hostW) out.maxW = Math.floor(hostW);
+
+  /* and finally slide anything still overhanging back inside its container.
+     Measured off the live rect rather than derived from the saved offset:
+     `tx` is a translate DELTA, not a position, so it says nothing on its own
+     about where the element's left edge actually is. This pass's own delta
+     from the previous frame comes back out of that measurement, or each
+     frame would be correcting a position the last frame had already
+     corrected and the element would creep leftwards on every resize event.
+
+     Only for an element this layer actually positions - free-placed, or
+     carrying a ta's drag. A template element still in normal flow that is too
+     wide for its column has a WIDTH problem, and sliding it left with a
+     transform doesn't fix that, it just moves the overhang to the other side
+     and drags the element out of the column it is supposed to line up with.
+     (That is exactly what happened when this clamp was briefly applied to
+     everything: the landing page's About heading was pulled 320px out of its
+     section and the page got wider, not narrower.) */
+  if (freePlaced || (saved && saved.tx)) {
+    var prevDx = parseFloat(el.dataset.rsDx) || 0;
+    var r = el.getBoundingClientRect();
+    var effW = out.maxW ? Math.min(r.width, out.maxW) : r.width;
+    var left = r.left - hostRect.left - prevDx;
+    var over = (left + out.dx + effW) - hostW;
+    if (over > 0) out.dx -= over;
+    /* never past the other edge in the process: a box wider than its
+       container would otherwise be pushed off the left instead of the right */
+    if (left + out.dx < 0) out.dx = -left;
+  }
+  return out;
+}
+
+/**
+ * Writes one element's resolved responsive layer onto the dom.
+ *
+ * Everything here goes into `rs*` datasets and inline styles kept separate
+ * from the saved override datasets (ovTx/ovW/...), and every inline property
+ * this touches is stashed on first write so it can be handed back untouched
+ * when a resize moves off the band that set it. That stash is what lets this
+ * pass run last over finished geometry without permanently stomping whatever
+ * applySizeOverrides() and friends put there.
+ * @param el the element
+ * @param props a resolveResponsiveProps() result
+ * @param fallback a responsiveFallbackFor() result
+ */
+function paintResponsive(el, props, fallback) {
+  var stash;
+  try { stash = JSON.parse(el.dataset.rsStash || "{}"); } catch (e) { stash = {}; }
+
+  /* records el's pre-responsive inline value for one css property once, then
+     writes the new one. A null value hands the stashed original back. */
+  function put(cssProp, value) {
+    if (value === null || value === undefined || value === "") {
+      if (stash[cssProp] !== undefined) {
+        el.style.setProperty(cssProp, stash[cssProp]);
+        if (!stash[cssProp]) el.style.removeProperty(cssProp);
+        delete stash[cssProp];
+      }
+      return;
+    }
+    if (stash[cssProp] === undefined) stash[cssProp] = el.style.getPropertyValue(cssProp);
+    el.style.setProperty(cssProp, value);
+  }
+
+  /* hide comes first and short-circuits nothing else on purpose: a band that
+     hides AND recolours resolves to both, the recolour simply lands on an
+     element nobody can see. That's the union rule doing what it should. */
+  if (props.hide) {
+    put(props.hideMode === "hidden" ? "visibility" : "display",
+        props.hideMode === "hidden" ? "hidden" : "none");
+  } else {
+    put("display", null);
+    put("visibility", null);
+  }
+
+  var capW = props.maxW !== undefined ? props.maxW : fallback.maxW;
+  put("max-width", capW > 0 ? capW + "px" : null);
+  put("min-width", props.minW > 0 ? props.minW + "px" : null);
+  put("max-height", props.maxH > 0 ? props.maxH + "px" : null);
+  put("min-height", props.minH > 0 ? props.minH + "px" : null);
+  put("width", props.widthPct > 0 ? props.widthPct + "%" : null);
+  put("font-size", props.fontSize > 0 ? props.fontSize + "px" : null);
+  put("opacity", props.opacity !== undefined ? props.opacity : null);
+  put("border-radius", props.radius >= 0 && props.radius !== undefined ? props.radius + "px" : null);
+  put("padding", props.padding || null);
+  put("overflow", props.overflow || null);
+  /* a scroll container that doesn't say so is invisible to a visitor, so the
+     one overflow value that produces a scrollbar gets the shared edge fade
+     the stylesheet defines for it */
+  el.classList.toggle("rs-scrolls", props.overflow === "auto");
+
+  /* colour lands on whichever property the existing colour system already
+     picked for this kind of element (an icon's foreground, a text field's
+     font colour, a container's background), so a band and the style popover
+     are painting the same surface rather than two different ones. Goes
+     through put() like everything else, which is what hands the popover's own
+     value back the moment the band stops covering this width. */
+  var colorProp = colorTarget(el) === "bg" ? "background-color" : "color";
+  put(colorProp, props.color ? resolveThemedColor(props.color, "") : null);
+  /* a button is the one element with two independently controlled surfaces,
+     so its label colour is a separate band property rather than the same one */
+  if (colorProp !== "color") put("color", props.textColor ? resolveThemedColor(props.textColor, "") : null);
+
+  el.dataset.rsStash = JSON.stringify(stash);
+
+  /* position and scale ride the transform paintPos() already composes, rather
+     than a second one that would stomp it */
+  var dx = fallback.dx, dy = fallback.dy;
+  if (props.anchor === "right") dx = responsiveAnchorDelta(el, "right");
+  else if (props.anchor === "center") dx = responsiveAnchorDelta(el, "center");
+  var scale = props.scale > 0 ? props.scale : 0;
+  if (dx || dy) { el.dataset.rsDx = dx; el.dataset.rsDy = dy; }
+  else { delete el.dataset.rsDx; delete el.dataset.rsDy; }
+  if (scale && scale !== 1) el.dataset.rsScale = scale;
+  else delete el.dataset.rsScale;
+
+  /* a free-placed element is moved by its WRAP, not by its own transform.
+     The wrap is an absolutely positioned box sitting at a frozen document
+     left, and that box is what the document measures its scrollable width
+     against - so translating only the element inside it slid the visible
+     button back on screen while leaving a 567px-wide empty box behind it,
+     and the page still scrolled sideways to nothing. Moving the wrap moves
+     the box as well as the paint.
+
+     The scale deliberately stays on the element: the wrap is the slot the
+     element was detached into, and scaling the slot would move everything
+     measured from it rather than shrink what's in it. */
+  var wrap = el.parentElement;
+  var onWrap = !!(wrap && wrap.classList.contains("free-wrap"));
+  if (onWrap) {
+    wrap.style.transform = (dx || dy) ? "translate(" + dx + "px, " + dy + "px)" : "";
+    el.dataset.rsOnWrap = "1";
+  } else {
+    delete el.dataset.rsOnWrap;
+  }
+  paintPos(el);
+}
+
+/**
+ * The horizontal delta that pins an element to one side of its container
+ * instead of letting the proportional fallback slide it.
+ * @param el the element
+ * @param which "right" or "center"
+ * @return a delta in css px to compose over the saved offset
+ * @note Measured off the live container every pass rather than stored, for
+ * the same reason applyElementAnchors() re-reads its spacer: the container's
+ * width is whatever the shared page column resolves to today.
+ */
+function responsiveAnchorDelta(el, which) {
+  var id = elId(el);
+  var saved = id ? EDIT_POSITIONS[id] : null;
+  var host = responsiveAxisEl(el, "auto");
+  var hostW = host ? host.getBoundingClientRect().width : (document.documentElement.clientWidth || 0);
+  var base = saved && saved.bw > 0 ? saved.bw : AUTHORED_WIDTH;
+  if (!(hostW > 0) || !(base > 0)) return 0;
+  /* right: hold the gap the element had to the container's right edge at the
+     width it was drawn at, which is the whole container's change in width */
+  if (which === "right") return hostW - base;
+  return (hostW - base) / 2;
+}
+
+/**
+ * Resolves and paints the responsive layer for every tracked element on the
+ * page. Idempotent and cheap enough to run on every resize frame: it reads
+ * live rects and writes only what changed.
+ * @note Runs LAST in applySharedOverridePasses() so it composes over finished
+ * geometry, and again on resize because a container's width changes without
+ * any override pass running at all.
+ */
+function applyResponsiveBehaviour() {
+  RESPONSIVE_FLOW = {};
+  var els = [].slice.call(document.querySelectorAll(RESIZABLE_SEL));
+  var flowTouched = false;
+  els.forEach(function (el) {
+    var id = elId(el);
+    if (!id) return;
+    /* an element the ta deleted stays deleted - applyHiddenOverrides() owns
+       that, and a band must never be able to bring one back */
+    if (HIDDEN_IDS[id]) return;
+    var entry = RESPONSIVE[id];
+    var axisW = responsiveAxisWidth(el, entry && entry.axis ? entry.axis : "auto");
+    var props = resolveResponsiveProps(id, axisW);
+    /* the flow fields are the container's business, not this element's box:
+       peel them off into RESPONSIVE_FLOW for areaFlowFor() to merge */
+    var flow = null;
+    Object.keys(props).forEach(function (k) {
+      var spec = RESPONSIVE_PROPS[k];
+      if (!spec || !spec.flow) return;
+      if (!flow) flow = {};
+      flow[k] = props[k];
+      delete props[k];
+    });
+    if (flow) { RESPONSIVE_FLOW[id] = flow; flowTouched = true; }
+    paintResponsive(el, props, responsiveFallbackFor(el, axisW));
+  });
+  /* only re-lay the tiles when the resolved flow overrides actually CHANGED.
+     applyTileFlow() rebuilds every flow area it finds, which is far too much
+     work for every frame of a window drag - and worse, it changes container
+     sizes, which is exactly what the ResizeObserver below is watching for, so
+     running it unconditionally would have each pass schedule the next one for
+     as long as the page was open. */
+  var sig = JSON.stringify(RESPONSIVE_FLOW);
+  if (sig !== RESPONSIVE_FLOW_SIG) {
+    RESPONSIVE_FLOW_SIG = sig;
+    applyTileFlow();
+  }
+}
+window.applyResponsiveBehaviour = applyResponsiveBehaviour;
+
+/* the previous pass's RESPONSIVE_FLOW, serialised, so applyResponsiveBehaviour()
+   can tell a real change from a re-resolve to the same answer - including the
+   pass that drops the last override, which still has to re-lay the tiles once
+   to clear it */
+var RESPONSIVE_FLOW_SIG = "{}";
+
+/* ---- design rule check ----
+
+   The same idea as a pcb drc, and the name a ta asked for it by: a fixed set
+   of rules, each with a severity, each waivable with a reason, run over the
+   whole page at one width and reported rather than enforced. A ta can always
+   overrule one - the point is that they see it first.
+
+   Deliberately NOT checking sibling overlap, which a normal drc would: this
+   editor is free placement, elements are MEANT to sit on top of each other
+   (an icon on a card, a label over a photo), and flagging that would bury the
+   five rules below in noise nobody would read past. */
+
+/* the minimum comfortable touch target and the smallest readable body text,
+   both the widely used accessibility floors rather than anything this site
+   invented. See runResponsiveDrc(). */
+var DRC_MIN_TOUCH = 44;
+var DRC_MIN_FONT = 12;
+
+/* how far past an edge an element has to reach before it counts as
+   overhanging. Sub-pixel layout rounding puts full-width elements a fraction
+   over routinely, and reporting those buries the real findings. */
+var DRC_EDGE_SLACK = 2;
+
+/**
+ * Whether el sits inside something that scrolls horizontally, and so is
+ * allowed to be outside the viewport.
+ * @param el the element
+ * @return true if any ancestor clips or scrolls its overflow
+ * @note Stops at body: the document's own scrolling is the thing the overflow
+ * rule is actually about, so treating it as an excuse would switch the rule
+ * off entirely.
+ */
+function inScrollingAncestor(el) {
+  var p = el.parentElement;
+  while (p && p !== document.body && p !== document.documentElement) {
+    var ox = getComputedStyle(p).overflowX;
+    if (ox === "auto" || ox === "scroll" || ox === "hidden") return true;
+    p = p.parentElement;
+  }
+  return false;
+}
+
+/**
+ * Runs the design rule check over every tracked element at the width the page
+ * is laid out at right now.
+ * @return an array of {id, rule, sev, msg}, sev being "err" or "warn"
+ * @note Resolves the responsive layer first rather than trusting whatever the
+ * last rAF painted, so a caller that has just changed the frame's width gets
+ * an answer about THAT width instead of the previous one.
+ */
+function runResponsiveDrc() {
+  applyResponsiveBehaviour();
+  var out = [];
+  var vw = document.documentElement.clientWidth || window.innerWidth;
+  document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
+    var id = elId(el);
+    if (!id || HIDDEN_IDS[id]) return;
+    var cs = getComputedStyle(el);
+    var hidden = cs.display === "none" || cs.visibility === "hidden";
+    /* something a visitor can act on that this width has taken away entirely.
+       Only flagged for elements carrying a link, since those are the ones
+       where hiding removes a route through the site rather than a decoration. */
+    if (hidden) {
+      if (LINKS[id]) {
+        out.push({ id: id, rule: "hidden-link", sev: "warn",
+                   msg: "Link hidden at this width, with no other route to it" });
+      }
+      return;
+    }
+    var r = el.getBoundingClientRect();
+    if (!r.width && !r.height) return;
+    /* an element inside something that scrolls is MEANT to sit outside the
+       viewport - that's what a scroll container is. The reel's own strip is
+       the standing example: every tile past the first legitimately measures
+       hundreds of px off the left, and reporting each one would bury the real
+       findings under a page of noise. The scroller ITSELF is still checked,
+       which is where a genuine overflow shows up anyway. */
+    if (inScrollingAncestor(el)) return;
+    /* past the right edge of the window. The single most common way a page
+       authored at one width breaks at another, and the one the automatic
+       fallback in responsiveFallbackFor() exists to prevent - so anything
+       still reaching here is genuinely worth a ta's attention. */
+    /* a 2px tolerance, not a hairline one. Sub-pixel layout rounding routinely
+       puts a full-width element a fraction past the edge, and a panel full of
+       "overhangs by 1px" rows is a panel a ta stops reading. */
+    if (r.right > vw + DRC_EDGE_SLACK) {
+      out.push({ id: id, rule: "overflow", sev: "err",
+                 msg: "Overhangs the right edge by " + Math.round(r.right - vw) + "px" });
+    }
+    if (r.left < -DRC_EDGE_SLACK) {
+      out.push({ id: id, rule: "offscreen", sev: "err",
+                 msg: "Sits " + Math.round(-r.left) + "px off the left edge" });
+    }
+    /* a tap target too small to hit reliably. Buttons and linked elements
+       only: a 12px icon that isn't clickable is a decoration, not a target. */
+    if ((LINKS[id] || isButtonEl(el)) && (r.width < DRC_MIN_TOUCH || r.height < DRC_MIN_TOUCH)) {
+      out.push({ id: id, rule: "touch-target", sev: "warn",
+                 msg: "Tap target is " + Math.round(r.width) + "x" + Math.round(r.height) +
+                      ", under " + DRC_MIN_TOUCH + "px" });
+    }
+    var fs = parseFloat(cs.fontSize);
+    if (el.hasAttribute("data-edit-id") && fs && fs < DRC_MIN_FONT && (el.textContent || "").trim()) {
+      out.push({ id: id, rule: "tiny-text", sev: "warn",
+                 msg: "Text is " + Math.round(fs) + "px, under the " + DRC_MIN_FONT + "px floor" });
+    }
+  });
+  /* a violation the ta has already looked at and accepted stays off the list
+     until the rule or the element changes - a panel that can never reach zero
+     is a panel nobody reads */
+  return out.filter(function (v) { return !RESPONSIVE_WAIVERS[v.id + "|" + v.rule]; });
+}
+window.runResponsiveDrc = runResponsiveDrc;
+
+/**
+ * Selects one element by id and scrolls it into view, so a click on a drc
+ * violation out in the portal lands the ta on the element it is about.
+ * @param id the element's data-edit-id/data-resize-id
+ * @return true if the element was found
+ */
+function selectResponsiveElement(id) {
+  var el = elByAnyId(id);
+  if (!el) return false;
+  RING_EL = el;
+  positionRing();
+  try { el.scrollIntoView({ block: "center", behavior: "smooth" }); } catch (e) { el.scrollIntoView(); }
+  return true;
+}
+window.selectResponsiveElement = selectResponsiveElement;
+
+/**
+ * A short human name for one element, for the plane pane's header and the drc
+ * list - both of which would otherwise be showing raw dotted ids.
+ * @param id the element's data-edit-id/data-resize-id
+ * @return a label string
+ * @note Falls back through the element's own words, then its kind, then the
+ * id itself: a placed rectangle has no text to name it by, and an id like
+ * "extras.tile.icon" is more use than "(no name)".
+ */
+function responsiveElementLabel(id) {
+  var el = elByAnyId(id);
+  if (!el) return id;
+  var text = (el.textContent || "").trim().replace(/\s+/g, " ");
+  /* a stray character or two is not a name - the theme toggle's label came out
+     as "w", which tells a ta reading a drc row nothing at all. Fall through to
+     the kind or the id, both of which at least identify the thing. */
+  if (text.length < 3) text = "";
+  if (text && text.length <= 32) return text;
+  if (text) return text.slice(0, 30) + "...";
+  var kind = elKind(el);
+  return kind ? kind.charAt(0).toUpperCase() + kind.slice(1) : id;
+}
+window.responsiveElementLabel = responsiveElementLabel;
+
+/**
+ * The width one element's bands are currently being measured against, for the
+ * plane pane's "measured against" caption - the number a ta is drawing edges
+ * in, which for anything inside a container is NOT the window's width.
+ * @param id the element's data-edit-id/data-resize-id
+ * @param axis "auto", "viewport" or "parent"
+ * @return {w, host} - the width, and a short name for what was measured
+ */
+function responsiveAxisReadout(id, axis) {
+  var el = elByAnyId(id);
+  if (!el) return { w: 0, host: "" };
+  var hostEl = responsiveAxisEl(el, axis || "auto");
+  return {
+    w: Math.round(responsiveAxisWidth(el, axis || "auto")),
+    host: hostEl ? (elId(hostEl) || "its container") : "the window"
+  };
+}
+window.responsiveAxisReadout = responsiveAxisReadout;
+
+/* re-resolves every band whenever the window changes size, on the same
+   debounce and for the same reason as the anchor pass above it - except this
+   one also has to catch a CONTAINER changing width without the window
+   doing so (a tile row rewrapping, a section's column resolving differently),
+   which is what the ResizeObserver is for. Both funnel through one
+   rAF-coalesced call so a drag across the whole screen paints once a frame
+   rather than once an event. */
+(function () {
+  var queued = false;
+  function schedule() {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(function () {
+      queued = false;
+      applyResponsiveBehaviour();
+    });
+  }
+  window.addEventListener("resize", schedule);
+  window.addEventListener("load", schedule);
+  window.responsiveRepaintSoon = schedule;
+  if (window.ResizeObserver) {
+    var ro = new ResizeObserver(schedule);
+    /* observe the containers bands are measured against, not every element -
+       observing an element this pass then RESIZES is a feedback loop */
+    window.observeResponsiveHosts = function () {
+      try { ro.disconnect(); } catch (e) {}
+      /* flow containers and the body, and nothing else. Every other candidate
+         (.free-wrap, .wrap) is both numerous and something this pass can
+         itself resize, which would have the observer re-firing on the pass's
+         own output - the containers below are the only boxes bands are
+         actually measured against, so they're the only ones worth watching. */
+      document.querySelectorAll("[data-flow-area]").forEach(function (host) {
+        try { ro.observe(host); } catch (e) {}
+      });
+      try { ro.observe(document.body); } catch (e) {}
+    };
+  } else {
+    window.observeResponsiveHosts = function () {};
+  }
+})();
+
 /**
  * Persists the whole custom_elements list into the preview snapshot, the
  * same localStorage draft every other override here uses. Rewritten
@@ -12517,6 +13437,12 @@ function applyLiveAreaOverrides(data) {
      above (a resized icon, a hidden row, a longer filename) can change */
   applyTileFlow();
   repaintLocalTileContent();
+  /* the tiles in here were rebuilt from scratch a moment ago, so every one of
+     them came back carrying none of the responsive layer - same reason every
+     other sweep above is re-run over them. The host observer goes with it: the
+     containers it was watching are not the containers now in the dom. */
+  applyResponsiveBehaviour();
+  if (window.observeResponsiveHosts) window.observeResponsiveHosts();
 }
 window.applyLiveAreaOverrides = applyLiveAreaOverrides;
 
@@ -14537,6 +15463,14 @@ function wireAddElementMenu() {
        same menu's "Insert ..." buttons */
     e.preventDefault();
     var t = resolveSelectableTarget(e.target);
+    /* every entry on this menu edits the element (add, duplicate, delete,
+       link, tooltip, promote, lock), so in responsive mode the menu has
+       nothing left to offer - and the right-click still selects, which is the
+       one thing that does still mean something */
+    if (RESPONSIVE_MODE) {
+      if (t) { RING_EL = t; positionRing(); }
+      return;
+    }
     /* a right-click counts as "selecting" a tile too, so the tile-scoped
        actions work on first try without a separate left-click first */
     noteTileSelection(t);
@@ -14705,6 +15639,11 @@ function wireResizable() {
     RING_EL = el;
     positionRing();
 
+    /* responsive mode stops here, having done the one thing a click still
+       means in it: pick the element the plane pane is authoring. Deliberately
+       after the selection above and before every drag path below, so
+       selecting still works exactly as it always did and nothing else does. */
+    if (RESPONSIVE_MODE) { e.preventDefault(); return; }
     /* locked: don't even start tracking a possible drag, see isLocked() */
     if (isLocked(elId(el))) return;
     /* a flow container's tile is grabbed by its background and carried to a
@@ -14807,7 +15746,7 @@ function wireResizable() {
      should just type/edit as normal */
   document.addEventListener("keydown", function (e) {
     if (e.key !== "Delete" && e.key !== "Backspace") return;
-    if (!RING_EL) return;
+    if (!RING_EL || RESPONSIVE_MODE) return;
     var active = document.activeElement;
     if (active && (active.isContentEditable || active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT")) return;
     e.preventDefault();
@@ -14842,7 +15781,8 @@ function wireResizable() {
   document.addEventListener("keydown", function (e) {
     var d = ARROW_DELTAS[e.key];
     if (!d) return;
-    if (!RING_EL || isPageEl(RING_EL) || isLocked(elId(RING_EL)) || isMoveLockedTileRole(RING_EL)) return;
+    if (!RING_EL || RESPONSIVE_MODE || isPageEl(RING_EL) || isLocked(elId(RING_EL)) ||
+        isMoveLockedTileRole(RING_EL)) return;
     var active = document.activeElement;
     if (active && (active.isContentEditable || active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT")) return;
     e.preventDefault();
@@ -14895,7 +15835,7 @@ function wireResizable() {
   });
   document.addEventListener("keydown", function (e) {
     if (e.key !== "c" && e.key !== "C" && e.key !== "v" && e.key !== "V") return;
-    if (!(e.ctrlKey || e.metaKey)) return;
+    if (!(e.ctrlKey || e.metaKey) || RESPONSIVE_MODE) return;
     var active = document.activeElement;
     if (active && (active.isContentEditable || active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT")) return;
     if (e.key === "c" || e.key === "C") {
@@ -16348,6 +17288,11 @@ function wireTextField(el) {
        toolbar button, which reads whichever reference the caret is in - see
        tokenAtSelection(). */
     if (el.isContentEditable) return;
+    /* responsive mode doesn't change what a field SAYS, so a click on one
+       selects it like a click on any other element and stops there. The
+       mousedown handler in wireResizable() has already done that selecting
+       by the time this runs. */
+    if (RESPONSIVE_MODE) { e.preventDefault(); e.stopPropagation(); return; }
     /* shift-click already toggled group-selection in the mousedown handler
        above (wireResizable(), which runs for every tracked element,
        text fields included, and fires before this click event does); this
@@ -17329,8 +18274,35 @@ function saveEditedPosition(id, tx, ty) {
   try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
   if (!snapshot.positions || typeof snapshot.positions !== "object") snapshot.positions = {};
   if (tx == null || ty == null) delete snapshot.positions[id];
-  else snapshot.positions[id] = { tx: tx, ty: ty };
+  /* `bw` is the width of the container this offset was measured inside, saved
+     alongside it because tx alone doesn't say what it's a third of. It's the
+     denominator responsiveFallbackFor() turns the frozen pixel back into a
+     proportion with, and without it every drag would have to be assumed to
+     have happened at the blob-wide AUTHORED_WIDTH - right for the ta who set
+     that, wrong for every other window that has edited since. */
+  else snapshot.positions[id] = { tx: tx, ty: ty, bw: responsivePosBaseWidth(id) };
+  /* the same question one level up, for every override that ISN'T a position:
+     a saved width or font size is equally a figure measured at one viewport,
+     and the fallback needs a viewport to compare today's against */
+  snapshot.authored_width = document.documentElement.clientWidth || window.innerWidth || 0;
   try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
+ * The width of the container one element's offsets are measured inside, for
+ * saveEditedPosition() to record with the drag.
+ * @param id the element's data-edit-id/data-resize-id
+ * @return a width in css px, or 0 if the element isn't in the dom
+ * @note Deliberately the same responsiveAxisEl() the resolver uses, so the
+ * number written here and the number divided by later are the same
+ * measurement of the same box.
+ */
+function responsivePosBaseWidth(id) {
+  var el = elByAnyId(id);
+  if (!el) return 0;
+  var host = responsiveAxisEl(el, "auto");
+  var w = host ? host.getBoundingClientRect().width : (document.documentElement.clientWidth || 0);
+  return w > 0 ? Math.round(w) : 0;
 }
 
 /**
@@ -18280,6 +19252,15 @@ function applySharedOverridePasses(data, textMap) {
      which error string is showing - and only this pass knows when they
      actually exist in the dom */
   if (window.refreshLoginPage) window.refreshLoginPage();
+  /* dead last, over finished geometry. Everything above writes an element's
+     authored box and offset; this reads those and composes today's width on
+     top of them, so it has to see the final answer rather than an
+     intermediate one - and it's also the only pass here that has to keep
+     running long after the load, on every resize (see the RESPONSIVE
+     BEHAVIOUR section). The hooks above build the day/extras/gallery tiles,
+     which is why the host observer is re-armed after them and not before. */
+  applyResponsiveOverrides(data.responsive, data.responsive_waivers, data.authored_width);
+  if (window.observeResponsiveHosts) window.observeResponsiveHosts();
 }
 
 /**

@@ -18,7 +18,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/style.css?v=37" />
+  <link rel="stylesheet" href="css/style.css?v=38" />
 </head>
 <body class="mono">
 
@@ -330,6 +330,23 @@
                   <span class="ed-switch-text" id="edThemeText">Dark</span>
                 </button>
               </div>
+              <!-- how each element behaves as the page gets narrower. Not the
+                   same kind of control as the four above it, which is why it's
+                   bigger and on the lavender accent rather than the blue one:
+                   those change what the ta is looking at, this one changes
+                   what every click in the frame does. With it on, elements
+                   can still be SELECTED but not moved, resized, styled,
+                   layered, deleted or typed into - the click's only job is to
+                   say which element the plane below is authoring bands for.
+                   See setResponsiveMode() in js/main.js. -->
+              <div class="ed-switch-row ed-switch-row-lg" id="edResponsiveRow">
+                <span class="ed-switch-cap">Responsive</span>
+                <button class="ed-switch ed-switch-lg" id="edResponsive" type="button"
+                        role="switch" aria-checked="false">
+                  <span class="ed-switch-track"><span class="ed-switch-knob"></span></span>
+                  <span class="ed-switch-text" id="edResponsiveText">Off</span>
+                </button>
+              </div>
             </div>
             <div class="ed-undo-row">
               <!-- what viewport the frame is laying the page out at, and how
@@ -349,6 +366,57 @@
           <div class="pv-frame-wrap" style="height:72vh">
             <iframe id="edFrame" class="pv-frame" title="Visual editor"></iframe>
           </div>
+
+          <!-- the width plane, shown only while the Responsive switch is on.
+               Lives out here in the portal chrome rather than inside the
+               iframe because the frame is the thing being resized and scaled
+               to preview a width - a pane inside it would be resized along
+               with the page it is describing. Built and driven entirely by
+               the RESPONSIVE PLANE section in js/ta.js. -->
+          <div class="rs-pane" id="rsPane" hidden>
+            <div class="rs-pane-head">
+              <div class="rs-pane-title">
+                Responsive behaviour
+                <small id="rsSubject">Select an element in the frame</small>
+              </div>
+              <label class="rs-row" style="font-size:.8rem;color:var(--muted)">
+                Measured against
+                <select id="rsAxis" title="Which box the band edges below are widths of">
+                  <option value="auto">Auto</option>
+                  <option value="parent">Its container</option>
+                  <option value="viewport">The window</option>
+                </select>
+              </label>
+              <button class="btn btn-ghost" id="rsAddBand" type="button">Add band</button>
+              <button class="btn btn-ghost" id="rsFillRest" type="button"
+                      title="Give every width this band does not already cover the same behaviour">
+                Expand to fill the rest
+              </button>
+            </div>
+
+            <div class="rs-strip-wrap" id="rsStripWrap">
+              <div class="rs-ruler" id="rsRuler"></div>
+              <div class="rs-strip" id="rsStrip">
+                <div class="rs-strip-hint" id="rsStripHint">
+                  Drag across to draw a band
+                </div>
+              </div>
+            </div>
+
+            <div class="rs-props" id="rsProps" hidden></div>
+
+            <div class="rs-drc">
+              <div class="rs-drc-head">
+                Design rule check
+                <span class="rs-drc-count" id="rsDrcCount">0</span>
+                <button class="btn btn-ghost" id="rsDrcRun" type="button"
+                        style="margin-left:auto;padding:4px 10px;font-size:.78rem">
+                  Sweep all widths
+                </button>
+              </div>
+              <div class="rs-drc-list" id="rsDrcList"></div>
+            </div>
+          </div>
         </div>
       </section>
     </div>
@@ -362,6 +430,6 @@
 
   <script src="js/theme.js?v=4"></script>
   <script src="js/idle.js?v=5"></script>
-  <script src="js/ta.js?v=21"></script>
+  <script src="js/ta.js?v=22"></script>
 </body>
 </html>

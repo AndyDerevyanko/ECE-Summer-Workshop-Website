@@ -497,6 +497,21 @@ DEFAULT_CONTENT = {
         "hero.cta.primary": {**_APPLY_TOOLTIP_SEED},
         "prizes.cta": {**_APPLY_TOOLTIP_SEED},
     },
+    # how each element behaves as the page narrows, keyed by data-edit-id/
+    # data-resize-id: {id: {axis, regions: [{from, to, ramp, props}]}}. Authored
+    # from the Responsive switch in the editor chrome; see the RESPONSIVE
+    # BEHAVIOUR section in js/main.js for the resolver these feed, and seed()
+    # in js/ta.js for the field-by-field shape.
+    #
+    # Seeded empty on purpose. Everything a ta places is stored as an absolute
+    # pixel offset measured at one viewport width, so an element with no entry
+    # is NOT left sitting on those raw pixels - responsiveFallbackFor() anchors
+    # and scales it instead. Regions are the per-element override on top of
+    # that, not the thing that makes the page work at all.
+    "responsive": {},
+    # design-rule violations a ta has accepted, keyed "<id>|<rule>" with a short
+    # reason as the value. See runResponsiveDrc() in js/main.js.
+    "responsive_waivers": {},
 }
 DEFAULT_CONTENT["custom_elements"].append(_LEARN_REEL_ENTRY)
 DEFAULT_CONTENT["text"].update(_LEARN_REEL_TEXT)

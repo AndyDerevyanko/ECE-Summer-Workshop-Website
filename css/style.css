@@ -3567,3 +3567,324 @@ body.edit-mode .fx-chip { cursor: pointer; border-bottom: 1px dashed currentColo
 }
 
 body.mono .day-card .daytag { color: var(--accent); }
+
+/* ============================================================
+   RESPONSIVE MODE + THE WIDTH PLANE
+
+   The editor chrome's Responsive switch (js/ta.js) and the band pane it
+   opens under the frame. See the RESPONSIVE BEHAVIOUR section in js/main.js
+   for what the bands a ta draws in here actually do.
+   ============================================================ */
+
+/* the switch itself. Bigger than the Navbar/Snap/Theme row it sits in and on
+   the lavender accent rather than the blue one, because it isn't the same
+   kind of control as its neighbours: those change what a ta is LOOKING at,
+   this one changes what every click in the frame DOES. */
+.ed-switch-lg { padding: 9px 15px 9px 10px; font-size: .97rem; }
+.ed-switch-lg .ed-switch-track { width: 46px; height: 26px; }
+.ed-switch-lg .ed-switch-knob { width: 20px; height: 20px; }
+.ed-switch-lg[aria-checked="true"] .ed-switch-knob { transform: translateX(20px); }
+.ed-switch-lg[aria-checked="true"] .ed-switch-track { background: var(--accent-2); }
+.ed-switch-lg[aria-checked="true"] {
+  border-color: color-mix(in srgb, var(--accent-2) 60%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-2) 35%, transparent);
+}
+.ed-switch-row-lg .ed-switch-cap { color: var(--accent-2); }
+
+/* the frame says out loud that it is in the mode. Someone whose drags quietly
+   stop working assumes the editor has broken, not that a switch is on. */
+body.rs-armed { outline: 2px solid var(--accent-2); outline-offset: -2px; }
+body.rs-armed::after {
+  content: "Responsive mode - drawing behaviour, not editing";
+  position: fixed;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  z-index: 10001;
+  padding: 5px 13px;
+  border-radius: 999px;
+  background: var(--accent-2);
+  color: #fff;
+  font-family: var(--font-head);
+  font-size: .74rem;
+  font-weight: 700;
+  letter-spacing: .3px;
+  pointer-events: none;
+}
+/* every handle on the ring edits something the mode has suspended, so the
+   ring goes back to being a plain outline of whatever is selected */
+.sel-ring.rs-mode { border-color: var(--accent-2); border-width: 2px; }
+.sel-ring.rs-mode .rh,
+.sel-ring.rs-mode .mvh,
+.sel-ring.rs-mode .delh,
+.sel-ring.rs-mode .lyh,
+.sel-ring.rs-mode .sth,
+.sel-ring.rs-mode .parh { display: none; }
+
+/* an element a band gave overflow:auto scrolls, and a scroll container with
+   nothing to say so is invisible - this is the affordance that makes it
+   findable, faded from the element's own surface so it works on any colour */
+.rs-scrolls {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 22px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 22px), transparent);
+  scrollbar-width: thin;
+}
+
+/* ---- the pane ---- */
+.rs-pane {
+  margin-top: 14px;
+  padding: 14px 16px 16px;
+  border: 1px solid color-mix(in srgb, var(--accent-2) 34%, transparent);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.rs-pane[hidden] { display: none; }
+.rs-pane-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.rs-pane-title {
+  font-family: var(--font-head);
+  font-weight: 700;
+  font-size: 1rem;
+  margin-right: auto;
+}
+.rs-pane-title small {
+  display: block;
+  font-weight: 500;
+  font-size: .78rem;
+  color: var(--muted);
+}
+.rs-pane select, .rs-pane input[type="text"], .rs-pane input[type="number"] {
+  padding: 5px 8px;
+  border: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: .85rem;
+}
+.rs-empty { color: var(--muted); font-size: .88rem; padding: 18px 0; text-align: center; }
+
+/* ---- the width strip ---- */
+/* the plane is ONE axis on purpose: responsive work is almost entirely about
+   width, and a second axis would double the authoring cost per element for a
+   case that rarely decides anything. */
+.rs-strip-wrap { position: relative; user-select: none; }
+.rs-ruler {
+  position: relative;
+  height: 30px;
+  margin-bottom: 2px;
+  cursor: ew-resize;
+}
+.rs-guide {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--grid-line-strong);
+}
+/* the widths css/style.css itself already reflows the page at, drawn stronger
+   than the device marks: a band edge that misses one of these by a few px
+   gives a visitor two layout jolts a hair apart instead of one */
+.rs-guide.rs-guide-bp { background: color-mix(in srgb, var(--warn) 55%, transparent); }
+/* where the ta's own window is, ie the one width their saved pixel geometry
+   is already exactly correct at */
+.rs-guide.rs-guide-here { background: var(--accent-2); width: 2px; }
+.rs-guide span {
+  position: absolute;
+  top: 0;
+  left: 3px;
+  font-size: .62rem;
+  font-family: var(--font-mono);
+  color: var(--muted);
+  white-space: nowrap;
+}
+/* the seven css breakpoints crowd together between 860 and 1300, where on a
+   log axis they are only a few px apart - so alternate labels drop to a
+   second row rather than printing on top of each other */
+.rs-guide.rs-low span { top: 14px; }
+.rs-guide.rs-guide-bp span { color: color-mix(in srgb, var(--warn) 85%, var(--text)); }
+.rs-guide.rs-guide-here span { color: var(--accent-2); font-weight: 700; }
+.rs-strip {
+  position: relative;
+  height: 62px;
+  border: 1px solid color-mix(in srgb, var(--text) 14%, transparent);
+  border-radius: 8px;
+  background:
+    repeating-linear-gradient(45deg,
+      transparent 0 6px,
+      color-mix(in srgb, var(--text) 5%, transparent) 6px 12px);
+  cursor: crosshair;
+  overflow: hidden;
+}
+/* an uncovered stretch is not "nothing happens" - it is the nearest band on
+   the wide side still holding, over the automatic proportional fallback under
+   everything. The hatch is what stops it reading as empty. */
+/* the [hidden] attribute loses to the display below unless it is spelled out,
+   which is why the hint sat on top of the bands it was telling a ta to draw */
+.rs-strip-hint[hidden] { display: none; }
+.rs-strip-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: .74rem;
+  color: var(--muted);
+  pointer-events: none;
+}
+.rs-band {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  border: 1px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+  cursor: pointer;
+  overflow: hidden;
+}
+.rs-band.sel {
+  border-color: var(--accent-2);
+  background: color-mix(in srgb, var(--accent-2) 34%, transparent);
+  box-shadow: 0 0 0 1px var(--accent-2);
+}
+.rs-band b {
+  position: absolute;
+  left: 6px;
+  top: 4px;
+  right: 6px;
+  font-size: .68rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+.rs-band i {
+  position: absolute;
+  left: 6px;
+  bottom: 4px;
+  font-size: .62rem;
+  font-style: normal;
+  font-family: var(--font-mono);
+  color: color-mix(in srgb, var(--text) 70%, transparent);
+  pointer-events: none;
+}
+.rs-band-grip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: ew-resize;
+}
+.rs-band-grip.l { left: 0; }
+.rs-band-grip.r { right: 0; }
+/* two bands setting the SAME property is the one case the union rule cannot
+   resolve on its own, so it gets a marker rather than a silent winner */
+.rs-band.clash {
+  background-image: repeating-linear-gradient(135deg,
+    transparent 0 4px, color-mix(in srgb, var(--warn) 45%, transparent) 4px 8px);
+}
+/* where the frame is actually laid out right now */
+.rs-cursor {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--text);
+  pointer-events: none;
+}
+.rs-cursor::after {
+  content: attr(data-w);
+  position: absolute;
+  top: -19px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--text);
+  color: var(--bg);
+  font-family: var(--font-mono);
+  font-size: .62rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* ---- the selected band's properties ---- */
+.rs-props {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 10px 14px;
+}
+.rs-props[hidden] { display: none; }
+.rs-field { display: flex; flex-direction: column; gap: 4px; }
+.rs-field label {
+  font-size: .72rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .3px;
+}
+.rs-field input, .rs-field select { width: 100%; }
+.rs-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rs-row.rs-span { grid-column: 1 / -1; }
+
+/* ---- design rule check ---- */
+.rs-drc { margin-top: 12px; }
+.rs-drc-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-head);
+  font-weight: 700;
+  font-size: .88rem;
+  margin-bottom: 8px;
+}
+.rs-drc-count {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: .68rem;
+  font-weight: 700;
+  background: var(--good);
+  color: #fff;
+}
+.rs-drc-count.bad { background: var(--rose); }
+.rs-drc-count.warn { background: var(--warn); }
+.rs-drc-list { display: flex; flex-direction: column; gap: 5px; max-height: 190px; overflow-y: auto; }
+.rs-drc-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 9px;
+  border-radius: 7px;
+  border-left: 3px solid var(--warn);
+  background: var(--surface-2);
+  font-size: .8rem;
+}
+.rs-drc-item.err { border-left-color: var(--rose); }
+.rs-drc-item .rs-drc-where {
+  font-family: var(--font-mono);
+  font-size: .7rem;
+  color: var(--muted);
+  margin-left: auto;
+  white-space: nowrap;
+}
+.rs-drc-item button {
+  flex: none;
+  padding: 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--text) 20%, transparent);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: .68rem;
+  cursor: pointer;
+}
+.rs-drc-item button:hover { color: var(--text); }
+.rs-drc-waived { opacity: .5; }

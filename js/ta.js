@@ -177,7 +177,33 @@ function seed() {
        whole descriptor each (the words, where the bubble sits, how it looks)
        rather than a map per property. Added from the editor's right-click
        menu; this replaced the old apply_tooltip field. */
-    tooltips: {}
+    tooltips: {},
+    /* how each element behaves as the page gets narrower, keyed by
+       data-edit-id/data-resize-id and authored from the Responsive switch in
+       the editor chrome (see js/main.js's RESPONSIVE BEHAVIOUR section).
+       {id: {axis, regions: [{from, to, ramp, props}]}}:
+
+         axis    what the region bounds are measured against - "auto" (the
+                 element's own container if it sits in one, else the window),
+                 "viewport" or "parent". See responsiveAxisWidth().
+         regions non-overlapping-by-default bands along that width, each
+                 naming a from/to in css px and the properties in force
+                 across it. Regions UNION: two bands covering the same width
+                 both apply, and only two bands setting the SAME property
+                 need a tiebreak (later in the array wins).
+         ramp    "none" for a flat value across the band, "linear" to
+                 interpolate each numeric property from its value at `from`
+                 to its value at `to`.
+
+       An element with no entry (which is every element until a ta draws one)
+       still isn't left at its authored-width pixel offsets - see
+       responsiveFallbackFor() for what happens instead. */
+    responsive: {},
+    /* design-rule violations a ta has looked at and accepted, keyed by
+       "<id>|<rule>", value a short reason. Waived violations stay off the
+       DRC panel until the rule or the element's regions change, so the panel
+       can actually reach zero - see runResponsiveDrc() in js/main.js. */
+    responsive_waivers: {}
   };
 }
 
@@ -381,6 +407,25 @@ function normalizeState() {
   if (!STATE.progress_track || typeof STATE.progress_track !== "object") STATE.progress_track = {};
   if (!STATE.dark_progress_track || typeof STATE.dark_progress_track !== "object") STATE.dark_progress_track = {};
   if (!STATE.tooltips || typeof STATE.tooltips !== "object") STATE.tooltips = {};
+  if (!STATE.responsive || typeof STATE.responsive !== "object") STATE.responsive = {};
+  if (!STATE.responsive_waivers || typeof STATE.responsive_waivers !== "object") {
+    STATE.responsive_waivers = {};
+  }
+  /* a hand-edited profile (or a region list left half-written by a failed
+     save) can reach here with a regions array missing or the bounds the wrong
+     way round, and the resolver walks these on every resize frame - one bad
+     entry would take every element on the page down with it */
+  Object.keys(STATE.responsive).forEach(function (id) {
+    var entry = STATE.responsive[id];
+    if (!entry || typeof entry !== "object" || !Array.isArray(entry.regions)) {
+      delete STATE.responsive[id];
+      return;
+    }
+    entry.regions = entry.regions.filter(function (r) {
+      return r && typeof r === "object" && isFinite(r.from) && isFinite(r.to) && r.to > r.from;
+    });
+    if (!entry.regions.length) delete STATE.responsive[id];
+  });
   /* footer contact line used to be its own field, edited from a dedicated
      input in this section; now it's click-to-edit like the rest of the
      landing page copy, so fold any already-saved value in once and stop
@@ -1901,6 +1946,13 @@ var frameScrollbarW = 0;
 
 /** @return the viewport width to lay the frame's page out at */
 function editorTargetWidth() {
+  /* the responsive plane's cursor, when a ta is scrubbing it: the whole point
+     of dragging along that strip is to see the page at the width under the
+     cursor, and driving the real frame is a far more convincing preview than
+     any thumbnail beside it could be. Everything below (the scale-to-fit, the
+     viewport caption, the scrollbar correction) then works unchanged - the
+     frame doesn't care where its target width came from. */
+  if (RS_PREVIEW_WIDTH > 0) return RS_PREVIEW_WIDTH;
   /* clientWidth, not innerWidth: the portal has a scrollbar of its own and it
      is already out of this number, exactly as a visitor's own scrollbar is
      already out of the width their page lays out in */
@@ -2613,6 +2665,831 @@ function resetContent() {
   });
 }
 
+/* ---------------------------------------------------------------------------
+   THE RESPONSIVE PLANE
+
+   The pane under the editor frame (templates/instructor.html's #rsPane),
+   shown while the Responsive switch is on. A ta selects an element in the
+   frame and draws BANDS along a width axis; each band names what that element
+   does across that stretch of widths. The resolver those feed lives in the
+   RESPONSIVE BEHAVIOUR section of js/main.js, which also documents the three
+   rules (union, hold, ramp) deciding what a stack of bands comes to.
+
+   Out here in the portal chrome rather than inside the iframe, because the
+   frame is the thing being resized to preview a width - a pane inside it
+   would be resized along with the page it is describing.
+
+   ONE axis, width only. The idea started as a 2d plane of width against
+   height with rectangles and triangles drawn on it, and the honest version of
+   that is this: responsive work is almost entirely about width, a second axis
+   doubles the authoring cost for every element, and the plane would be mostly
+   empty. The stored shape ({from, to}) is the same either way, so a height
+   axis can be added later without rewriting anything a ta has already drawn.
+
+   The strip is LOG scaled. On a linear 320-2560 axis the whole phone range -
+   where most of the decisions actually get made - is a sliver at the left
+   edge, and the 1900-2560 stretch, where almost nothing ever changes, takes a
+   quarter of the width.
+   --------------------------------------------------------------------------- */
+
+/* which element the pane is authoring for, mirrored from the frame's own
+   selection (see onFrameSelectionChanged()) rather than kept separately -
+   two selections that could disagree would be one too many */
+var rsSelectedId = null;
+
+/* which of that element's bands is open in the property grid, by index */
+var rsSelectedBand = -1;
+
+/* the width the strip's cursor is on, which is also the width the frame is
+   being laid out at while a ta scrubs. 0 means "not scrubbing", ie the frame
+   goes back to the ta's real window width (see editorTargetWidth()). */
+var RS_PREVIEW_WIDTH = 0;
+
+/* whether the Responsive switch is on. Like the Navbar/Theme switches, this
+   is view state that lives out here and is re-asserted onto the frame after
+   every reload - the frame always comes back in normal editing mode. */
+var responsiveMode = false;
+
+/* the last drc sweep's findings, {width: [violations]}, so the list can be
+   re-rendered (after a waiver, say) without running the whole sweep again */
+var rsDrcFindings = [];
+
+/** @return the plane's width range, from the frame if it's reachable */
+function rsRange() {
+  var win = editorFrameWindow();
+  try { if (win && win.RESPONSIVE_RANGE) return win.RESPONSIVE_RANGE; } catch (e) {}
+  return { min: 320, max: 2560 };
+}
+
+/**
+ * Where one width sits along the strip.
+ * @param w a width in css px
+ * @return a fraction 0-1
+ */
+function rsPosFor(w) {
+  var r = rsRange();
+  var lo = Math.log(r.min), hi = Math.log(r.max);
+  var t = (Math.log(Math.max(r.min, Math.min(r.max, w))) - lo) / (hi - lo);
+  return Math.max(0, Math.min(1, t));
+}
+
+/**
+ * The width at a fraction along the strip - rsPosFor()'s inverse.
+ * @param t a fraction 0-1
+ * @return a width in css px, rounded
+ */
+function rsWidthAt(t) {
+  var r = rsRange();
+  var lo = Math.log(r.min), hi = Math.log(r.max);
+  return Math.round(Math.exp(lo + (hi - lo) * Math.max(0, Math.min(1, t))));
+}
+
+/** @return the width under a pointer event on the strip */
+function rsWidthFromEvent(e) {
+  var strip = document.getElementById("rsStrip");
+  var r = strip.getBoundingClientRect();
+  return rsWidthAt((e.clientX - r.left) / r.width);
+}
+
+/**
+ * The guides drawn along the ruler.
+ * @return an array of {w, cls, label}
+ * @note Three sets, and the first is the one that matters. The site already
+ * reflows at its own css breakpoints whether or not anyone draws a band
+ * there, so a band edge a few px off one of them gives a visitor two separate
+ * layout jolts instead of one - those are drawn strongest and are what band
+ * edges snap to. The device widths are for answering "does this work on a
+ * phone" by pointing at something. The last is the ta's own window, ie the
+ * one width every saved pixel offset on the page is already exactly right at.
+ */
+function rsGuides() {
+  var win = editorFrameWindow();
+  var bps = [];
+  try { if (win && win.RESPONSIVE_BREAKPOINTS) bps = win.RESPONSIVE_BREAKPOINTS; } catch (e) {}
+  if (!bps.length) bps = [540, 700, 860, 940, 1000, 1150, 1300];
+  /* just the number. The label used to spell out "reflow" on each of these,
+     and between 860 and 1300 - where five of the seven sit within a few px of
+     each other on a log axis - that printed five overlapping words. Which
+     kind of guide it is comes from its colour, and the full explanation from
+     the title, neither of which costs any horizontal room. */
+  var out = bps.map(function (w) { return { w: w, cls: "rs-guide-bp", label: String(w) }; });
+  [375, 768, 1024, 1440, 1920].forEach(function (w) {
+    out.push({ w: w, cls: "", label: String(w) });
+  });
+  var here = document.documentElement.clientWidth;
+  out.push({ w: here, cls: "rs-guide-here", label: here + " you" });
+  /* and what still collides drops to a second row: sorted by width, then any
+     guide too close to the one before it alternates down */
+  out.sort(function (a, b) { return a.w - b.w; });
+  var lastPos = -1, low = false;
+  out.forEach(function (g) {
+    var pos = rsPosFor(g.w);
+    if (lastPos >= 0 && pos - lastPos < 0.06) low = !low;
+    else low = false;
+    if (low) g.cls += " rs-low";
+    lastPos = pos;
+  });
+  return out;
+}
+
+/**
+ * Snaps a width being dragged to a nearby guide.
+ * @param w the raw width
+ * @param free true to skip snapping (a modifier is held)
+ * @return the snapped width
+ * @note The tolerance is in SCREEN px along the strip, not in css px of the
+ * width itself - on a log axis a fixed px tolerance would be enormous at the
+ * narrow end and invisible at the wide one.
+ */
+function rsSnap(w, free) {
+  if (free) return w;
+  var strip = document.getElementById("rsStrip");
+  var px = strip ? strip.getBoundingClientRect().width : 0;
+  /* a strip that hasn't been laid out yet measures zero, and every guide is
+     then zero screen-px from every width - so the first one in the list won
+     every comparison and every edge a ta dragged snapped to 540 regardless of
+     where they dropped it. Fall back to a plausible strip width instead of
+     computing distances against nothing. */
+  if (!(px > 0)) px = 800;
+  var best = w, bestD = 7;
+  rsGuides().forEach(function (g) {
+    var d = Math.abs(rsPosFor(g.w) - rsPosFor(w)) * px;
+    if (d < bestD) { bestD = d; best = g.w; }
+  });
+  return best;
+}
+
+/** @return the selected element's responsive entry, creating it if needed */
+function rsEntry(create) {
+  if (!rsSelectedId) return null;
+  if (!STATE.responsive) STATE.responsive = {};
+  var entry = STATE.responsive[rsSelectedId];
+  if (!entry && create) {
+    entry = STATE.responsive[rsSelectedId] = { axis: "auto", regions: [] };
+  }
+  return entry || null;
+}
+
+/**
+ * Persists whatever the pane has just changed and pushes it into the frame.
+ * @note Pulls the frame's own draft in FIRST, the same order every other
+ * action out here uses (see pullStateFromEditor()): the frame writes its own
+ * incremental overrides straight into the shared snapshot, and writing the
+ * portal's whole STATE over the top without pulling would drop them.
+ * @note Pushes into the live frame rather than reloading it. A reload here
+ * would throw away the scroll position and the selection on every band edge
+ * dragged, which for a control a ta drags continuously would be unusable.
+ */
+function rsCommit() {
+  /* the frame writes its own incremental overrides straight into the shared
+     snapshot, and writePreviewSnapshot() below rewrites that snapshot from
+     the portal's whole STATE - so anything the frame has saved since this
+     page last pulled would be dropped. Pull it back in first, then put the
+     two maps this pane owns back on top: they're the only keys in here the
+     frame never writes, so this can't lose an edit in either direction. */
+  var mine = STATE.responsive, waivers = STATE.responsive_waivers;
+  pullStateFromEditor();
+  STATE.responsive = mine;
+  STATE.responsive_waivers = waivers;
+  writePreviewSnapshot();
+  var win = editorFrameWindow();
+  try {
+    if (win && win.applyResponsiveOverrides) {
+      win.applyResponsiveOverrides(STATE.responsive, STATE.responsive_waivers, STATE.authored_width);
+    }
+  } catch (e) {}
+  rsRenderStrip();
+}
+
+/**
+ * The frame telling the portal which element is selected. Called across the
+ * iframe boundary from reportSelectionToPortal() in js/main.js.
+ * @param id the selected element's id, or null
+ * @param mode whether the frame is in responsive mode
+ */
+function onFrameSelectionChanged(id, mode) {
+  rsSelectedId = id;
+  rsSelectedBand = -1;
+  if (mode !== undefined) responsiveMode = !!mode;
+  rsRenderPane();
+}
+window.onFrameSelectionChanged = onFrameSelectionChanged;
+
+/** Redraws the whole pane: header, strip, property grid. */
+function rsRenderPane() {
+  var pane = document.getElementById("rsPane");
+  if (!pane) return;
+  pane.hidden = !responsiveMode;
+  if (!responsiveMode) return;
+  var subject = document.getElementById("rsSubject");
+  var axisSel = document.getElementById("rsAxis");
+  var entry = rsEntry(false);
+  if (!rsSelectedId) {
+    subject.textContent = "Select an element in the frame";
+  } else {
+    var win = editorFrameWindow();
+    var label = rsSelectedId, readout = null;
+    try {
+      if (win && win.responsiveElementLabel) label = win.responsiveElementLabel(rsSelectedId);
+      if (win && win.responsiveAxisReadout) {
+        readout = win.responsiveAxisReadout(rsSelectedId, entry ? entry.axis : "auto");
+      }
+    } catch (e) {}
+    /* the width the bands are actually measured against, spelled out. For
+       anything inside a container this is NOT the window's width, and a ta
+       drawing edges against the wrong number is the single easiest mistake to
+       make in here. */
+    subject.textContent = label + (readout && readout.w
+      ? "  -  " + readout.w + "px of " + readout.host
+      : "");
+  }
+  if (axisSel && entry) axisSel.value = entry.axis || "auto";
+  document.getElementById("rsAddBand").disabled = !rsSelectedId;
+  document.getElementById("rsFillRest").disabled = !rsSelectedId || rsSelectedBand < 0;
+  rsRenderStrip();
+  rsRenderProps();
+}
+
+/** Redraws the ruler guides, the bands and the width cursor. */
+function rsRenderStrip() {
+  var ruler = document.getElementById("rsRuler");
+  var strip = document.getElementById("rsStrip");
+  if (!ruler || !strip) return;
+  ruler.innerHTML = "";
+  rsGuides().forEach(function (g) {
+    var d = document.createElement("div");
+    d.className = "rs-guide " + g.cls;
+    d.style.left = (rsPosFor(g.w) * 100) + "%";
+    d.innerHTML = "<span></span>";
+    d.firstChild.textContent = g.label;
+    d.title = g.cls === "rs-guide-bp"
+      ? "The page already changes layout at " + g.w + "px (a css breakpoint) - line band edges up with this"
+      : g.cls === "rs-guide-here"
+      ? "Your own window. Every pixel offset saved on this page is exactly right at this width and extrapolated everywhere else."
+      : g.w + "px";
+    ruler.appendChild(d);
+  });
+
+  strip.querySelectorAll(".rs-band, .rs-cursor").forEach(function (n) { n.remove(); });
+  var entry = rsEntry(false);
+  var regions = entry && entry.regions ? entry.regions : [];
+  document.getElementById("rsStripHint").hidden = !!regions.length;
+  regions.forEach(function (r, i) {
+    var band = document.createElement("div");
+    band.className = "rs-band" + (i === rsSelectedBand ? " sel" : "") +
+      (rsBandClashes(regions, i) ? " clash" : "");
+    var a = rsPosFor(r.from), b = rsPosFor(r.to);
+    band.style.left = (a * 100) + "%";
+    band.style.width = ((b - a) * 100) + "%";
+    band.innerHTML = "<b></b><i></i>" +
+      '<span class="rs-band-grip l"></span><span class="rs-band-grip r"></span>';
+    band.querySelector("b").textContent = rsBandSummary(r);
+    band.querySelector("i").textContent = Math.round(r.from) + "-" + Math.round(r.to);
+    band.title = rsBandClashes(regions, i)
+      ? "Another band sets one of the same properties over part of this range. The later band in this list wins there."
+      : rsBandSummary(r);
+    band.dataset.i = i;
+    strip.appendChild(band);
+  });
+
+  /* where the frame is laid out right now, scrubbed or not */
+  var cur = document.createElement("div");
+  cur.className = "rs-cursor";
+  var w = RS_PREVIEW_WIDTH || document.documentElement.clientWidth;
+  cur.style.left = (rsPosFor(w) * 100) + "%";
+  cur.setAttribute("data-w", w + "px");
+  strip.appendChild(cur);
+}
+
+/**
+ * Whether one band sets a property another band also sets over a width they
+ * both cover - the one case the union rule can't settle on its own.
+ * @param regions the element's whole band list
+ * @param i the index to test
+ * @return true if it overlaps another band on a shared property
+ */
+function rsBandClashes(regions, i) {
+  var me = regions[i];
+  var mine = Object.keys(me.props || {});
+  return regions.some(function (o, j) {
+    if (j === i) return false;
+    if (o.to <= me.from || o.from >= me.to) return false;
+    return mine.some(function (k) { return (o.props || {})[k] !== undefined; });
+  });
+}
+
+/**
+ * A one-line description of what a band does, for its label on the strip.
+ * @param r the region
+ * @return a short string
+ */
+function rsBandSummary(r) {
+  var props = r.props || {};
+  var bits = [];
+  if (props.hide) bits.push(props.hideMode === "hidden" ? "keep space, hide" : "hide");
+  if (props.scale) bits.push("scale " + Math.round(props.scale * 100) + "%");
+  if (props.widthPct) bits.push("width " + props.widthPct + "%");
+  if (props.maxW) bits.push("max " + props.maxW + "px");
+  if (props.minW) bits.push("min " + props.minW + "px");
+  if (props.fontSize) bits.push("text " + props.fontSize + "px");
+  if (props.opacity !== undefined) bits.push("opacity " + props.opacity);
+  if (props.color) bits.push("colour");
+  if (props.anchor) bits.push("anchor " + props.anchor);
+  if (props.overflow) bits.push("overflow " + props.overflow);
+  if (props.dir) bits.push("stack " + props.dir);
+  if (props.wrap) bits.push("wrap " + props.wrap);
+  if (props.gap !== undefined) bits.push("gap " + props.gap);
+  if (props.justify) bits.push("justify " + props.justify);
+  if (props.align) bits.push("align " + props.align);
+  if (r.ramp === "linear") bits.push("(ramped)");
+  return bits.length ? bits.join(", ") : "empty band";
+}
+
+/* every control the property grid offers, in the order it lays them out.
+     key   the field in region.props
+     kind  how to render it
+     scope "self" for the element's own box, "flow" for what its CHILDREN do,
+           which is only offered when the selected element is a container -
+           the two halves the whole idea was originally split into */
+var RS_FIELDS = [
+  { key: "hide", label: "Hide it", kind: "check", scope: "self" },
+  { key: "hideMode", label: "When hidden", kind: "select", scope: "self",
+    options: [["none", "Free its space"], ["hidden", "Keep its space"]],
+    /* two genuinely different answers, not a detail: display:none reflows
+       everything around it, visibility:hidden leaves the hole */
+    hint: "Free its space reflows everything around it. Keep its space leaves the gap." },
+  { key: "scale", label: "Scale", kind: "num", scope: "self", step: .05, min: .1, max: 3,
+    hint: "Shrinks the element and its text together, without rewrapping." },
+  { key: "widthPct", label: "Width (% of container)", kind: "num", scope: "self", min: 1, max: 100 },
+  { key: "minW", label: "Min width (px)", kind: "num", scope: "self", min: 0 },
+  { key: "maxW", label: "Max width (px)", kind: "num", scope: "self", min: 0 },
+  { key: "minH", label: "Min height (px)", kind: "num", scope: "self", min: 0 },
+  { key: "maxH", label: "Max height (px)", kind: "num", scope: "self", min: 0 },
+  { key: "fontSize", label: "Text size (px)", kind: "num", scope: "self", min: 1 },
+  { key: "opacity", label: "Opacity", kind: "num", scope: "self", step: .05, min: 0, max: 1 },
+  { key: "radius", label: "Corner radius (px)", kind: "num", scope: "self", min: 0 },
+  { key: "color", label: "Colour", kind: "color", scope: "self" },
+  { key: "textColor", label: "Text colour", kind: "color", scope: "self" },
+  { key: "padding", label: "Padding", kind: "text", scope: "self",
+    hint: "A css padding shorthand, eg 12px or 8px 14px." },
+  { key: "anchor", label: "Anchor", kind: "select", scope: "self",
+    options: [["", "Proportional (default)"], ["left", "Left edge"],
+              ["right", "Right edge"], ["center", "Centre"]],
+    hint: "Default keeps its offset as a proportion of the container." },
+  { key: "overflow", label: "Overflow", kind: "select", scope: "self",
+    options: [["", "Leave it"], ["auto", "Scroll"], ["hidden", "Clip"], ["visible", "Let it spill"]],
+    hint: "Scroll adds a fade on the edge, so a visitor can tell there is more." },
+  { key: "dir", label: "Stack children", kind: "select", scope: "flow",
+    options: [["", "Leave it"], ["row", "Left to right"], ["row-reverse", "Right to left"],
+              ["column", "Top to bottom"], ["column-reverse", "Bottom to top"]] },
+  { key: "wrap", label: "Overflow to", kind: "select", scope: "flow",
+    options: [["", "Leave it"], ["normal", "The next line"], ["reverse", "The line before"]] },
+  { key: "gap", label: "Gap between children (px)", kind: "num", scope: "flow", min: 0 },
+  { key: "justify", label: "Along the stack", kind: "select", scope: "flow",
+    options: [["", "Leave it"], ["flex-start", "Start"], ["center", "Centre"],
+              ["flex-end", "End"], ["space-between", "Spread out"]] },
+  { key: "align", label: "Across the stack", kind: "select", scope: "flow",
+    options: [["", "Leave it"], ["stretch", "Stretch"], ["flex-start", "Start"],
+              ["center", "Centre"], ["flex-end", "End"]] }
+];
+
+/** @return true if the selected element lays children out, ie has flow fields */
+function rsSelectedIsContainer() {
+  var win = editorFrameWindow();
+  try {
+    if (!win || !win.document || !rsSelectedId) return false;
+    var el = win.document.querySelector('[data-resize-id="' + rsSelectedId + '"]');
+    return !!(el && el.hasAttribute("data-flow-area"));
+  } catch (e) { return false; }
+}
+
+/** Redraws the property grid for whichever band is open. */
+function rsRenderProps() {
+  var box = document.getElementById("rsProps");
+  if (!box) return;
+  var entry = rsEntry(false);
+  var region = entry && entry.regions ? entry.regions[rsSelectedBand] : null;
+  box.hidden = !region;
+  if (!region) return;
+  box.innerHTML = "";
+  var isContainer = rsSelectedIsContainer();
+
+  /* the band's own extent and ramp, above the properties themselves */
+  var head = document.createElement("div");
+  head.className = "rs-row rs-span";
+  head.innerHTML =
+    '<label class="rs-row">From <input type="number" id="rsFrom" style="width:80px"> px</label>' +
+    '<label class="rs-row">to <input type="number" id="rsTo" style="width:80px"> px</label>' +
+    '<label class="rs-row">Change <select id="rsRamp">' +
+      '<option value="none">all at once</option>' +
+      '<option value="linear">gradually across the band</option>' +
+    '</select></label>' +
+    '<button class="btn btn-ghost" id="rsDelBand" type="button" style="margin-left:auto">Delete band</button>';
+  box.appendChild(head);
+  head.querySelector("#rsFrom").value = Math.round(region.from);
+  head.querySelector("#rsTo").value = Math.round(region.to);
+  head.querySelector("#rsRamp").value = region.ramp === "linear" ? "linear" : "none";
+  head.querySelector("#rsFrom").addEventListener("change", function () {
+    region.from = Math.max(rsRange().min, Math.min(region.to - 1, +this.value));
+    rsCommit(); rsRenderProps();
+  });
+  head.querySelector("#rsTo").addEventListener("change", function () {
+    region.to = Math.min(rsRange().max, Math.max(region.from + 1, +this.value));
+    rsCommit(); rsRenderProps();
+  });
+  head.querySelector("#rsRamp").addEventListener("change", function () {
+    region.ramp = this.value;
+    /* a ramp needs somewhere to ramp TO, seeded from the flat values so
+       turning it on changes nothing until a ta actually moves an end */
+    if (region.ramp === "linear" && !region.propsTo) {
+      region.propsTo = JSON.parse(JSON.stringify(region.props || {}));
+    }
+    rsCommit(); rsRenderProps();
+  });
+
+  RS_FIELDS.forEach(function (f) {
+    if (f.scope === "flow" && !isContainer) return;
+    var field = document.createElement("div");
+    field.className = "rs-field";
+    var lab = document.createElement("label");
+    lab.textContent = f.label;
+    field.appendChild(lab);
+    var input = rsBuildInput(f, region.props || {}, function (v) {
+      if (!region.props) region.props = {};
+      if (v === "" || v === null) delete region.props[f.key];
+      else region.props[f.key] = v;
+      rsCommit();
+      rsRenderStrip();
+    });
+    field.appendChild(input);
+    /* the far end of a ramp, offered inline next to the value it ramps from
+       rather than in a second panel a ta has to go and find */
+    if (region.ramp === "linear" && rsFieldRamps(f)) {
+      var to = rsBuildInput(f, region.propsTo || {}, function (v) {
+        if (!region.propsTo) region.propsTo = {};
+        if (v === "" || v === null) delete region.propsTo[f.key];
+        else region.propsTo[f.key] = v;
+        rsCommit();
+      });
+      to.title = "The value at " + Math.round(region.to) + "px";
+      field.appendChild(to);
+    }
+    if (f.hint) {
+      var hint = document.createElement("small");
+      hint.style.cssText = "color:var(--muted);font-size:.7rem";
+      hint.textContent = f.hint;
+      field.appendChild(hint);
+    }
+    box.appendChild(field);
+  });
+
+  head.querySelector("#rsDelBand").addEventListener("click", function () {
+    entry.regions.splice(rsSelectedBand, 1);
+    if (!entry.regions.length) delete STATE.responsive[rsSelectedId];
+    rsSelectedBand = -1;
+    rsCommit();
+    rsRenderPane();
+  });
+}
+
+/** @return true if this field's value is a number a ramp can interpolate */
+function rsFieldRamps(f) {
+  return f.kind === "num";
+}
+
+/**
+ * Builds one property control.
+ * @param f an RS_FIELDS entry
+ * @param props the props object it reads and writes
+ * @param onChange called with the new value ("" to clear the property)
+ * @return the input element
+ */
+function rsBuildInput(f, props, onChange) {
+  var v = props[f.key];
+  var input;
+  if (f.kind === "check") {
+    input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = !!v;
+    input.addEventListener("change", function () { onChange(this.checked ? true : ""); });
+    return input;
+  }
+  if (f.kind === "select") {
+    input = document.createElement("select");
+    f.options.forEach(function (o) {
+      var opt = document.createElement("option");
+      opt.value = o[0];
+      opt.textContent = o[1];
+      input.appendChild(opt);
+    });
+    input.value = v === undefined ? "" : v;
+    input.addEventListener("change", function () { onChange(this.value); });
+    return input;
+  }
+  if (f.kind === "color") {
+    var row = document.createElement("div");
+    row.className = "rs-row";
+    input = document.createElement("input");
+    input.type = "color";
+    input.value = /^#[0-9a-f]{6}$/i.test(v || "") ? v : "#5b86c4";
+    input.addEventListener("input", function () { onChange(this.value); });
+    var clear = document.createElement("button");
+    clear.type = "button";
+    clear.className = "btn btn-ghost";
+    clear.style.cssText = "padding:3px 8px;font-size:.72rem";
+    clear.textContent = v ? "Clear" : "Not set";
+    clear.addEventListener("click", function () { onChange(""); });
+    row.appendChild(input);
+    row.appendChild(clear);
+    return row;
+  }
+  input = document.createElement("input");
+  input.type = f.kind === "num" ? "number" : "text";
+  if (f.step) input.step = f.step;
+  if (f.min !== undefined) input.min = f.min;
+  if (f.max !== undefined) input.max = f.max;
+  input.value = v === undefined ? "" : v;
+  input.addEventListener("change", function () {
+    if (this.value === "") return onChange("");
+    onChange(f.kind === "num" ? +this.value : this.value);
+  });
+  return input;
+}
+
+/**
+ * Gives every width the selected band does not already cover the same
+ * behaviour, by widening it outward until it meets a neighbour.
+ * @note The "expand to fill the rest" button. Deliberately stops AT the
+ * neighbours rather than overwriting them: the union rule means a band drawn
+ * over another one both apply, and silently swallowing a ta's earlier work is
+ * the one outcome that can't be undone by looking at the strip.
+ */
+function rsFillRest() {
+  var entry = rsEntry(false);
+  if (!entry || rsSelectedBand < 0) return;
+  var me = entry.regions[rsSelectedBand];
+  var r = rsRange();
+  var lo = r.min, hi = r.max;
+  entry.regions.forEach(function (o, i) {
+    if (i === rsSelectedBand) return;
+    if (o.to <= me.from) lo = Math.max(lo, o.to);
+    if (o.from >= me.to) hi = Math.min(hi, o.from);
+  });
+  me.from = lo;
+  me.to = hi;
+  rsCommit();
+  rsRenderPane();
+}
+
+/* ---- drawing and scrubbing on the strip ---- */
+
+/**
+ * Wires the strip: drag on empty space draws a band, drag a band's edge moves
+ * it, a click selects one, and a drag on the ruler above scrubs the frame to
+ * that width.
+ */
+function rsWireStrip() {
+  var strip = document.getElementById("rsStrip");
+  var ruler = document.getElementById("rsRuler");
+  if (!strip || !ruler) return;
+
+  strip.addEventListener("mousedown", function (e) {
+    if (!rsSelectedId) return;
+    var band = e.target.closest ? e.target.closest(".rs-band") : null;
+    var grip = e.target.classList && e.target.classList.contains("rs-band-grip") ? e.target : null;
+    if (band) {
+      rsSelectedBand = +band.dataset.i;
+      rsRenderPane();
+      if (grip) rsDragBandEdge(e, grip.classList.contains("l") ? "from" : "to");
+      return;
+    }
+    rsDrawBand(e);
+  });
+
+  /* the ruler is the scrub track: dragging along it lays the real frame out
+     at the width under the cursor, which is a far better preview than any
+     thumbnail beside the strip could be - it IS the page */
+  ruler.addEventListener("mousedown", function (e) {
+    rsScrubTo(rsWidthFromEvent(e));
+    function move(ev) { rsScrubTo(rsWidthFromEvent(ev)); }
+    function up() {
+      document.removeEventListener("mousemove", move);
+      document.removeEventListener("mouseup", up);
+    }
+    document.addEventListener("mousemove", move);
+    document.addEventListener("mouseup", up);
+  });
+  ruler.addEventListener("dblclick", function () { rsScrubTo(0); });
+}
+
+/**
+ * Lays the editor frame out at one width, for previewing a band.
+ * @param w a width in css px, or 0 to go back to the ta's real window width
+ */
+function rsScrubTo(w) {
+  RS_PREVIEW_WIDTH = w > 0 ? w : 0;
+  syncFrameViewport();
+  rsRenderStrip();
+}
+
+/** Drags one edge of the open band. */
+function rsDragBandEdge(e, which) {
+  var entry = rsEntry(false);
+  var region = entry && entry.regions[rsSelectedBand];
+  if (!region) return;
+  e.preventDefault();
+  function move(ev) {
+    var w = rsSnap(rsWidthFromEvent(ev), ev.shiftKey);
+    if (which === "from") region.from = Math.min(w, region.to - 1);
+    else region.to = Math.max(w, region.from + 1);
+    rsRenderStrip();
+  }
+  function up() {
+    document.removeEventListener("mousemove", move);
+    document.removeEventListener("mouseup", up);
+    rsCommit();
+    rsRenderProps();
+  }
+  document.addEventListener("mousemove", move);
+  document.addEventListener("mouseup", up);
+}
+
+/** Draws a new band by dragging across empty strip. */
+function rsDrawBand(e) {
+  var entry = rsEntry(true);
+  if (!entry) return;
+  e.preventDefault();
+  var start = rsSnap(rsWidthFromEvent(e), e.shiftKey);
+  var region = { from: start, to: start + 1, ramp: "none", props: {} };
+  entry.regions.push(region);
+  rsSelectedBand = entry.regions.length - 1;
+  function move(ev) {
+    var w = rsSnap(rsWidthFromEvent(ev), ev.shiftKey);
+    region.from = Math.min(start, w);
+    region.to = Math.max(start + 1, Math.max(start, w));
+    rsRenderStrip();
+  }
+  function up() {
+    document.removeEventListener("mousemove", move);
+    document.removeEventListener("mouseup", up);
+    /* a click rather than a drag: give it a sensible band around where they
+       clicked instead of a 1px sliver nobody can grab again */
+    if (region.to - region.from < 8) {
+      region.from = Math.max(rsRange().min, Math.round(start * .75));
+      region.to = Math.min(rsRange().max, Math.round(start * 1.25));
+    }
+    rsCommit();
+    rsRenderPane();
+  }
+  document.addEventListener("mousemove", move);
+  document.addEventListener("mouseup", up);
+}
+
+/* ---- design rule check ---- */
+
+/**
+ * Runs the drc across every sample width and renders the findings.
+ *
+ * The sample set is the site's own css breakpoints plus and minus a pixel,
+ * then the common device widths. The +/-1 is where the value is: a breakpoint
+ * is exactly where a layout changes, so the two widths either side of it are
+ * where a rule that half-fires shows up, and checking only round numbers
+ * would step straight over every one of them.
+ */
+function rsRunDrc() {
+  var win = editorFrameWindow();
+  if (!win || !win.runResponsiveDrc) return;
+  var widths = [];
+  (win.RESPONSIVE_BREAKPOINTS || []).forEach(function (bp) {
+    widths.push(bp - 1, bp + 1);
+  });
+  [320, 375, 768, 1024, 1440, 1920].forEach(function (w) { widths.push(w); });
+  widths = widths.filter(function (w, i, a) { return a.indexOf(w) === i; }).sort(function (a, b) { return a - b; });
+
+  var was = RS_PREVIEW_WIDTH;
+  var found = [];
+  widths.forEach(function (w) {
+    RS_PREVIEW_WIDTH = w;
+    syncFrameViewport();
+    /* the frame relaid out synchronously the moment its width changed; the
+       resolver runs on a rAF normally, so runResponsiveDrc() re-resolves
+       first rather than reporting on the previous width's paint */
+    var hits;
+    try { hits = win.runResponsiveDrc() || []; } catch (e) { hits = []; }
+    hits.forEach(function (v) { found.push({ w: w, v: v }); });
+  });
+  RS_PREVIEW_WIDTH = was;
+  syncFrameViewport();
+  /* one row per element+rule, naming the widest width it fails at rather than
+     one row per width - the same overhanging element at fourteen widths is
+     one thing to fix, not fourteen */
+  var seen = {};
+  rsDrcFindings = [];
+  found.forEach(function (f) {
+    var key = f.v.id + "|" + f.v.rule;
+    if (seen[key]) { seen[key].widths.push(f.w); return; }
+    seen[key] = { id: f.v.id, rule: f.v.rule, sev: f.v.sev, msg: f.v.msg, widths: [f.w] };
+    rsDrcFindings.push(seen[key]);
+  });
+  rsRenderDrc();
+}
+
+/** Redraws the drc list from the last sweep. */
+function rsRenderDrc() {
+  var list = document.getElementById("rsDrcList");
+  var count = document.getElementById("rsDrcCount");
+  if (!list || !count) return;
+  var live = rsDrcFindings.filter(function (f) {
+    return !(STATE.responsive_waivers || {})[f.id + "|" + f.rule];
+  });
+  count.textContent = live.length;
+  count.className = "rs-drc-count" + (live.some(function (f) { return f.sev === "err"; })
+    ? " bad" : live.length ? " warn" : "");
+  list.innerHTML = "";
+  if (!rsDrcFindings.length) {
+    var none = document.createElement("div");
+    none.className = "rs-empty";
+    none.textContent = "Nothing checked yet - press Sweep all widths.";
+    list.appendChild(none);
+    return;
+  }
+  rsDrcFindings.forEach(function (f) {
+    var waived = !!(STATE.responsive_waivers || {})[f.id + "|" + f.rule];
+    var row = document.createElement("div");
+    row.className = "rs-drc-item" + (f.sev === "err" ? " err" : "") + (waived ? " rs-drc-waived" : "");
+    var win = editorFrameWindow();
+    var label = f.id;
+    try { if (win && win.responsiveElementLabel) label = win.responsiveElementLabel(f.id); } catch (e) {}
+    var text = document.createElement("span");
+    text.textContent = label + " - " + f.msg;
+    text.style.cursor = "pointer";
+    /* clicking the finding takes the ta to the element AND to the width it
+       fails at, which is the whole difference between a report and a to-do */
+    text.addEventListener("click", function () {
+      rsScrubTo(f.widths[0]);
+      try { if (win && win.selectResponsiveElement) win.selectResponsiveElement(f.id); } catch (e) {}
+    });
+    row.appendChild(text);
+    var where = document.createElement("span");
+    where.className = "rs-drc-where";
+    where.textContent = f.widths.length > 1
+      ? f.widths[0] + "-" + f.widths[f.widths.length - 1] + "px"
+      : f.widths[0] + "px";
+    row.appendChild(where);
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = waived ? "Un-waive" : "Accept";
+    btn.addEventListener("click", function () {
+      if (!STATE.responsive_waivers) STATE.responsive_waivers = {};
+      var key = f.id + "|" + f.rule;
+      if (waived) delete STATE.responsive_waivers[key];
+      else STATE.responsive_waivers[key] = "accepted by " + (localStorage.getItem("session") || "a ta");
+      rsCommit();
+      rsRenderDrc();
+    });
+    row.appendChild(btn);
+    list.appendChild(row);
+  });
+}
+
+/* ---- the switch ---- */
+
+/** Redraws the Responsive switch from responsiveMode. */
+function syncResponsiveSwitch() {
+  var sw = document.getElementById("edResponsive");
+  if (!sw) return;
+  sw.setAttribute("aria-checked", responsiveMode ? "true" : "false");
+  document.getElementById("edResponsiveText").textContent = responsiveMode ? "On" : "Off";
+  sw.title = responsiveMode
+    ? "Drawing how elements behave as the page narrows. Elements can be selected but not moved, resized, styled or deleted. Switch off to go back to editing."
+    : "Switch on to draw how elements behave as the page narrows, instead of editing them.";
+  var pane = document.getElementById("rsPane");
+  if (pane) pane.hidden = !responsiveMode;
+}
+
+/** Flips responsive mode, in the chrome and in the frame. */
+function toggleResponsiveMode() {
+  responsiveMode = !responsiveMode;
+  /* leaving the mode also drops the scrub, or the frame would stay pinned at
+     whatever width the strip cursor was parked on with nothing on screen
+     still saying why */
+  if (!responsiveMode) rsScrubTo(0);
+  pushResponsiveModeToFrame();
+  syncResponsiveSwitch();
+  rsRenderPane();
+  if (responsiveMode) rsRenderDrc();
+}
+
+/**
+ * Re-asserts the mode onto a freshly (re)loaded frame, which always comes
+ * back in normal editing mode - same reason and same load-event hook as the
+ * navbar and theme switches.
+ */
+function pushResponsiveModeToFrame() {
+  var win = editorFrameWindow();
+  try { if (win && win.setResponsiveMode) win.setResponsiveMode(responsiveMode); } catch (e) {}
+}
+
 document.addEventListener("DOMContentLoaded", function () {
   var logoutBtn = document.getElementById("logoutBtn");
   if (logoutBtn) logoutBtn.addEventListener("click", function () {
@@ -2776,6 +3653,51 @@ document.addEventListener("DOMContentLoaded", function () {
      other case, see wireResizable() in js/main.js) */
   document.getElementById("edSnap").addEventListener("click", toggleEditorSnapping);
   syncSnapSwitch();
+
+  /* responsive mode and the width plane under the frame. Re-asserted on every
+     frame load like the navbar/theme switches above - a reloaded frame always
+     comes back in normal editing mode, and the mode has to survive an Apply
+     or a profile switch the same way they do. */
+  document.getElementById("edResponsive").addEventListener("click", toggleResponsiveMode);
+  document.getElementById("edFrame").addEventListener("load", function () {
+    pushResponsiveModeToFrame();
+    /* the frame reloaded, so whatever it had selected is gone and the pane is
+       describing an element that no longer has a ring on it */
+    rsSelectedId = null;
+    rsSelectedBand = -1;
+    rsRenderPane();
+  });
+  syncResponsiveSwitch();
+  rsWireStrip();
+  rsRenderDrc();
+  document.getElementById("rsAddBand").addEventListener("click", function () {
+    var entry = rsEntry(true);
+    if (!entry) return;
+    /* a band added by the button rather than drawn needs somewhere sensible
+       to land: the stretch below the ta's own window, which is where the
+       page's saved geometry stops being exactly right and starts being
+       extrapolated - ie the widths that actually need authoring */
+    var here = document.documentElement.clientWidth;
+    entry.regions.push({
+      from: rsRange().min, to: Math.min(here, rsRange().max), ramp: "none", props: {}
+    });
+    rsSelectedBand = entry.regions.length - 1;
+    rsCommit();
+    rsRenderPane();
+  });
+  document.getElementById("rsFillRest").addEventListener("click", rsFillRest);
+  document.getElementById("rsAxis").addEventListener("change", function () {
+    var entry = rsEntry(true);
+    if (!entry) return;
+    entry.axis = this.value;
+    rsCommit();
+    rsRenderPane();
+  });
+  document.getElementById("rsDrcRun").addEventListener("click", rsRunDrc);
+  /* the strip's guides and cursor are drawn in fractions of the pane, so a
+     window resize moves every one of them - and moves the "you" guide itself,
+     since that one IS the window's width */
+  window.addEventListener("resize", function () { if (responsiveMode) rsRenderStrip(); });
 
   document.getElementById("edFullscreen").addEventListener("click", toggleEditorFullscreen);
   document.addEventListener("keydown", function (e) {

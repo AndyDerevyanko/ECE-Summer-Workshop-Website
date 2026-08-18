@@ -203,7 +203,12 @@ function seed() {
        "<id>|<rule>", value a short reason. Waived violations stay off the
        DRC panel until the rule or the element's regions change, so the panel
        can actually reach zero - see runResponsiveDrc() in js/main.js. */
-    responsive_waivers: {}
+    responsive_waivers: {},
+    /* which elements sit inside which "Box" element, {boxId: [childId, ...]}
+       in seating order. The editor otherwise has no parent/child relationship
+       at all - see the BOX CONTAINERS section in js/main.js for why this one
+       exists and what a ta gives up by using it. */
+    box_members: {}
   };
 }
 
@@ -411,6 +416,17 @@ function normalizeState() {
   if (!STATE.responsive_waivers || typeof STATE.responsive_waivers !== "object") {
     STATE.responsive_waivers = {};
   }
+  if (!STATE.box_members || typeof STATE.box_members !== "object") STATE.box_members = {};
+  /* every seating list has to be an array of ids: applyBoxMembers() walks these
+     on load and a hand-edited profile with a string (or a null) in here would
+     take the whole load pass down with it */
+  Object.keys(STATE.box_members).forEach(function (boxId) {
+    var ids = STATE.box_members[boxId];
+    if (!Array.isArray(ids)) { delete STATE.box_members[boxId]; return; }
+    var clean = ids.filter(function (id) { return typeof id === "string" && id; });
+    if (clean.length) STATE.box_members[boxId] = clean;
+    else delete STATE.box_members[boxId];
+  });
   /* a hand-edited profile (or a region list left half-written by a failed
      save) can reach here with a regions array missing or the bounds the wrong
      way round, and the resolver walks these on every resize frame - one bad
@@ -3001,6 +3017,9 @@ function rsBandSummary(r) {
   if (props.gap !== undefined) bits.push("gap " + props.gap);
   if (props.justify) bits.push("justify " + props.justify);
   if (props.align) bits.push("align " + props.align);
+  if (props.childHide) bits.push("hide contents");
+  if (props.childScale) bits.push("contents " + Math.round(props.childScale * 100) + "%");
+  if (props.childFontScale) bits.push("text inside x" + props.childFontScale);
   if (r.ramp === "linear") bits.push("(ramped)");
   return bits.length ? bits.join(", ") : "empty band";
 }
@@ -3050,7 +3069,20 @@ var RS_FIELDS = [
               ["flex-end", "End"], ["space-between", "Spread out"]] },
   { key: "align", label: "Across the stack", kind: "select", scope: "flow",
     options: [["", "Leave it"], ["stretch", "Stretch"], ["flex-start", "Start"],
-              ["center", "Centre"], ["flex-end", "End"]] }
+              ["center", "Centre"], ["flex-end", "End"]] },
+  /* the five above hand the browser a layout and let it do the work. These
+     three are the container reaching in and writing on each child, which is
+     the only way to say them at all - see paintContainerChildProps() in
+     js/main.js. Direct children only, so a card inside a box still gets to
+     decide what happens to its own title. */
+  { key: "childHide", label: "Hide everything inside", kind: "check", scope: "flow",
+    hint: "Hides the children, not the container. The container keeps its size." },
+  { key: "childScale", label: "Scale everything inside", kind: "num", scope: "flow",
+    step: .05, min: .1, max: 3,
+    hint: "Shrinks each child in place. A child with its own Scale band wins." },
+  { key: "childFontScale", label: "Text size inside (x)", kind: "num", scope: "flow",
+    step: .05, min: .3, max: 3,
+    hint: "Multiplies whatever text size each child already resolved to." }
 ];
 
 /** @return true if the selected element lays children out, ie has flow fields */
@@ -3059,7 +3091,10 @@ function rsSelectedIsContainer() {
   try {
     if (!win || !win.document || !rsSelectedId) return false;
     var el = win.document.querySelector('[data-resize-id="' + rsSelectedId + '"]');
-    return !!(el && el.hasAttribute("data-flow-area"));
+    /* a ta-placed Box counts as much as the four tile containers do - it's the
+       one container a ta can actually make, and container behaviour is most of
+       why they'd make one. See the BOX CONTAINERS section in js/main.js. */
+    return !!(el && (el.hasAttribute("data-flow-area") || el.hasAttribute("data-box-area")));
   } catch (e) { return false; }
 }
 

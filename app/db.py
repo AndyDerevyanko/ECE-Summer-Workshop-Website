@@ -503,15 +503,80 @@ DEFAULT_CONTENT = {
     # BEHAVIOUR section in js/main.js for the resolver these feed, and seed()
     # in js/ta.js for the field-by-field shape.
     #
-    # Seeded empty on purpose. Everything a ta places is stored as an absolute
-    # pixel offset measured at one viewport width, so an element with no entry
-    # is NOT left sitting on those raw pixels - responsiveFallbackFor() anchors
-    # and scales it instead. Regions are the per-element override on top of
-    # that, not the thing that makes the page work at all.
-    "responsive": {},
+    # Almost entirely empty on purpose. Everything a ta places is stored as an
+    # absolute pixel offset measured at one viewport width, so an element with
+    # no entry is NOT left sitting on those raw pixels -
+    # responsiveFallbackFor() anchors and scales it instead. Regions are the
+    # per-element override on top of that, not the thing that makes the page
+    # work at all.
+    #
+    # The exception is the landing page's navbar, seeded below. That row
+    # already had real responsive behaviour, but it lived only in the @media
+    # blocks in css/style.css where nothing in the editor could see or change
+    # it - a ta looking at the Responsive pane was told the navbar does nothing
+    # on the way down, which was false. These bands say the same thing the
+    # stylesheet says, in the one place a ta can edit it.
+    #
+    # Every property mirrored here is IDEMPOTENT - an absolute gap, a
+    # display:none, a flex-direction - so the band and the css rule landing on
+    # the same element at the same width produce one result, not a doubled one.
+    # The two font-size steps in that same @media block are deliberately NOT
+    # mirrored: childFontScale MULTIPLIES whatever each child resolved to, so
+    # a band restating a rule css has already applied would shrink the text
+    # twice. Expressing those needs the css declaration removed first, which
+    # changes what a visitor with js disabled sees - a call worth making
+    # explicitly rather than as a side effect of this seed.
+    "responsive": {
+        # css: `.nav-links { display: none }` at max-width 860, and the gap
+        # steps at 1150/1000/940. Bands are half-open the other way round from
+        # a max-width query - a css rule at "max-width: 940" covers everything
+        # below it too, so each band here starts one px above the next one down
+        # rather than repeating the narrower rule's value.
+        "box.navLinks": {
+            "regions": [
+                {"from": 320, "to": 860, "props": {"hide": True, "hideMode": "none"}},
+                # no childFontScale here, deliberately. The @media blocks used
+                # to carry a .88em/.95em on this row, which looked like text
+                # that shrank on the way down and was the obvious thing to
+                # transcribe - but `.nav-links a` sets `font-size: .92rem`, an
+                # absolute unit on a more specific selector, so the parent's em
+                # never reached a single link. Measured at HEAD, the link text
+                # is 14.7px at every width from 861 to 1440. Those two
+                # declarations were dead, and a band restating them would not
+                # have been a transcription of anything - it would have
+                # introduced a shrink this site has never done.
+                {"from": 861, "to": 940, "props": {"gap": 6}},
+                {"from": 941, "to": 1000, "props": {"gap": 11}},
+                {"from": 1001, "to": 1150, "props": {"gap": 18}},
+            ]
+        },
+        # css: `.nav-right { gap }` at max-width 1150 and 1000
+        "box.navRight": {
+            "regions": [
+                {"from": 320, "to": 1000, "props": {"gap": 7}},
+                {"from": 1001, "to": 1150, "props": {"gap": 10}},
+            ]
+        },
+    },
     # design-rule violations a ta has accepted, keyed "<id>|<rule>" with a short
     # reason as the value. See runResponsiveDrc() in js/main.js.
     "responsive_waivers": {},
+    # which elements are SEATED INSIDE which "box" element, {boxId: [childId,
+    # ...]} in the order they sit there.
+    #
+    # The editor's default is that nothing contains anything: everything a ta
+    # places is pinned at an absolute pixel offset in its own wrapper, and a
+    # container's move is actively cancelled back out of its descendants (see
+    # ancestorPos() in js/main.js). A box is the opt-in exception, and it's what
+    # makes container-level responsive behaviour - wrapping, stacking, hiding
+    # children - expressible at all, since none of that can be said about
+    # elements holding fixed coordinates.
+    #
+    # Stored rather than read off the dom because the dom is rebuilt from
+    # scratch on every load: custom elements are re-placed free and template
+    # elements come back wherever their markup puts them, so the seating is
+    # re-applied from here. See applyBoxMembers() in js/main.js.
+    "box_members": {},
 }
 DEFAULT_CONTENT["custom_elements"].append(_LEARN_REEL_ENTRY)
 DEFAULT_CONTENT["text"].update(_LEARN_REEL_TEXT)
@@ -1130,6 +1195,7 @@ def init_db():
     _migrate_progress_bar_object(conn)
     _migrate_drop_variable_page_scope(conn)
     _migrate_apply_tooltip(conn)
+    _migrate_navbar_responsive_bands(conn)
     conn.close()
 
 
@@ -1920,6 +1986,56 @@ def _migrate_apply_tooltip(conn):
                 if not tooltips.get(tip_id):
                     tooltips[tip_id] = {"text": text, "pos": "bottom"}
         return data, True
+
+    row = conn.execute("SELECT data FROM content WHERE id = 1").fetchone()
+    if row:
+        data, changed = patch(json.loads(row["data"]))
+        if changed:
+            conn.execute("UPDATE content SET data = ? WHERE id = 1", (json.dumps(data),))
+
+    for prow in conn.execute("SELECT id, data FROM profiles").fetchall():
+        data, changed = patch(json.loads(prow["data"]))
+        if changed:
+            conn.execute("UPDATE profiles SET data = ? WHERE id = ?", (json.dumps(data), prow["id"]))
+
+    conn.commit()
+
+
+def _migrate_navbar_responsive_bands(conn):
+    """one-time patch (same meta-flag trick as _migrate_learn_reel()) adding the
+    seeded landing-page navbar bands (DEFAULT_CONTENT["responsive"]) to every
+    already-existing content blob/profile that predates them.
+
+    Needed for exactly the reason _migrate_learn_reel() is: get_content()'s
+    generic backfill is a per-KEY setdefault, and "responsive" already exists in
+    an old blob as an empty dict, so the seeded entries inside it never land.
+    Without this the bands would only ever reach a database created after this
+    ships - every existing install would keep being told, by an empty Responsive
+    pane, that the navbar does nothing on the way down.
+
+    Per-id, and only where the blob has nothing of its own: a ta who has already
+    drawn bands on one of these two containers keeps theirs untouched. This is
+    also why it's a one-time migration rather than a merge on every read - the
+    seeded bands have to stay deletable, and a read-time merge would put them
+    back every load.
+    @param conn an open db connection
+    """
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO meta (key, value) VALUES ('navbar_responsive_bands_migrated', '1')"
+    )
+    conn.commit()
+    if cur.rowcount == 0:
+        return
+
+    def patch(data):
+        changed = False
+        responsive = data.setdefault("responsive", {})
+        for el_id, entry in DEFAULT_CONTENT["responsive"].items():
+            if responsive.get(el_id):
+                continue
+            responsive[el_id] = json.loads(json.dumps(entry))
+            changed = True
+        return data, changed
 
     row = conn.execute("SELECT data FROM content WHERE id = 1").fetchone()
     if row:

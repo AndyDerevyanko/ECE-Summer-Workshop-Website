@@ -24,7 +24,7 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap"
     rel="stylesheet" />
-  <link rel="stylesheet" href="css/style.css?v=38" />
+  <link rel="stylesheet" href="css/style.css?v=40" />
 </head>
 
 <body class="mono" data-page-id="box.page">
@@ -50,7 +50,14 @@
     <div class="wrap nav-inner">
       <a href="index.html" class="brand" data-resize-id="box.brand"><img src="assets/logo.png" class="brand-logo"
           data-resize-id="img.brand.nav" alt="ECE Workshops" /> <span data-edit-id="nav.brand">ECE Workshops</span></a>
-      <div class="nav-links">
+      <!-- tracked as a BOX (js/main.js's BOX CONTAINERS section) so the row's
+           own responsive behaviour - the gaps that tighten on the way down and
+           the whole row dropping out at 860 - is something a ta can see and
+           change in the Responsive pane, instead of living only in a @media
+           block in css/style.css that nothing in the editor can reach. The
+           links are already its real dom children, so nothing is reparented
+           and the layout is untouched. -->
+      <div class="nav-links" data-resize-id="box.navLinks" data-box-area="1">
         <a href="#about" data-edit-id="nav.link.about">About</a>
         <a href="#gallery" data-edit-id="nav.link.gallery">Gallery</a>
         <a href="#learn" data-edit-id="nav.link.learn">What you'll learn</a>
@@ -58,7 +65,8 @@
         <a href="#prizes" data-edit-id="nav.link.prizes">Prizes</a>
         <a href="https://www.youtube.com/watch?v=dQw4w9WgXcQ" target="_blank" rel="noopener" class="join-link" id="navJoinLink" data-edit-id="nav.link.apply">Apply Now</a>
       </div>
-      <div class="nav-right">
+      <!-- same, for the toggle-and-button pair on the other end of the row -->
+      <div class="nav-right" data-resize-id="box.navRight" data-box-area="1">
         <button id="themeBtn" class="theme-btn" type="button" aria-label="Toggle theme" data-resize-id="box.themeBtn" data-theme-toggle="1">
           <span class="tic-icon" data-resize-id="box.themeBtn.icon">
             <svg class="tic sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
@@ -460,7 +468,7 @@
 
   <script src="js/theme.js?v=4"></script>
   <script src="js/idle.js?v=5"></script>
-  <script src="js/main.js?v=40"></script>
+  <script src="js/main.js?v=41"></script>
   <script src="js/learn-reel.js?v=7"></script>
 </body>
 

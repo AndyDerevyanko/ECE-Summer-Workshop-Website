@@ -1963,7 +1963,12 @@ function ancestorPos(el) {
   var p = el.parentElement;
   while (p && p !== document.body) {
     if (p.matches && p.matches(RESIZABLE_SEL)) {
-      if (isLiveAreaEl(p)) return { tx: 0, ty: 0 };
+      /* a box is the third case, for the same reason a live area is the second:
+         what's seated in it isn't independent of it. A ta who drags a box
+         expects everything inside to travel with it - that IS what seating it
+         meant - so its offset is left to compound down the dom rather than
+         being cancelled back out. See the BOX CONTAINERS section. */
+      if (isLiveAreaEl(p) || isBoxAreaEl(p)) return { tx: 0, ty: 0 };
       return { tx: parseFloat(p.dataset.ovTx) || 0, ty: parseFloat(p.dataset.ovTy) || 0 };
     }
     p = p.parentElement;
@@ -8258,6 +8263,9 @@ function startMoveDrag(e) {
      have the first one's detach reflow the second's still-fresh position
      out from under it. */
   var groupMembers = groupMembersFor(elId(el));
+  /* out of its box first, if it's in one, so everything below is the plain
+     free-element drag it has always been - see startBoxDrag() */
+  var seatBefore = startBoxDrag(el);
   var elRect = el.getBoundingClientRect();
   groupMembers.forEach(function (m) { m.preRect = m.el.getBoundingClientRect(); });
   detachFromFlow(el, elRect);
@@ -8284,12 +8292,16 @@ function startMoveDrag(e) {
     });
     positionRing();
     paintSnapGuides();
+    trackBoxDrop(el, ev);
   }
   function onUp() {
     document.removeEventListener("mousemove", onMove);
     document.removeEventListener("mouseup", onUp);
     RING_DRAGGING = false;
     endSnapDrag();
+    /* a seated element has no free position of its own to record, so the seat
+       entry below replaces the move entry rather than joining it */
+    if (finishBoxDrop(el, seatBefore)) { positionRing(); return; }
     var p = getPos(el);
     commitPosition(el);
     var moves = [{ id: elId(el), before: base, after: p }];
@@ -8749,6 +8761,663 @@ function saveGroups(groups) {
  */
 function applyGroups(groups) {
   GROUPS = (groups || []).map(function (g) { return g.slice(); });
+}
+
+/* ---------------------------------------------------------------------------
+   BOX CONTAINERS (the "Box" element, see buildCustomElementNode()'s "box" kind)
+
+   The one place in this file where an element really does contain another. The
+   editor's whole default is the opposite - detachFromFlow() pulls anything a ta
+   touches out of flow and pins it at absolute px, placeFreeElement() appends new
+   elements to body rather than nesting them, and ancestorPos() actively cancels
+   a container's translate back out of its descendants, see its doc comment on
+   this project's "no attachment between elements" rule.
+
+   That rule is right for placing things freely and wrong for responsive
+   behaviour: "these six nav links wrap when the window narrows" cannot be said
+   about six elements pinned at six fixed coordinates. So a box is the opt-in
+   exception, and the exchange is explicit - an element seated in a box gives up
+   its free position, because "the box decides where this goes" and "this sits
+   at exactly (x, y)" are contradictory statements.
+
+   A box is deliberately NOT a [data-flow-area]. Those four containers (see
+   isFlowAreaEl()) lay out TILES, which are one rendering of a backing content
+   entry, through applyTileFlow()'s grid and its per-tile track sizing; a box
+   holds arbitrary elements and lays them out with plain flexbox. Sharing the
+   attribute would have dragged boxes through every tile-shaped special case in
+   here - the background-less style popover, the shared-height group mirroring,
+   the tile reorder drag - for no gain. It shares areaFlowFor() instead, which is
+   keyed by id and already generic, so a box gets the same stacking vocabulary
+   (direction, wrap, gap, alignment) and the same responsive band plumbing that
+   containers already had.
+   --------------------------------------------------------------------------- */
+
+/* content.box_members, {boxId: [childId, ...]} - which elements are seated in
+   which box, in the order they sit there. Mirrors GROUPS' shape and role: the
+   dom is rebuilt from scratch on every load (renderCustomElements() re-places
+   every custom element free, template elements come back wherever their markup
+   puts them), so the seating has to be re-applied from this map rather than
+   inferred from a dom that hasn't been assembled yet. */
+var BOX_MEMBERS = {};
+
+/**
+ * True for a Box element - the ta-placed transparent container.
+ * @param el the element
+ * @return true if el is a box
+ */
+function isBoxAreaEl(el) {
+  return !!(el && el.hasAttribute && el.hasAttribute("data-box-area"));
+}
+
+/**
+ * The box one element is SEATED IN, if any.
+ * @param el any element
+ * @return the box, or null - never el itself, even when el is a box
+ * @note Walks from el's parent, so a box nested in another box reports the
+ * outer one rather than itself.
+ */
+function boxOf(el) {
+  var p = el && el.parentElement;
+  return p && p.closest ? p.closest("[data-box-area]") : null;
+}
+
+/**
+ * Whether a box currently takes elements dropped onto it (right-click >
+ * "Accept dropped elements").
+ * @param id the box's data-resize-id
+ * @return true unless a ta has turned it off
+ * @note Defaults to on, and stored as the negative (d.noDrop) so a box saved
+ * before this existed reads as accepting, same backfill-free default every
+ * other optional descriptor field here uses.
+ */
+function boxAcceptsDrops(id) {
+  var d = id && customElementById(id);
+  return !(d && d.noDrop);
+}
+
+/**
+ * The box under a point that would take a drop right now.
+ * @param x viewport px
+ * @param y viewport px
+ * @param moving the element being dragged, so it can't be dropped into itself
+ * @return the box, or null
+ */
+function boxDropTargetAt(x, y, moving) {
+  var boxes = [].slice.call(document.querySelectorAll("[data-box-area]"));
+  var hit = null;
+  boxes.forEach(function (box) {
+    /* dropping a box into itself, or into one of its own descendants, would
+       detach that whole subtree from the document */
+    if (moving && (box === moving || moving.contains(box))) return;
+    if (!boxAcceptsDrops(elId(box))) return;
+    var r = box.getBoundingClientRect();
+    if (x < r.left || x > r.right || y < r.top || y > r.bottom) return;
+    /* innermost wins: a box seated inside another box is the more specific
+       answer wherever the two overlap */
+    if (!hit || hit.contains(box)) hit = box;
+  });
+  return hit;
+}
+
+/**
+ * Which existing child a drop at this point should land BEFORE.
+ * @param box the target box
+ * @param x viewport px
+ * @param y viewport px
+ * @param moving the element being dragged, skipped as a landmark
+ * @return the child to insert before, or null for "at the end"
+ * @note Compares against each child's centre along whichever axis the box
+ * stacks on, the same rule startReelTileDrag() uses for a strip. A wrapping
+ * row is still read along its main axis: the pointer's row is implied by the
+ * children it has already passed.
+ */
+function boxDropIndexAt(box, x, y, moving) {
+  var col = /column/.test(areaFlowFor(elId(box)).dir);
+  var target = null;
+  [].slice.call(box.children).forEach(function (child) {
+    if (target || child === moving || !child.getBoundingClientRect) return;
+    /* only tracked elements are landmarks. A box's other children are
+       scaffolding - the drag spacer (openBoxGhost()), the caret itself
+       (trackBoxDrop()), and the absolutely-positioned surface layer
+       (ensureLayerSurfaces(), which covers the whole box, so its centre is the
+       box's centre and it would win nearly every comparison below). Picking one
+       gives insertBefore a reference node that is about to be detached, or that
+       has to stay the first child. */
+    if (!elId(child)) return;
+    var r = child.getBoundingClientRect();
+    if (col ? y < r.top + r.height / 2 : x < r.left + r.width / 2) target = child;
+  });
+  return target;
+}
+
+/**
+ * Takes an element out of its .free-wrap and hands back where that wrap sat,
+ * so seating can undo the detach that free placement did.
+ * @param el the element
+ * @return {left, top} in document px, or null if el wasn't free-placed
+ */
+function unwrapFreeElement(el) {
+  var wrap = el.parentElement;
+  if (!wrap || !wrap.classList || !wrap.classList.contains("free-wrap")) return null;
+  var r = wrap.getBoundingClientRect();
+  wrap.parentNode.insertBefore(el, wrap);
+  wrap.remove();
+  return { left: Math.round(r.left + window.scrollX), top: Math.round(r.top + window.scrollY) };
+}
+
+/**
+ * Clears every trace of free placement off an element, so its box can lay it
+ * out as an ordinary in-flow child.
+ * @param el the element
+ * @note Size is deliberately kept: a ta who dragged this to 200px wide meant
+ * it, and flexbox honours a width on an item perfectly well. Only the things
+ * that fight the container come off - the absolute scheme, the pinned corner,
+ * the zeroed margin detachFromFlow() left behind, and the move offset.
+ */
+function clearFreePlacement(el) {
+  el.style.position = "";
+  el.style.top = "";
+  el.style.left = "";
+  el.style.margin = "";
+  el.style.maxWidth = "";
+  delete el.dataset.ovTx;
+  delete el.dataset.ovTy;
+  paintPos(el);
+}
+
+/**
+ * Seats an element inside a box: the whole point of this section.
+ * @param el the element to seat
+ * @param box the box to seat it in
+ * @param beforeEl the existing child to insert before, or null for the end
+ * @return true if anything changed
+ */
+function seatInBox(el, box, beforeEl) {
+  if (!el || !box || el === box || el.contains(box)) return false;
+  var id = elId(el), boxId = elId(box);
+  if (!id || !boxId) return false;
+  unwrapFreeElement(el);
+  clearFreePlacement(el);
+  /* the surface layer has to stay the box's first child - it is the box's own
+     background, painted below everything the box holds, see
+     ensureLayerSurfaces(). Seating in front of it would put a seated element
+     underneath the box's own paint. */
+  var surface = box.querySelector(":scope > [data-layer-surface]");
+  if (surface && beforeEl === surface) beforeEl = surface.nextSibling;
+  box.insertBefore(el, beforeEl || null);
+  /* the pinned offset is gone from the dom, so the stored one has to go too -
+     otherwise the next load's applyPositionOverrides() would paint it straight
+     back on and shove the element out of the row it now belongs to */
+  saveEditedPosition(id, null, null);
+  recordBoxMembers();
+  applyBoxFlow();
+  return true;
+}
+
+/**
+ * Lifts an element out of whatever box it's in and puts it back at a free
+ * position, the reverse of seatInBox().
+ * @param el the element
+ * @param left document px, defaulting to where it currently sits
+ * @param top document px
+ * @return true if el was actually in a box
+ */
+function unseatFromBox(el, left, top) {
+  var box = boxOf(el);
+  if (!box) return false;
+  if (left === undefined || top === undefined) {
+    var r = el.getBoundingClientRect();
+    left = Math.round(r.left + window.scrollX);
+    top = Math.round(r.top + window.scrollY);
+  }
+  placeFreeElement(el, left, top);
+  recordBoxMembers();
+  applyBoxFlow();
+  return true;
+}
+
+/**
+ * Re-reads the seating straight off the dom into BOX_MEMBERS and persists it.
+ * @note Read back rather than maintained incrementally: the dom is the truth
+ * the moment anything reorders, and one query is cheaper than keeping a
+ * parallel index correct across seat/unseat/delete/undo.
+ */
+function recordBoxMembers() {
+  var map = {};
+  document.querySelectorAll("[data-box-area]").forEach(function (box) {
+    var boxId = elId(box);
+    if (!boxId) return;
+    var ids = [];
+    [].slice.call(box.children).forEach(function (child) {
+      var cid = elId(child);
+      if (cid) ids.push(cid);
+    });
+    if (ids.length) map[boxId] = ids;
+  });
+  BOX_MEMBERS = map;
+  saveBoxMembers(map);
+}
+
+/**
+ * Persists the whole seating map into the preview snapshot, the same
+ * localStorage draft every other override here uses. Rewritten wholesale, same
+ * as saveGroups(), since BOX_MEMBERS is always the full, current picture.
+ * @param map BOX_MEMBERS
+ */
+function saveBoxMembers(map) {
+  var raw;
+  try { raw = localStorage.getItem(snapshotKey()); } catch (e) { raw = null; }
+  var snapshot;
+  try { snapshot = raw ? JSON.parse(raw) : {}; } catch (e) { snapshot = {}; }
+  snapshot.box_members = map;
+  try { localStorage.setItem(snapshotKey(), JSON.stringify(snapshot)); } catch (e) {}
+}
+
+/**
+ * Re-seats every saved member into its box on load, live site included - where
+ * an element sits is real page content, not an editor affordance.
+ * @param map content.box_members
+ * @note Runs late, after renderCustomElements() and the tile hooks, since a
+ * member can be any of those things and none of them exist before then. Any id
+ * that doesn't resolve is skipped rather than dropped from the map: it may
+ * simply belong to a different page of the same content blob.
+ * @note An id shared by more than one element (the template deliberately gives
+ * the navbar wordmark and the footer wordmark the same nav.brand, so one edit
+ * changes both - see templates/index.html) seats the FIRST of them, the same
+ * answer elByAnyId() gives every other id-keyed override in this file. Seating
+ * both would move two elements for one drag; seating neither would silently
+ * drop a ta's arrangement. See seatedElById() for the one case that needs the
+ * other answer.
+ */
+function applyBoxMembers(map) {
+  BOX_MEMBERS = map && typeof map === "object" ? map : {};
+  Object.keys(BOX_MEMBERS).forEach(function (boxId) {
+    var box = elByAnyId(boxId);
+    if (!box || !isBoxAreaEl(box)) return;
+    (BOX_MEMBERS[boxId] || []).forEach(function (childId) {
+      var child = elByAnyId(childId);
+      if (!child || child === box || child.contains(box)) return;
+      unwrapFreeElement(child);
+      clearFreePlacement(child);
+      box.appendChild(child);
+    });
+  });
+  applyBoxFlow();
+}
+
+/**
+ * Lays out every box from its saved stacking, the box-shaped counterpart to
+ * applyTileFlow(). Idempotent, and cheap enough to re-run after any edit.
+ * @note Flexbox on every box, unconditionally - unlike a tile container there's
+ * no shipped grid layout to preserve compatibility with, and a box full of
+ * differently-sized elements is exactly what flex is for.
+ */
+function applyBoxFlow() {
+  document.querySelectorAll("[data-box-area]").forEach(function (box) {
+    var id = elId(box);
+    if (!id) return;
+    var flow = areaFlowFor(id);
+    /* ONLY what somebody actually asked for. areaFlowFor() always answers with
+       a complete set, filling in defaults for anything unset - writing all of
+       it would overwrite the stylesheet's own layout for the containers that
+       already have one (the navbar's link row is flex with its own gap long
+       before this section existed), so an untouched field is written as "" and
+       handed back to css. Same rule applyTileFlow() already follows for
+       justify/align. */
+    var saved = AREA_FLOW[id] || {}, band = RESPONSIVE_FLOW[id] || {};
+    function set(k) { return band[k] !== undefined ? band[k] : saved[k]; }
+    box.style.flexDirection = set("dir") !== undefined ? flow.dir : "";
+    box.style.flexWrap = set("wrap") !== undefined
+      ? (flow.wrap === "reverse" ? "wrap-reverse" : "wrap") : "";
+    box.style.gap = set("gap") !== undefined ? flow.gap + "px" : "";
+    box.style.justifyContent = flow.justify || "";
+    box.style.alignItems = flow.align || "";
+  });
+}
+window.applyBoxFlow = applyBoxFlow;
+
+/* where the live drag would seat what it's carrying: {box, before}, or null
+   for "drop it free". Recomputed on every mousemove and shown as a highlight
+   on the box plus a caret in the gap it would land in, so a ta always knows
+   what letting go will do BEFORE they let go. See the ALT-DROP note below for
+   when it is allowed to be non-null. */
+var BOX_DROP = null;
+
+/* the caret painted between two of a box's children, one shared node */
+var BOX_CARET = null;
+
+/* the box the dragged element was seated in when the drag began, or null if it
+   was free - set by startBoxDrag(), read by homeBoxUnder(). */
+var BOX_DRAG_HOME = null;
+
+/* A spacer left in the box, exactly the size of the element being dragged, for
+   as long as that drag lasts - see openBoxGhost().
+   Without it the lift in startBoxDrag() shrinks the box under the pointer the
+   instant the drag begins, and boxDropTargetAt() then hit-tests against the
+   shrunken rect: a two-item box narrowed from 98px to 45px, so the pointer that
+   was over the box was over nothing, and no amount of alt could seat the
+   element again. An auto-width box holding one element collapsed to 0. */
+var BOX_GHOST = null;
+
+/**
+ * Holds a box's shape open while one of its children is being dragged.
+ * @param box the box the child was lifted out of
+ * @param rect the child's border-box rect, measured while it was still seated
+ * @param beforeEl the box child the gap sits in front of, null for the end
+ * @note Called AFTER the lift, never before: inserting a same-sized spacer in
+ * front of a still-seated element pushes that element a whole slot along, and
+ * the unseat that follows then pins it at the pushed-to spot - which is the
+ * element visibly jumping away from the cursor the instant a drag starts.
+ * @note Takes the border-box size, not the margin box: seatInBox() zeroes the
+ * margin detachFromFlow() leaves behind, so the gap the element came out of is
+ * the one it would go back into.
+ */
+function openBoxGhost(box, rect, beforeEl) {
+  clearBoxGhost();
+  BOX_GHOST = document.createElement("span");
+  BOX_GHOST.className = "box-drag-ghost";
+  BOX_GHOST.style.width = rect.width + "px";
+  BOX_GHOST.style.height = rect.height + "px";
+  box.insertBefore(BOX_GHOST, beforeEl || null);
+}
+
+/** Takes the drag spacer back out, closing the gap it held open. */
+function clearBoxGhost() {
+  if (BOX_GHOST && BOX_GHOST.parentNode) BOX_GHOST.parentNode.removeChild(BOX_GHOST);
+  BOX_GHOST = null;
+}
+
+/**
+ * The box the current drag came out of, if the pointer is still inside it.
+ * @param x viewport px
+ * @param y viewport px
+ * @return BOX_DRAG_HOME, or null
+ * @note Deliberately not routed through boxDropTargetAt(). Shuffling an element
+ * that is already seated is not a "dropped element", so a box whose ta turned
+ * drops off still lets its own members be reordered (see boxAcceptsDrops()),
+ * and a box nested inside it doesn't steal the drop the way innermost-wins
+ * would - staying inside your own box should mean staying in it.
+ */
+function homeBoxUnder(x, y) {
+  if (!BOX_DRAG_HOME || !BOX_DRAG_HOME.isConnected) return null;
+  var r = BOX_DRAG_HOME.getBoundingClientRect();
+  return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom ? BOX_DRAG_HOME : null;
+}
+
+/**
+ * Recomputes and repaints the drop hint for one mousemove of a drag.
+ * @param el the element being dragged
+ * @param ev the mousemove
+ * @note ALT-DROP: Alt is what JOINS an element to a box it did not belong to.
+ * It's opt-in rather than the default because a box is a full-page-width
+ * rectangle as often as it's a small one, and a plain drag passing over a big
+ * background box silently swallowing the element would be both surprising and,
+ * since seating throws the free position away, destructive of something a ta
+ * had already placed by hand. Holding a key makes it an answer to a question
+ * they asked.
+ * @note An element that is ALREADY seated needs no key to be moved around
+ * inside its own box: nothing is being joined, and every other reorder in this
+ * file (a reel tile, a flow container's tile) is a plain drag. So a drag that
+ * stays within its own box reorders, and the way out is to drag past that box's
+ * edge - see homeBoxUnder(). Alt still matters for a seated element, but only
+ * for moving it to a DIFFERENT box.
+ */
+function trackBoxDrop(el, ev) {
+  /* the previous move's hint comes off FIRST, before anything is measured. The
+     caret is a real flex child, not an overlay, so leaving it in would have the
+     walk below both read it as one of the box's landmarks - and pick it, giving
+     insertBefore a reference node this very function is about to detach - and
+     measure every child right of it 2px + one gap off where it really sits. */
+  clearBoxDropHint();
+  var box = ev.altKey ? boxDropTargetAt(ev.clientX, ev.clientY, el)
+                      : homeBoxUnder(ev.clientX, ev.clientY);
+  if (!box) { BOX_DROP = null; return; }
+  var before = boxDropIndexAt(box, ev.clientX, ev.clientY, el);
+  BOX_DROP = { box: box, before: before };
+  box.classList.add("box-drop-target");
+  if (!BOX_CARET) {
+    BOX_CARET = document.createElement("span");
+    BOX_CARET.className = "box-drop-caret";
+  }
+  box.insertBefore(BOX_CARET, before || null);
+}
+
+/** Takes the drop highlight and caret back off the page. */
+function clearBoxDropHint() {
+  document.querySelectorAll(".box-drop-target").forEach(function (b) {
+    b.classList.remove("box-drop-target");
+  });
+  if (BOX_CARET && BOX_CARET.parentNode) BOX_CARET.parentNode.removeChild(BOX_CARET);
+}
+
+/**
+ * Snapshots where an element sits, in the one vocabulary both sides of a seat
+ * undo can be expressed in.
+ * @param el the element
+ * @return {box, index, left, top} - box "" means free-placed
+ */
+function captureSeat(el) {
+  var box = boxOf(el);
+  if (box) {
+    return {
+      box: elId(box),
+      index: [].slice.call(box.children).indexOf(el),
+      left: 0, top: 0
+    };
+  }
+  var wrap = el.parentElement;
+  var free = wrap && wrap.classList && wrap.classList.contains("free-wrap");
+  var r = (free ? wrap : el).getBoundingClientRect();
+  return {
+    box: "", index: -1,
+    left: Math.round(r.left + window.scrollX),
+    top: Math.round(r.top + window.scrollY)
+  };
+}
+
+/**
+ * Resolves an id to the element a seating change should act on.
+ * @param id the element's data-edit-id or data-resize-id
+ * @return the element, or null
+ */
+function seatedElById(id) {
+  var all = document.querySelectorAll('[data-edit-id="' + id + '"], [data-resize-id="' + id + '"]');
+  /* an id can legitimately be on more than one element - the template shares
+     nav.brand between the navbar and the footer on purpose, so one edit to the
+     wordmark changes both (see templates/index.html). elByAnyId() answers with
+     the first in dom order, which is the right answer for every id-keyed
+     override in this file; for UNSEATING it is not, because the copy that's
+     actually sitting in a box is the one the ta is undoing. */
+  for (var i = 0; i < all.length; i++) if (boxOf(all[i])) return all[i];
+  return all[0] || null;
+}
+
+/**
+ * Puts an element back into a state captureSeat() recorded - the replay half
+ * of a seat undo/redo.
+ * @param el the element
+ * @param v a captureSeat() result
+ */
+function restoreSeat(el, v) {
+  if (!el || !v) return;
+  if (v.box) {
+    var box = elByAnyId(v.box);
+    if (!box) return;
+    /* the recorded index counted el itself when it was already in this box, so
+       inserting before the child now AT that index lands it back in the same
+       gap either way */
+    seatInBox(el, box, box.children[v.index] || null);
+    return;
+  }
+  unseatFromBox(el, v.left, v.top);
+  var wrap = el.parentElement;
+  if (wrap && wrap.classList && wrap.classList.contains("free-wrap")) {
+    wrap.style.left = v.left + "px";
+    wrap.style.top = v.top + "px";
+  }
+}
+
+/**
+ * The end of a drag, once the pointer is up: seats what was dragged if the
+ * hint said it would, and records one undo entry if the seating changed.
+ * @param el the element that was dragged
+ * @param before the captureSeat() taken when the drag started
+ * @return true if the element was seated or unseated
+ */
+function finishBoxDrop(el, before) {
+  var drop = BOX_DROP;
+  clearBoxDropHint();
+  /* the drag is over either way, so the spacer's gap closes here - before the
+     seat below, which is safe because boxDropIndexAt() never returns the ghost
+     as a reference node, see openBoxGhost() */
+  clearBoxGhost();
+  BOX_DROP = null;
+  BOX_DRAG_HOME = null;
+  /* a drag that never reached startBoxDrag() (its 5px threshold was never
+     crossed) has nothing seated to restore */
+  if (!before) before = { box: "", index: -1, left: 0, top: 0 };
+  if (!drop) {
+    /* dragged out of a box and dropped on open page: it's already free (the
+       drag start unseated it, see startBoxDrag()), so the only thing left is
+       the history entry */
+    if (before.box) {
+      EDIT_UNDO.push({ type: "seat", id: elId(el), before: before, after: captureSeat(el) });
+      EDIT_REDO.length = 0;
+      return true;
+    }
+    return false;
+  }
+  seatInBox(el, drop.box, drop.before);
+  var after = captureSeat(el);
+  /* a drag that put it back in the same gap it came from changed nothing, and
+     an undo entry for it would just be one wasted press of ctrl-z. Common now
+     that reordering inside a box needs no key, see trackBoxDrop(). */
+  if (before.box !== after.box || before.index !== after.index) {
+    EDIT_UNDO.push({ type: "seat", id: elId(el), before: before, after: after });
+    EDIT_REDO.length = 0;
+  }
+  positionRing();
+  return true;
+}
+
+/**
+ * The start of a drag on something that might be seated: lifts it out of its
+ * box to a free position at exactly the spot it already occupies, so every
+ * drag path below it is the ordinary free-element one it always was.
+ * @param el the element about to be dragged
+ * @return the captureSeat() taken BEFORE the lift, for finishBoxDrop()
+ * @note Lifting up front rather than on drop is what keeps this from needing
+ * its own drag implementation: a seated element is an in-flow child, and
+ * dragging one without lifting it would have detachFromFlow() freeze a phantom
+ * wrap inside the box and leave a hole in the row for the length of the drag.
+ */
+function startBoxDrag(el) {
+  var before = captureSeat(el);
+  if (before.box) {
+    /* measured while el is still seated, and the lift is done from THAT rect
+       rather than from wherever el ends up: the spacer below has to go in after
+       the lift (see openBoxGhost()), but it has to be the size and in the place
+       the element really occupied, which only exists to be read right now */
+    var box = boxOf(el);
+    var rect = el.getBoundingClientRect();
+    var gap = el.nextSibling;
+    unseatFromBox(el, Math.round(rect.left + window.scrollX),
+                  Math.round(rect.top + window.scrollY));
+    /* the gap stays open for the whole drag - otherwise the box shrinks out
+       from under the pointer and alt can never find it again */
+    openBoxGhost(box, rect, gap);
+    /* remembered so a drag that never leaves this box can reorder without Alt,
+       see trackBoxDrop()'s ALT-DROP note */
+    BOX_DRAG_HOME = box;
+  }
+  return before;
+}
+
+/**
+ * Turns a box's "does an Alt-drop land in here" switch on or off.
+ * @param id the box's data-resize-id
+ * @param on true to accept drops
+ * @note Stored as the negative on the descriptor, see boxAcceptsDrops().
+ */
+function setBoxAcceptsDrops(id, on) {
+  var d = customElementById(id);
+  if (!d) return;
+  if (on) delete d.noDrop;
+  else d.noDrop = true;
+  saveCustomElements(CUSTOM_ELEMENTS);
+  EDIT_UNDO.push({ type: "boxdrops", id: id, before: !on, after: !!on });
+  EDIT_REDO.length = 0;
+}
+
+/**
+ * Draws a box around a set of already-placed elements and seats all of them in
+ * it, in reading order - the right-click menu's "Put N elements in a box".
+ * @param ids the selected ids (2 or more)
+ * @return the new box element, or null
+ * @note The way anything already laid out gets into a box. Adding an empty box
+ * and dragging each element in individually would mean re-placing work a ta had
+ * already done by hand; this takes the arrangement as the answer and reads the
+ * seating order straight off it.
+ * @note The box is sized to the union of what it holds plus a small margin, and
+ * placed at that union's top-left, so the moment it appears it sits exactly
+ * where the elements already were.
+ */
+function boxSelection(ids) {
+  var els = (ids || []).map(elByAnyId).filter(function (el) {
+    /* a tile role and a page can't be lifted out of what owns them, and a
+       locked element isn't up for rearranging at all */
+    return el && !isPageEl(el) && !isLocked(elId(el)) && !isMoveLockedTileRole(el) && !isTileBoxEl(el);
+  });
+  if (els.length < 2) return null;
+  /* reading order (top row first, then left to right within a row) rather than
+     selection order: a ta shift-clicking six nav links doesn't necessarily
+     click them in the order they should sit, and the arrangement on screen is
+     the more reliable statement of intent. The 12px row tolerance is what makes
+     a row of elements whose tops differ by a pixel or two still count as one
+     row rather than sorting into a staircase. */
+  var rects = els.map(function (el) { return { el: el, r: el.getBoundingClientRect() }; });
+  rects.sort(function (a, b) {
+    if (Math.abs(a.r.top - b.r.top) > 12) return a.r.top - b.r.top;
+    return a.r.left - b.r.left;
+  });
+  var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  rects.forEach(function (x) {
+    minX = Math.min(minX, x.r.left); minY = Math.min(minY, x.r.top);
+    maxX = Math.max(maxX, x.r.right); maxY = Math.max(maxY, x.r.bottom);
+  });
+  /* every element's seating BEFORE the box exists, so one undo can put the
+     whole arrangement back rather than leaving them stacked in a hidden box */
+  var seats = rects.map(function (x) { return { id: elId(x.el), before: captureSeat(x.el) }; });
+  var pad = 8;
+  var box = addCustomElement("box",
+    Math.round(minX + window.scrollX - pad), Math.round(minY + window.scrollY - pad));
+  if (!box) return null;
+  /* addCustomElement() pushed its own "add" entry; the boxwrap entry below
+     covers the box AND the seating, so one Ctrl+Z undoes the whole action
+     rather than needing two presses to get back to where the ta started */
+  if (EDIT_UNDO.length && EDIT_UNDO[EDIT_UNDO.length - 1].type === "add") EDIT_UNDO.pop();
+  var boxId = elId(box);
+  var d = customElementById(boxId);
+  var w = Math.round(maxX - minX) + pad * 2, h = Math.round(maxY - minY) + pad * 2;
+  box.style.width = w + "px";
+  box.style.height = h + "px";
+  box.dataset.natW = w;
+  box.dataset.natH = h;
+  if (d) { d.w = w; d.h = h; }
+  saveEditedSize(boxId, { w: w, h: h });
+  /* transparent, not the box element's usual --surface-2 slab: this box is
+     being drawn around existing content to give it a layout, and painting a
+     panel behind that content is a styling decision the ta hasn't made. The
+     editor's dashed outline still makes it visible to work with. */
+  setElementColor(box, "transparent");
+  saveEditedColor(boxId, "transparent");
+  rects.forEach(function (x) { seatInBox(x.el, box, null); });
+  EDIT_UNDO.push({ type: "boxwrap", boxId: boxId, seats: seats });
+  EDIT_REDO.length = 0;
+  RING_EL = box;
+  positionRing();
+  if (window.responsiveRepaintSoon) window.responsiveRepaintSoon();
+  return box;
 }
 
 /**
@@ -10717,6 +11386,13 @@ function buildCustomElementNode(d) {
   } else if (d.kind === "box") {
     el = document.createElement("div");
     el.setAttribute("data-resize-id", d.id);
+    /* what makes a box the one element that really contains others: elements
+       can be seated inside it (Alt-drop, see startBoxDropTracking()) and it lays
+       them out rather than each of them holding a pinned coordinate. See the BOX
+       CONTAINERS section for why this is a separate attribute from the tile
+       containers' data-flow-area rather than the same one. */
+    el.setAttribute("data-box-area", "1");
+    el.className = "box-flow";
     el.style.background = "var(--surface-2)";
     el.style.width = "160px";
     el.style.height = "100px";
@@ -11658,7 +12334,15 @@ var RESPONSIVE_PROPS = {
   wrap:      { num: false, flow: true },
   gap:       { num: true,  flow: true },
   justify:   { num: false, flow: true },
-  align:     { num: false, flow: true }
+  align:     { num: false, flow: true },
+  /* CHILD fields: authored on a container, painted onto what's inside it (see
+     paintContainerChildProps()). The three above them - dir/wrap/gap - are the
+     container asking the BROWSER to lay its children out, which flexbox does
+     for free. These three have no css equivalent that still lets a child hold
+     an override of its own, so the container resolves them and reaches in. */
+  childHide:      { num: false, child: true },
+  childScale:     { num: true,  child: true },
+  childFontScale: { num: true,  child: true }
 };
 
 /* resolved flow overrides for this frame, {id: {dir, wrap, gap, justify,
@@ -11666,6 +12350,94 @@ var RESPONSIVE_PROPS = {
    band changing a container's stacking flows through applyTileFlow() and the
    whole tile pipeline without any of it knowing this section exists. */
 var RESPONSIVE_FLOW = {};
+
+/* the containers whose bands say something about their CHILDREN this frame,
+   [{el, props}]. Held as a list rather than a map because a shared id can be
+   two real containers on one page (see applyResponsiveBehaviour()). */
+var RESPONSIVE_CHILD = [];
+
+/* every element painted by the last paintContainerChildProps() pass, so a
+   container that stops asking for something can have it taken back off. Without
+   this, hiding a box's children at 400px would leave them hidden for the rest
+   of the session once the window went wide again - the container simply stops
+   mentioning them, and nothing else on the page owns those properties. */
+var RESPONSIVE_CHILD_PAINTED = [];
+
+/**
+ * Paints what each container asks of its own children.
+ * @note The third of the three ways a container can affect what's inside it,
+ * and the only one that needs code here. The first is that a child measures
+ * ITSELF against its container (responsiveAxisEl()); the second is that the
+ * container hands flexbox a direction/wrap/gap and the browser does the work
+ * (areaFlowFor()). Neither can express "hide what's in here" or "shrink the
+ * text in here", because css has no way to say that which a child can still
+ * override per element - so the container resolves it and writes it on.
+ * @note Direct children only, never the whole subtree: a box holding a card
+ * holding a title should hand its answer to the card, and let the card's own
+ * bands decide what happens to the title. Reaching all the way down would take
+ * that decision away from every container in between.
+ */
+function paintContainerChildProps() {
+  /* everything the last pass wrote comes off first, so a container that has
+     stopped asking is actually undone rather than just not-re-applied */
+  RESPONSIVE_CHILD_PAINTED.forEach(function (kid) {
+    if (kid.dataset.rsChildHide === "1") {
+      kid.style.display = kid.dataset.rsChildDisplay || "";
+      delete kid.dataset.rsChildDisplay;
+      delete kid.dataset.rsChildHide;
+    }
+    if (kid.dataset.rsChildScale !== undefined) {
+      delete kid.dataset.rsChildScale;
+      /* rsScale is paintResponsive()'s own field: only give it back if this
+         pass is what put the value there */
+      delete kid.dataset.rsScale;
+      paintPos(kid);
+    }
+    if (kid.dataset.rsChildFont !== undefined) {
+      kid.style.fontSize = kid.dataset.rsChildFontWas || "";
+      delete kid.dataset.rsChildFontWas;
+      delete kid.dataset.rsChildFont;
+    }
+  });
+  RESPONSIVE_CHILD_PAINTED = [];
+  RESPONSIVE_CHILD.forEach(function (entry) {
+    var p = entry.props;
+    [].slice.call(entry.el.children).forEach(function (kid) {
+      /* the drop caret is this file's own furniture, not page content */
+      if (kid.classList && kid.classList.contains("box-drop-caret")) return;
+      var touched = false;
+      if (p.childHide) {
+        if (kid.dataset.rsChildDisplay === undefined) {
+          kid.dataset.rsChildDisplay = kid.style.display || "";
+        }
+        kid.dataset.rsChildHide = "1";
+        kid.style.display = "none";
+        touched = true;
+      }
+      if (p.childScale > 0 && p.childScale !== 1) {
+        kid.dataset.rsChildScale = p.childScale;
+        kid.dataset.rsScale = p.childScale;
+        paintPos(kid);
+        touched = true;
+      }
+      if (p.childFontScale > 0 && p.childFontScale !== 1) {
+        if (kid.dataset.rsChildFontWas === undefined) {
+          kid.dataset.rsChildFontWas = kid.style.fontSize || "";
+        }
+        /* off the COMPUTED size, so this composes with whatever the stylesheet
+           or the ta's own font-size override already resolved to rather than
+           needing to know which of them won */
+        var base = parseFloat(getComputedStyle(kid).fontSize);
+        if (base > 0) {
+          kid.style.fontSize = (base * p.childFontScale) + "px";
+          kid.dataset.rsChildFont = p.childFontScale;
+          touched = true;
+        }
+      }
+      if (touched) RESPONSIVE_CHILD_PAINTED.push(kid);
+    });
+  });
+}
 
 /**
  * Loads content.responsive/content.responsive_waivers/content.authored_width
@@ -11701,6 +12473,12 @@ function applyResponsiveOverrides(map, waivers, authoredWidth) {
  */
 function responsiveAxisEl(el, axis) {
   if (axis === "viewport") return null;
+  /* a box counts as a container here exactly as a tile area does - it's the
+     box a seated element actually has to fit inside, and it's checked FIRST
+     because a box can itself be seated inside a tile area, in which case the
+     box is the more specific answer. See the BOX CONTAINERS section. */
+  var seat = boxOf(el);
+  if (seat) return seat;
   var area = flowAreaForEl(el);
   /* a container resolves against its own parent container, one step up */
   if (area === el) area = el.parentElement ? flowAreaForEl(el.parentElement) : null;
@@ -11729,7 +12507,18 @@ function responsiveAxisWidth(el, axis) {
        against 0 would hide half the page for one frame */
     if (w > 0) return w;
   }
-  return document.documentElement.clientWidth || window.innerWidth || AUTHORED_WIDTH;
+  /* innerWidth, NOT documentElement.clientWidth: a `@media (max-width: 940px)`
+     query is evaluated against the full viewport INCLUDING the scrollbar,
+     while clientWidth excludes it. The plane's snap guides are the stylesheet's
+     own breakpoints (see RESPONSIVE_BREAKPOINTS), so a ta dropping a band edge
+     exactly on 940 and the css rule at 940 have to fire at the same window
+     size - measuring the narrower box made every such band switch roughly a
+     scrollbar's width early, which on a page whose css reflows at that same
+     number reads as the two fighting each other.
+     Deliberately only the BAND AXIS. responsiveFallbackFor()'s overhang math
+     stays on clientWidth, because "is this element off the visible area" is a
+     question about the box the visitor can actually see. */
+  return window.innerWidth || document.documentElement.clientWidth || AUTHORED_WIDTH;
 }
 
 /**
@@ -12067,6 +12856,7 @@ function responsiveAnchorDelta(el, which) {
  */
 function applyResponsiveBehaviour() {
   RESPONSIVE_FLOW = {};
+  RESPONSIVE_CHILD = [];
   var els = [].slice.call(document.querySelectorAll(RESIZABLE_SEL));
   var flowTouched = false;
   els.forEach(function (el) {
@@ -12080,15 +12870,27 @@ function applyResponsiveBehaviour() {
     var props = resolveResponsiveProps(id, axisW);
     /* the flow fields are the container's business, not this element's box:
        peel them off into RESPONSIVE_FLOW for areaFlowFor() to merge */
-    var flow = null;
+    var flow = null, kids = null;
     Object.keys(props).forEach(function (k) {
       var spec = RESPONSIVE_PROPS[k];
-      if (!spec || !spec.flow) return;
-      if (!flow) flow = {};
-      flow[k] = props[k];
-      delete props[k];
+      if (!spec) return;
+      if (spec.flow) {
+        if (!flow) flow = {};
+        flow[k] = props[k];
+        delete props[k];
+      } else if (spec.child) {
+        /* not this element's own box either: it describes what this element
+           does to whatever is inside it, see paintContainerChildProps() */
+        if (!kids) kids = {};
+        kids[k] = props[k];
+        delete props[k];
+      }
     });
     if (flow) { RESPONSIVE_FLOW[id] = flow; flowTouched = true; }
+    /* kept per ELEMENT, not per id: a shared id (nav.brand is on the navbar and
+       the footer, deliberately) is two real containers with two sets of real
+       children, and both have to be painted */
+    if (kids) RESPONSIVE_CHILD.push({ el: el, props: kids });
     paintResponsive(el, props, responsiveFallbackFor(el, axisW));
   });
   /* only re-lay the tiles when the resolved flow overrides actually CHANGED.
@@ -12101,7 +12903,15 @@ function applyResponsiveBehaviour() {
   if (sig !== RESPONSIVE_FLOW_SIG) {
     RESPONSIVE_FLOW_SIG = sig;
     applyTileFlow();
+    /* boxes read the same resolved flow through the same areaFlowFor(), so
+       they re-lay under the same signature guard and for the same reason - see
+       the BOX CONTAINERS section */
+    applyBoxFlow();
   }
+  /* dead last, and after the flow pass above: what a container does TO its
+     children is resolved from the container's own bands, so it has to see the
+     layout those bands just produced */
+  paintContainerChildProps();
 }
 window.applyResponsiveBehaviour = applyResponsiveBehaviour;
 
@@ -12314,7 +13124,7 @@ window.responsiveAxisReadout = responsiveAxisReadout;
          itself resize, which would have the observer re-firing on the pass's
          own output - the containers below are the only boxes bands are
          actually measured against, so they're the only ones worth watching. */
-      document.querySelectorAll("[data-flow-area]").forEach(function (host) {
+      document.querySelectorAll("[data-flow-area], [data-box-area]").forEach(function (host) {
         try { ro.observe(host); } catch (e) {}
       });
       try { ro.observe(document.body); } catch (e) {}
@@ -13863,7 +14673,13 @@ function renderCtxMenuRoot() {
       '<button type="button" data-fixed-toggle="1">' +
       (isFixed(CTX_TARGET_ID) ? "Remove from navbar" : "Promote to navbar") +
       '</button>' +
-      (groupOf(CTX_TARGET_ID) ? '<button type="button" data-ungroup="1">Ungroup</button>' : "");
+      (groupOf(CTX_TARGET_ID) ? '<button type="button" data-ungroup="1">Ungroup</button>' : "") +
+      /* the way OUT of a box that doesn't need a drag - a box small enough to
+         be a tight fit around what it holds leaves nowhere obvious to drag to,
+         and the element goes back to a free position exactly where it already
+         sits. See unseatFromBox(). */
+      (CTX_TARGET_EL && boxOf(CTX_TARGET_EL)
+        ? '<button type="button" data-box-unseat="1">Take out of box</button>' : "");
     /* how this particular clip plays, in its own labelled section rather than
        mixed into the generic list above - none of it applies to any other
        kind of element. A placed video has always been a muted, looping,
@@ -13909,7 +14725,21 @@ function renderCtxMenuRoot() {
   }
   if (SELECTED_IDS.length >= 2) {
     toggleHtml += '<div class="ctx-title">Selection</div>' +
-      '<button type="button" data-group="1">Group ' + SELECTED_IDS.length + ' elements</button>';
+      '<button type="button" data-group="1">Group ' + SELECTED_IDS.length + ' elements</button>' +
+      /* the other way to get things into a box, and the one that matters for
+         anything already laid out: rather than adding an empty box and dragging
+         each element in, draw the box around what's already there. See
+         boxSelection(). */
+      '<button type="button" data-box-wrap="1">Put ' + SELECTED_IDS.length + ' elements in a box</button>';
+  }
+  /* a box's own "does a drop land in here" switch. Offered on the box and on
+     anything seated in one, for the same reachability reason the Container
+     section below is: a box is usually covered by what it holds. */
+  var dropBox = CTX_TARGET_EL && (isBoxAreaEl(CTX_TARGET_EL) ? CTX_TARGET_EL : boxOf(CTX_TARGET_EL));
+  if (dropBox) {
+    toggleHtml += '<div class="ctx-title">Box</div>' +
+      '<button type="button" data-box-drops="1">Alt-drop into this box: ' +
+      (boxAcceptsDrops(elId(dropBox)) ? "on &rarr; off" : "off &rarr; on") + '</button>';
   }
   /* the tile containers' own per-axis "keep this size" / "grow to fit"
      switch (see areaFlowFor()). Offered on the container itself AND on
@@ -14217,6 +15047,38 @@ function renderCtxMenuRoot() {
       EDIT_UNDO.push({ type: "group", ids: ids });
       EDIT_REDO.length = 0;
       clearSelection();
+      hideCtxMenu();
+    });
+  }
+  var boxWrapBtn = CTX_MENU.querySelector("[data-box-wrap]");
+  if (boxWrapBtn) {
+    boxWrapBtn.addEventListener("click", function () {
+      boxSelection(SELECTED_IDS);
+      clearSelection();
+      hideCtxMenu();
+    });
+  }
+  var unseatBtn = CTX_MENU.querySelector("[data-box-unseat]");
+  if (unseatBtn) {
+    unseatBtn.addEventListener("click", function () {
+      var el = CTX_TARGET_EL;
+      if (!el) return hideCtxMenu();
+      var before = captureSeat(el);
+      if (unseatFromBox(el)) {
+        EDIT_UNDO.push({ type: "seat", id: elId(el), before: before, after: captureSeat(el) });
+        EDIT_REDO.length = 0;
+        positionRing();
+        if (window.responsiveRepaintSoon) window.responsiveRepaintSoon();
+      }
+      hideCtxMenu();
+    });
+  }
+  var dropsBtn = CTX_MENU.querySelector("[data-box-drops]");
+  if (dropsBtn) {
+    dropsBtn.addEventListener("click", function () {
+      var el = CTX_TARGET_EL;
+      var box = el && (isBoxAreaEl(el) ? el : boxOf(el));
+      if (box) setBoxAcceptsDrops(elId(box), !boxAcceptsDrops(elId(box)));
       hideCtxMenu();
     });
   }
@@ -15657,6 +16519,9 @@ function wireResizable() {
     var startX = e.clientX, startY = e.clientY;
     var base = getPos(el);
     var moving = false;
+    /* captured on the first real mousemove, not here: a plain click must not
+       lift a seated element out of its box, see startBoxDrag() */
+    var seatBefore = null;
     /* set once the drag really starts, see snapLinesOf() */
     var snapFrom = null;
     /* other members of el's group (see groupOf()), each moved by the exact
@@ -15678,10 +16543,14 @@ function wireResizable() {
            before ANY of them detaches, see detachFromFlow()'s knownRect
            param and startMoveDrag()'s own doc comment on why order matters
            here. */
+        seatBefore = startBoxDrag(el);
         var elRect = el.getBoundingClientRect();
         groupMembers.forEach(function (m) { m.preRect = m.el.getBoundingClientRect(); });
         detachFromFlow(el, elRect);
         groupMembers.forEach(function (m) { detachFromFlow(m.el, m.preRect); });
+        /* base was read before the lift, when a seated element still had no
+           offset of its own; re-read so the drag tracks from where it now is */
+        base = getPos(el);
         /* nothing has moved yet at this point (the 5px threshold above is a
            pointer travel, not an element one), so this rect is still the
            element's pre-drag corner, same as the handle drag's - see
@@ -15701,6 +16570,7 @@ function wireResizable() {
       });
       positionRing();
       paintSnapGuides();
+      trackBoxDrop(el, ev);
     }
     function onUp() {
       document.removeEventListener("mousemove", onMove);
@@ -15711,6 +16581,9 @@ function wireResizable() {
       document.body.style.userSelect = "";
       JUST_DRAGGED = true;
       setTimeout(function () { JUST_DRAGGED = false; }, 0);
+      /* see the same call in startMoveDrag(): a seat entry replaces the move
+         entry, since a seated element has no free position to record */
+      if (finishBoxDrop(el, seatBefore)) { positionRing(); return; }
       var p = getPos(el);
       commitPosition(el);
       var moves = [{ id: elId(el), before: base, after: p }];
@@ -17600,6 +18473,46 @@ function applyHistoryAction(action, side) {
     positionRing();
     return;
   }
+  /* seating an element in a box, or lifting it back out - see restoreSeat(),
+     which takes either side of the entry and puts the element back into it */
+  if (action.type === "seat") {
+    restoreSeat(seatedElById(action.id), val);
+    positionRing();
+    if (window.responsiveRepaintSoon) window.responsiveRepaintSoon();
+    return;
+  }
+  /* "Put N elements in a box": one entry covering the box AND every element's
+     seating, so a single press undoes the whole action - see boxSelection().
+     Undoing puts each element back where it was and hides the box (the same
+     "before" state a delete leaves behind, see addCustomElement()); redoing
+     brings the box back and re-seats them in the order they were seated. */
+  if (action.type === "boxwrap") {
+    var wrapBox = elByAnyId(action.boxId);
+    if (side === "before") {
+      action.seats.forEach(function (s) { restoreSeat(seatedElById(s.id), s.before); });
+      setElementHidden(action.boxId, true);
+    } else {
+      setElementHidden(action.boxId, false);
+      if (wrapBox) action.seats.forEach(function (s) {
+        var el = seatedElById(s.id);
+        if (el) seatInBox(el, wrapBox, null);
+      });
+    }
+    positionRing();
+    if (window.responsiveRepaintSoon) window.responsiveRepaintSoon();
+    return;
+  }
+  /* a box's "does an Alt-drop land in here" switch, see setBoxAcceptsDrops().
+     val is the stored negative, so it goes straight onto the descriptor. */
+  if (action.type === "boxdrops") {
+    var dropsD = customElementById(action.id);
+    if (dropsD) {
+      if (val) dropsD.noDrop = true;
+      else delete dropsD.noDrop;
+      saveCustomElements(CUSTOM_ELEMENTS);
+    }
+    return;
+  }
   if (action.type === "areaGap") {
     setAreaFlowProp(action.id, "gap", val);
     var gapEl = elByAnyId(action.id);
@@ -19252,6 +20165,11 @@ function applySharedOverridePasses(data, textMap) {
      which error string is showing - and only this pass knows when they
      actually exist in the dom */
   if (window.refreshLoginPage) window.refreshLoginPage();
+  /* after every hook above, since a seated member can be a custom element, a
+     tile role or a piece of template markup and none of them are all in the dom
+     until here - and before the responsive pass below, which measures a seated
+     element against the box it has just been put into. See applyBoxMembers(). */
+  applyBoxMembers(data.box_members);
   /* dead last, over finished geometry. Everything above writes an element's
      authored box and offset; this reads those and composes today's width on
      top of them, so it has to see the final answer rather than an
@@ -19432,6 +20350,8 @@ function initObjectCanvas() {
     var hint = document.getElementById("objCanvasHint");
     if (hint) hint.style.display = (data.custom_elements || []).length ? "none" : "";
     if (window.initAllReels) window.initAllReels();
+    /* an object's scene carries its own seating, same as the page blob does */
+    applyBoxMembers(data.box_members);
     wireResizable();
     wireClickToEdit();
     wireAddElementMenu();

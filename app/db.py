@@ -696,6 +696,15 @@ DEFAULT_CONTENT["custom_elements"].extend(_LOGIN_ENTRIES)
 # is a visual no-op by default (see css/style.css's .login-field-box)
 DEFAULT_CONTENT["radius"]["seed.login.field.username.box"] = 10
 DEFAULT_CONTENT["radius"]["seed.login.field.password.box"] = 10
+# the idled-out line is centred; the wrong-credentials one above it is not.
+# The two say different things about themselves: "wrong username or password"
+# points at the box the visitor just typed in, so it reads left, under it. The
+# timeout line is about the session, not a field, and lands on a form nobody
+# has touched yet - centred under the card it belongs to rather than hanging
+# off one edge. Ordinary text-toolbar alignment, so a ta can undo this from
+# the editor like any other; see _migrate_login_expired_align().
+_LOGIN_EXPIRED_ALIGN_ID = "seed.login.error.expired"
+DEFAULT_CONTENT["text_styles"][_LOGIN_EXPIRED_ALIGN_ID] = {"align": "center"}
 
 # the gallery page's four moving parts, given the same treatment the student
 # dashboard's tile areas got (_DASH_EXTRAS_AREA_ENTRY above): what used to be
@@ -1190,6 +1199,7 @@ def init_db():
     _migrate_login_page(conn)
     _migrate_gallery_page(conn)
     _migrate_login_labels(conn)
+    _migrate_login_expired_align(conn)
     _migrate_landing_nav_states(conn)
     _migrate_custom_elements_page_scope(conn)
     _migrate_progress_bar_object(conn)
@@ -2095,6 +2105,33 @@ def _migrate_drop_variable_page_scope(conn):
         if changed:
             conn.execute("UPDATE profiles SET data = ? WHERE id = ?", (json.dumps(data), prow["id"]))
 
+    conn.commit()
+
+
+def _migrate_login_expired_align(conn):
+    """centres the login page's idled-out line in the seeded original-theme
+    profile of a db that predates it (see _LOGIN_EXPIRED_ALIGN_ID above).
+
+    Unconditional and unflagged, like _migrate_default_profile_name(): this
+    row is not something anyone can have restyled - api_update_profile() in
+    app/main.py 403s every field on is_default - so there is no ta's own
+    alignment here to preserve, and nothing to stop running twice. Only that
+    row. The live content and every other profile ARE ta-editable, and left
+    aligned is a choice somebody may have made on purpose there; the new
+    default reaches them by applying the profile, same as any other part of
+    it.
+    @param conn an open db connection
+    """
+    row = conn.execute("SELECT id, data FROM profiles WHERE is_default = 1").fetchone()
+    if not row:
+        return
+    data = json.loads(row["data"])
+    styles = data.setdefault("text_styles", {})
+    entry = styles.setdefault(_LOGIN_EXPIRED_ALIGN_ID, {})
+    if entry.get("align") == "center":
+        return
+    entry["align"] = "center"
+    conn.execute("UPDATE profiles SET data = ? WHERE id = ?", (json.dumps(data), row["id"]))
     conn.commit()
 
 

@@ -751,7 +751,8 @@ var VARIABLE_PAGE_LABELS = {
   index: "landing page",
   dashboard: "student dashboard",
   gallery: "gallery page",
-  login: "login page"
+  login: "login page",
+  notfound: "not-found page"
 };
 
 /**
@@ -1684,6 +1685,7 @@ function showEditorSubTab(name) {
   });
   syncNavStateSwitch();
   syncDashViewSwitch();
+  syncLoginViewSwitch();
   /* the pane has a measurable size from here on (this is the first thing that
      runs once the editor tab is actually on show, see showMode()), so this is
      where the frame first gets fitted to it - syncFrameViewport() no-ops
@@ -1802,6 +1804,78 @@ function pushDashViewToFrame() {
   if (editorDashView !== "gate") return;
   var win = editorFrameWindow();
   try { if (win && win.applyDashView) win.applyDashView("gate"); } catch (e) {}
+}
+
+/* ---------------------------------------------------------------------------
+   THE LOGIN PAGE'S STATE SWITCH
+
+   The third page with a state the editor can't otherwise get to. A visitor
+   reaches the login page either normally or bounced out of a session that went
+   idle, and the difference between the two is which of the failure line's two
+   wordings is showing - so the timed-out one, the message someone reads at
+   their most confused moment, was only reachable through a right-click entry
+   on one specific element.
+
+   Same switch, same place, same "view state, never saved" rule as the two
+   above. It also renames the "Error message" entry in the frame's Add element
+   menu, since in this state that's what the entry would place - see
+   toggleLoginView() in js/main.js.
+   --------------------------------------------------------------------------- */
+
+/* which state the login page is being edited in, "normal" or "expired" */
+var editorLoginView = "normal";
+
+/**
+ * Redraws the switch from editorLoginView, and shows it only on the login tab
+ * - it's the only page whose states differ by what a message says.
+ */
+function syncLoginViewSwitch() {
+  var row = document.getElementById("edLoginViewRow");
+  var sw = document.getElementById("edLoginView");
+  if (!row || !sw) return;
+  row.hidden = editorSubTab !== "login";
+  var on = editorLoginView === "expired";
+  sw.setAttribute("aria-checked", on ? "true" : "false");
+  document.getElementById("edLoginViewText").textContent = on ? "Timed out" : "Normal";
+  sw.title = on
+    ? "Editing the page someone gets when they're signed out for sitting idle. Switch off to edit the ordinary one."
+    : "Editing the ordinary login page. Switch on to edit what someone signed out for sitting idle sees.";
+}
+
+/** Flips which state of the login page the editor's iframe is showing (the switch next to the page tabs). */
+function toggleEditorLoginView() {
+  var win = editorFrameWindow();
+  var done = false;
+  /* let the iframe do the flipping - it also has to re-pin anything anchored
+     below a line that just changed length, and it calls noteEditorLoginView()
+     back on its way through, which is what leaves editorLoginView correct */
+  try { if (win && win.toggleLoginView) { win.toggleLoginView(); done = true; } } catch (e) {}
+  /* nothing to ask while the frame is still loading, so keep the switch
+     usable and let pushLoginViewToFrame() assert it when the frame arrives */
+  if (!done) editorLoginView = editorLoginView === "expired" ? "normal" : "expired";
+  syncLoginViewSwitch();
+}
+
+/**
+ * Records a flip made inside the frame - from the failure line's own
+ * right-click entry, or from this switch on its way through - and redraws.
+ * Called by js/main.js's toggleLoginView() across the iframe boundary, the
+ * same way noteEditorTheme() is called for the theme switch.
+ * @param view "normal" or "expired"
+ */
+function noteEditorLoginView(view) {
+  editorLoginView = view === "expired" ? "expired" : "normal";
+  syncLoginViewSwitch();
+}
+
+/**
+ * Re-asserts the switch onto a freshly (re)loaded iframe, which always starts
+ * in the ordinary state - same timing and reasons as pushNavStateToFrame().
+ */
+function pushLoginViewToFrame() {
+  if (editorLoginView !== "expired") return;
+  var win = editorFrameWindow();
+  try { if (win && win.applyLoginView) win.applyLoginView("expired"); } catch (e) {}
 }
 
 /* ---------------------------------------------------------------------------
@@ -2312,36 +2386,47 @@ function updateProfile(id, fields, onOk) {
     });
 }
 
-/** Swaps the action buttons and the header banner between live mode and profile mode. */
+/**
+ * Swaps the action buttons and the header banner between live mode and
+ * profile mode.
+ * @note "Save profile" is the only control here that can be off, and it's off
+ * whenever there's no profile of the ta's own open to write into: live content
+ * (nothing to write to), the original theme and Most recently applied (both
+ * server-refused, see api_update_profile()). "Save to new profile" is never
+ * off - it's the way out of every one of those cases, which is the whole point
+ * of it being its own button rather than a second meaning for this one.
+ */
 function syncProfileBar() {
   var txt = document.getElementById("profileBarText");
   var back = document.getElementById("profileBack");
   var apply = document.getElementById("taApply");
   var save = document.getElementById("taSave");
+  var saveNew = document.getElementById("taSaveNew");
   if (EDITING) {
     txt.style.display = "block";
     back.style.display = "inline-flex";
     /* "Viewing", not "Editing", on the original theme: it's open the same way
-       any other profile is and Apply works on it exactly the same, but Save is
-       off, so anything typed into it is a scratch copy that goes when the ta
-       leaves - worth saying up front rather than letting them find out at the
-       Save button */
+       any other profile is and Apply works on it exactly the same, but it can
+       never be written back to - so what's typed into it is a copy that has to
+       land somewhere else, which the banner now says outright rather than
+       leaving it to be discovered at a greyed-out Save button */
     txt.textContent = EDITING.is_default
-      ? 'Viewing "' + profileLabel(EDITING) + '", the site\'s original look. It can\'t be changed, but you can apply it. Students see none of this until you do.'
+      ? 'Viewing "' + profileLabel(EDITING) + '", the site\'s original look. It never changes, but you can apply it as it is, or change it and keep that as a profile of your own with "Save to new profile".'
       : 'Editing "' + profileLabel(EDITING) + '". Students see none of this until you apply it.';
     apply.textContent = "Apply this profile";
-    save.textContent = "Save profile";
     save.disabled = !!(EDITING.is_default || EDITING.is_last_applied);
-    save.title = EDITING.is_default ? "The site's original look never changes. Apply it as it is, or go back to the live content and save your own profile."
-      : EDITING.is_last_applied ? "This profile updates automatically and can't be edited directly." : "";
+    save.title = EDITING.is_default ? 'The site\'s original look never changes. Use "Save to new profile" to keep your edits as a profile of your own.'
+      : EDITING.is_last_applied ? 'This profile is rewritten on every apply, so it can\'t be saved into directly. Use "Save to new profile" to keep your edits.' : "";
   } else {
     txt.style.display = "none";
     back.style.display = "none";
     apply.textContent = "Apply changes";
-    save.textContent = "Save to profile";
-    save.disabled = false;
-    save.title = "";
+    save.disabled = true;
+    save.title = "You're editing the live content, not a profile, so there's nothing for this to save into. \"Save to new profile\" keeps what's on screen as one.";
   }
+  /* the label no longer depends on the mode: this button does one thing */
+  save.textContent = "Save profile";
+  if (saveNew) { saveNew.disabled = false; saveNew.title = ""; }
 }
 
 /**
@@ -2628,17 +2713,44 @@ function applyContent() {
     });
 }
 
-/** Save = stash what's on screen in a profile, live site untouched. Same editor-tab pull as applyContent(). */
+/**
+ * Save = write what's on screen back into the profile that's open. Live site
+ * untouched, and it never creates anything - "Save to new profile" is the only
+ * thing that does, see saveToNewProfile().
+ * @note This used to do both jobs, creating a profile when none was open, and
+ * that's exactly what left the original theme with no working save at all: the
+ * one button was disabled there because it couldn't update, so there was no
+ * way to keep the edits either. Same editor-tab pull as applyContent(), so
+ * this behaves identically whichever tab it's pressed from.
+ */
 function saveToProfile() {
   if (TA_MODE === "editor") pullStateFromEditor();
-  if (EDITING) {
-    updateProfile(EDITING.id, { data: STATE }, function () {
-      EDITING.data = JSON.parse(JSON.stringify(STATE));
-      renderAll();
-      showMsg("Profile saved. The live site is unchanged.", true);
-    });
-    return;
-  }
+  /* the button is disabled in all three of these cases (see syncProfileBar());
+     this is the same rule stated where the write actually happens, so a stray
+     call can't post an update the server would only refuse */
+  if (!EDITING || EDITING.is_default || EDITING.is_last_applied) return;
+  updateProfile(EDITING.id, { data: STATE }, function () {
+    EDITING.data = JSON.parse(JSON.stringify(STATE));
+    renderAll();
+    showMsg('Saved to "' + profileLabel(EDITING) + '". The live site is unchanged.', true);
+  });
+}
+
+/**
+ * Save as = always a brand new profile of this ta's own, holding whatever is
+ * on screen, whether that came from the live content, from a profile of
+ * theirs, from the original theme or from another ta's shared one. The live
+ * site is untouched either way.
+ *
+ * The new profile is then opened, so "Save profile" beside it means something
+ * from the next edit onwards - and so the one rule holds in every mode rather
+ * than the button behaving one way over live content and another over a
+ * profile. Nothing is lost by the switch: what was on screen is now saved.
+ * @note Same editor-tab pull as saveToProfile()/applyContent(), so both tabs
+ * save the same thing.
+ */
+function saveToNewProfile() {
+  if (TA_MODE === "editor") pullStateFromEditor();
   var name = nextProfileName();
   showMsg("Saving...", true);
   authedFetch("/api/profiles", {
@@ -2648,11 +2760,38 @@ function saveToProfile() {
   })
     .then(function (res) {
       if (!res.ok) throw new Error("save failed");
-      return fetchProfiles();
+      return res.json();
     })
-    .then(function () {
+    .then(function (created) {
+      /* refetched rather than assembled here: the row carries server-owned
+         fields (owner, mine, shared, is_default...) the create response
+         doesn't, and EDITING is handed straight to profileLabel() and
+         renderProfiles() which read them */
+      return fetchProfiles().then(function () { return created && created.id; });
+    })
+    .then(function (id) {
+      var made = null;
+      PROFILES.forEach(function (p) { if (p.id === id) made = p; });
+      if (made) {
+        EDITING = made;
+        /* what's on screen, not what came back: identical content either way,
+           but this is what Reset restores to, and it must match the editor
+           frame's own snapshot exactly */
+        EDITING.data = JSON.parse(JSON.stringify(STATE));
+        syncProfileBar();
+        renderProfiles();
+        /* the frame keeps rendering the same content, so no reload - this just
+           tells the snapshot which profile is open now, for the restore path
+           after an idle logout (see tryRestoreFromPreview()) */
+        if (TA_MODE === "editor") writePreviewSnapshot();
+      }
       renderAll();
-      showMsg('Saved as "' + name + '". The live site is unchanged.', true);
+      /* only claims the switch happened if it did: the profile is saved either
+         way, and telling a ta they're editing it when the row couldn't be found
+         would leave the next Save writing somewhere they don't expect */
+      showMsg(made
+        ? 'Saved as "' + name + '", and you\'re editing it now. The live site is unchanged.'
+        : 'Saved as "' + name + '". The live site is unchanged.', true);
     })
     .catch(function (err) {
       if (err.message === "expired") return;
@@ -3537,6 +3676,11 @@ document.addEventListener("DOMContentLoaded", function () {
   if (!gateCheck()) return;
 
   CONTENT_READY = tryRestoreFromPreview() ? Promise.resolve() : loadLive();
+  /* the action row's own starting state. Only ever ran off an open/restore
+     before, which was fine while every mode left "Save profile" enabled - it
+     now has an off state (live content, see syncProfileBar()), and a plain
+     load with no snapshot to restore reaches neither of those calls. */
+  syncProfileBar();
   fetchProfiles();
   fetchObjects();
 
@@ -3638,6 +3782,7 @@ document.addEventListener("DOMContentLoaded", function () {
   document.getElementById("taPreview").addEventListener("click", openPreview);
   document.getElementById("taApply").addEventListener("click", applyContent);
   document.getElementById("taSave").addEventListener("click", saveToProfile);
+  document.getElementById("taSaveNew").addEventListener("click", saveToNewProfile);
   document.getElementById("taReset").addEventListener("click", resetContent);
 
   /* Content manager <-> Visual editor tabs, both views of the same STATE */
@@ -3663,6 +3808,11 @@ document.addEventListener("DOMContentLoaded", function () {
   document.getElementById("edDashView").addEventListener("click", toggleEditorDashView);
   document.getElementById("edFrame").addEventListener("load", pushDashViewToFrame);
   syncDashViewSwitch();
+
+  /* the login page's normal/timed-out switch */
+  document.getElementById("edLoginView").addEventListener("click", toggleEditorLoginView);
+  document.getElementById("edFrame").addEventListener("load", pushLoginViewToFrame);
+  syncLoginViewSwitch();
 
   /* the light/dark switch. Re-asserted on every frame load like the two above
      it, and re-read on load as well: with no ta choice of its own yet the

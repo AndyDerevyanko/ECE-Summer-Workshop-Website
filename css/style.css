@@ -7,6 +7,10 @@
 
 /* theme variables */
 :root {
+  /* height of the sticky navbar (.nav). Named because it's space no section
+     scrolled to the top of the window actually gets - see --fit-avail on
+     .section-fit, which subtracts it. */
+  --nav-h: 64px;
   /* dark navy is default */
   --bg:        #0e1016;   /* greyed navy-slate */
   --bg-2:      #14171f;
@@ -131,6 +135,27 @@ h1, h2, h3 {
 
 .section { padding: 86px 0; }
 .section-sm { padding: 54px 0; }
+/* sections meant to read as ONE screenful (#learn, #prizes): their padding
+   follows the viewport instead of sitting at a flat 86px, which is what made
+   them overflow on anything shorter than about a 1300px-tall window. Keeps
+   the original 86px on tall screens, where they already fit - this only ever
+   takes space back, never adds it.
+
+   --fit-avail is how much room the section's CONTENT actually gets: the
+   viewport, less the navbar, less this padding top and bottom. The navbar
+   term is the easy one to forget - .nav is position:sticky, so it sits ON
+   TOP of whatever scrolls under it and a section sized to a flat 100vh hides
+   its own first 64px behind it. Both things big enough to blow the budget on
+   their own (.vid-row's clips, .cert-img) size themselves off this one
+   property, so the navbar and the padding are each written down once. */
+.section-fit {
+  padding: clamp(28px, 5vh, 86px) 0;
+  --fit-avail: calc(100vh - var(--nav-h) - 2 * clamp(28px, 5vh, 86px));
+  /* and land BELOW the navbar when jumped to from a nav link, not underneath
+     it - a section that fits exactly is no use if an anchor jump parks its
+     heading behind the sticky bar */
+  scroll-margin-top: var(--nav-h);
+}
 
 .eyebrow {
   font-family: var(--font-mono);
@@ -788,6 +813,23 @@ body.edit-mode .reel-tile { cursor: grab; }
    stretches to fill the space between them at full height, sides cropped.
    the mobile breakpoints below still collapse this via .grid-3 */
 .vid-row { grid-template-columns: auto 1fr auto; }
+/* the clip row is the single biggest item in #learn, so it's what gives for
+   that section to fit one screen: it takes whatever --fit-avail (see
+   .section-fit) has left after everything above it, up to its natural 460px.
+   384px is the rest of the section's fixed flow height - heading block 82
+   (48 + its 34 margin), reel anchor 260, this row's own 34px margin-top -
+   plus 8px of slack, so sub-pixel rounding can't tip a section that fits
+   exactly into one that scrolls by a hair. Spelling the budget out beats a
+   guessed vh fraction: one number to fix if something above it changes
+   height, and the clips keep their full 460px on a tall window instead of
+   shrinking on screens that never needed it. Height, not max-height: these
+   are the video elements themselves and their width is auto, so a shorter
+   clip is a proportionally narrower one - the portrait clips stay uncropped
+   rather than letterboxed. The var() fallback keeps the row sane if it's ever
+   used outside a .section-fit, where the property doesn't exist. */
+.vid-row .media.video {
+  height: min(460px, calc(var(--fit-avail, 100vh) - 384px));
+}
 .vid-row .media.video:first-child { margin: 0; justify-self: start; }
 .vid-row .media.video:last-child  { margin: 0; justify-self: end; }
 .vid-row .media.video.wide {
@@ -857,9 +899,21 @@ body.edit-mode .reel-tile { cursor: grab; }
   gap: 32px;
 }
 .banner-left { max-width: 680px; }
+/* the certificate takes whatever --fit-avail has left, same budget shape as
+   .vid-row's clips above. 346px is everything else in the banner - its own
+   80px of padding, the heading 54, the "everyone leaves..." line and the
+   Apply button 117, the two 32px flex gaps - plus the same 8px of slack.
+   That's what makes the whole panel one screenful.
+   width:auto rather than 100% so the cap scales the image down whole (a
+   replaced element honours both max-* proportionally) instead of letterboxing
+   it inside a full-width box; align-self keeps it centred once it's narrower
+   than the banner. On a tall window max-width:100% still governs and it
+   renders exactly as it did before. */
 .cert-img {
-  width: 100%;
+  width: auto;
   max-width: 100%;
+  max-height: calc(var(--fit-avail, 100vh) - 346px);
+  align-self: center;
   border-radius: 12px;
 }
 
@@ -1263,8 +1317,9 @@ body.edit-mode #loginErrorAnchor { min-height: 50px; }
    even when a real visitor wouldn't see it" rule .extras-empty already
    follows on the dashboard. ONE string at a time though, exactly like the
    live page shows: two stacked red paragraphs read as two error messages the
-   page might really print, which it never does. Which one is on show is a
-   view toggle in the right-click menu (see renderCtxMenuRoot()), not a saved
+   page might really print, which it never does. Which one is on show is the
+   portal's own State switch beside the page tabs (js/main.js's
+   applyLoginView(), also offered on the line's right-click menu), not a saved
    setting - it only decides what a ta is currently looking at. */
 body.edit-mode .login-error { display: block; }
 body.edit-mode .login-error [data-login-msg="bad"] { display: block; }
@@ -2157,11 +2212,16 @@ body.edit-mode [data-box-area].box-drop-target {
 .ed-switch-text { white-space: nowrap; }
 .btn:disabled { opacity: .55; cursor: default; }
 .btn:disabled:hover { filter: none; }
+/* square, unlike the surfaces around it: this border is a ruler, not a card.
+   It stands in for the edge of a real visitor's browser window, and a rounded
+   one quietly lies about where the page's own corners are - anything a ta
+   parks in a corner sat outside the curve with its own corner clipped off.
+   overflow stays: it's what keeps the scaled frame inside the pane. */
 .pv-frame-wrap {
   flex: 1;
   min-height: 0;
   border: 2px solid var(--accent);
-  border-radius: var(--radius);
+  border-radius: 0;
   overflow: hidden;
   background: var(--surface);
 }

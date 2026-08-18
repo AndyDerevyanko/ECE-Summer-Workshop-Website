@@ -432,14 +432,17 @@ def root():
 
 @app.get("/favicon.ico")
 def favicon():
-    """serves the brand logo as the site icon. every template also carries a
-    <link rel="icon">, but browsers still probe this fixed root path on their
-    own (bookmarks, history entries, the very first hit before any html is
-    parsed), so without this route those show up as 404s in the log.
-    @return the logo png, content-typed as a png despite the .ico url - which
-    every current browser accepts, the extension in the path means nothing
+    """serves the site icon. every template also carries a <link rel="icon">
+    pointing at the same file, but browsers still probe this fixed root path
+    on their own (bookmarks, history entries, the very first hit before any
+    html is parsed), so without this route those show up as 404s in the log -
+    and the two have to name the same file or which icon a tab gets depends
+    on which of the two the browser happened to ask for.
+    @return the favicon png, content-typed as a png despite the .ico url -
+    which every current browser accepts, the extension in the path means
+    nothing
     """
-    return FileResponse(BASE_DIR / "assets" / "logo.png", media_type="image/png")
+    return FileResponse(BASE_DIR / "assets" / "favicon.png", media_type="image/png")
 
 
 @app.get("/index.html")

@@ -589,8 +589,9 @@ function isEditMode() {
  * Identifies which real page this document is, regardless of the shared
  * ?preview=1/?edit=1 params: "dashboard" if the progress-bar anchor is
  * present, "login" if the auth card is, "gallery" if the year-picker marker
- * is, else "index" - which is also the object editor's blank canvas, since a
- * saved object has no page of its own until it's dropped somewhere.
+ * is, "notfound" if the not-found marker is, else "index" - which is also the
+ * object editor's blank canvas, since a saved object has no page of its own
+ * until it's dropped somewhere.
  * @return "index", "dashboard", "login", "gallery", or "notfound"
  * @note content.custom_elements is one unscoped list across the whole site,
  * so every entry carries the page it was created on and renderCustomElements()
@@ -2613,19 +2614,53 @@ function hasTrackedDescendants(el) {
  * Whether el is the root of a pasted copy.
  * @param el the element
  * @return true if el is a pasted copy's root
- * @note The single exception to applyLayerOrder()'s "a container never gets a
- * number" rule, because a paste is the only container that routinely paints
- * against something it OVERLAPS: it lands 24px off what it was copied from.
- * Unranked, a pasted card is a z-index:auto positioned box, and css paints
- * every positively-ranked leaf above those whatever the dom order - so the
- * original's heading and icons came straight through the copy's panel.
- * @note The rule exists to stop a container trapping its contents in a
- * stacking context, and a paste is the one place that costs nothing: its
- * parts are the copy's own, and the layer menu already moves a subtree as one
- * block. Every OTHER container stays unranked.
+ * @note One of the two containers that carry a rank of their own, see
+ * ranksAsBlock().
  */
 function isClipRoot(el) {
   return !!(el && el.hasAttribute && el.hasAttribute("data-clip-root"));
+}
+
+/**
+ * Whether a CONTAINER holds a rank of its own, instead of only the leaves
+ * inside it holding one.
+ * @param el the element
+ * @return true if el's own painted box competes in the layer order
+ *
+ * @note A container's `background` and `border` are painted by the container,
+ * not by anything inside it, so a container that holds no rank has no way to
+ * move them: "bring to front" on a day row lifted its tag, title, count and
+ * icon to the top of the page and left the panel they sit on exactly where it
+ * was, under the next row down. That's the version of the button a ta reads as
+ * simply not working, since the panel IS the rectangle they selected.
+ * @note So the general "a container never gets a number" rule (see
+ * applyLayerOrder()) is kept for containers where the number would be
+ * unobservable, and dropped where it costs a ta the thing they clicked. Two
+ * cases have real stakes, and they're the same case twice: a box that paints
+ * against something it OVERLAPS. A pasted copy lands 24px off its original,
+ * and a box the ta has dragged or resized is out of flow by definition. Every
+ * other container is an in-flow block that overlaps nothing, so where its
+ * panel sits in the order can never be seen.
+ * @note The cost is the one the rule exists to avoid: a ranked container is a
+ * stacking context, so its leaves can no longer be ranked against elements
+ * OUTSIDE it - they move as the block the layer menu already treats them as.
+ * That's the honest trade for a box someone has positioned by hand, and it's
+ * what "bring this to the front" means about a card in every other tool.
+ * @note Being in a `.free-wrap` is not on its own enough to count as
+ * positioned by hand: freezeDescendants() wraps EVERY tracked descendant of
+ * whatever is being resized, so one drag on a section would otherwise hand a
+ * rank - and the sealing that comes with it - to every box inside it. The
+ * geometry overrides are the honest marker, since nothing but a real move or
+ * resize writes one.
+ */
+function ranksAsBlock(el) {
+  if (!el) return false;
+  if (isClipRoot(el)) return true;
+  var wrap = el.parentElement;
+  if (!wrap || !wrap.classList || !wrap.classList.contains("free-wrap")) return false;
+  var d = el.dataset || {};
+  return d.ovTx !== undefined || d.ovTy !== undefined ||
+    d.ovW !== undefined || d.ovH !== undefined;
 }
 
 /**
@@ -3292,13 +3327,19 @@ function createsStackingContext(el) {
  * Whether el needs a copy of its own surface painted as a child layer.
  * @param el the element
  * @return true if el should carry a .layer-surface child
- * @note Narrower than painting one. A box that is NOT a stacking context
- * doesn't need the copy: a negative z-index inside it escapes to the nearest
- * ancestor context, where the box's background is an ordinary in-flow block
- * background - painted AFTER negative-z descendants - so the real background
- * already covers them and a copy would only bleed through its own rounded
- * corners. A stacking CONTEXT needs one, since there its background paints
- * first of all, below even the negative band.
+ * @note Narrower than painting one: only a stacking CONTEXT needs the copy,
+ * since there the box's background paints first of all, below even the
+ * negative band, and so can't be got behind any other way. A box that is not
+ * one has nothing ranked under it to hold - applyLayerOrder() makes it one
+ * first (see isolateLayerBox()) and this answers true on the pass after.
+ * @note It used to read "a box that is not a context doesn't NEED one,
+ * because a negative z-index inside it escapes to the nearest ancestor
+ * context, where the box's own background covers it anyway". That's true of a
+ * box sitting directly on the root and of nothing else: what a negative rank
+ * escapes to is the nearest context ABOVE the box, so it lands below every
+ * in-flow background in between - the box's, but also its section's and the
+ * page's. Sending a day tag behind its row didn't put it behind the row, it
+ * took it off the page.
  * @note Anything the layer order numbers counts as one whether it looks like
  * it yet or not, since applyLayerOrder() hands every ranked element a z-index
  * and position:relative. Asking the computed style would be a pass behind.
@@ -3364,28 +3405,69 @@ function ensureLayerSurfaces() {
  * merely behind the panel's other contents.
  * @param m a member ({el, id}) from applyLayerOrder()
  * @param rank id -> its position in the layer order
- * @return true if el belongs under a surface of one of its own containers
+ * @return the container el belongs under, or null
  * @note Ranking below the container is the trigger rather than a separate
  * flag because that's already what the layer menu means: every container is
  * seeded ahead of its children, so only a deliberate "send backward" puts
  * anything under it. Every enclosing box is checked, not just the nearest.
+ * @note Returns the BOX rather than a yes/no because the caller has to make it
+ * a stacking context before the negative rank means anything - see
+ * isolateLayerBox(), and the note on applyLayerOrder()'s negative band.
  */
 function surfaceRankedOver(m, rank) {
-  if (rank[m.id] === undefined) return false;
+  if (rank[m.id] === undefined) return null;
   var box = m.el.parentElement;
   while (box && box !== document.body) {
     var id = (box.matches && box.matches(RESIZABLE_SEL)) ? elId(box) : null;
-    if (id && rank[id] !== undefined && rank[m.id] < rank[id] && paintsOwnSurface(box)) return true;
+    if (id && rank[id] !== undefined && rank[m.id] < rank[id] && paintsOwnSurface(box)) return box;
     /* a negative z-index cannot leave a stacking context, so nothing outside
        the first one on the way up is reachable however the ranks compare. The
        theme toggle is exactly this: an opaque button that IS one, so its label
        going below zero landed above the button's background rather than below
        the navbar's, and the whole move looked like nothing happening. It has
        its own surface layer now. */
-    if (createsStackingContext(box)) return false;
+    if (createsStackingContext(box)) return null;
     box = box.parentElement;
   }
-  return false;
+  return null;
+}
+
+/* marks a box applyLayerOrder() has made a stacking context on purpose, so the
+   next pass can take the stamp back off before it works anything out. Cleared
+   first every time rather than diffed: whether a box is a context changes what
+   surfaceRankedOver() can see PAST, so a stamp left over from the last pass
+   would feed into the next one's answer and the two could sit swapping. */
+var LAYER_ISOLATE_ATTR = "data-layer-isolate";
+
+/** Takes applyLayerOrder()'s own isolation stamps back off, page-wide. */
+function clearLayerIsolation() {
+  document.querySelectorAll("[" + LAYER_ISOLATE_ATTR + "]").forEach(function (el) {
+    el.style.isolation = "";
+    el.removeAttribute(LAYER_ISOLATE_ATTR);
+  });
+}
+
+/**
+ * Makes a box a stacking context, so a negative rank inside it resolves
+ * against THIS box's background instead of escaping.
+ * @param el the container something has been ranked behind
+ * @note Without this, "send to back" on a day row's tag didn't put the tag
+ * behind the row - it deleted it from view. The tag got a negative z-index,
+ * the row was an ordinary static block and so no context at all, and a
+ * negative rank that escapes lands below every in-flow background between it
+ * and the root: the row's, the section's, the page's. "Behind the panel" and
+ * "gone" look identical for exactly one panel and then stop.
+ * @note isolation rather than a z-index, so the box still paints in its own
+ * place in the flow - a number here would ALSO have hoisted it above every
+ * unranked thing around it, which is a second change nobody asked for.
+ * @note Only ever stamped on a box a ta has actually sent something behind, so
+ * the sealing-in that comes with any stacking context costs nothing until the
+ * moment it buys the move being asked for.
+ */
+function isolateLayerBox(el) {
+  if (!el || createsStackingContext(el)) return;
+  el.style.isolation = "isolate";
+  el.setAttribute(LAYER_ISOLATE_ATTR, "1");
 }
 
 /**
@@ -3452,24 +3534,29 @@ function byLayerRank(rank) {
  * @param el the element
  * @return array of ids, bottom first, deduplicated
  * @note For a LEAF that's its own id. For a CONTAINER it's every ranked id
- * inside it, because a container carries no z-index of its own and so has no
- * rank to move: "send this card to the back" can only honestly mean "send
+ * inside it: "send this card to the back" can only honestly mean "send
  * everything painted in this card to the back", together and in the order
  * they're in. That's also what a ta means by it - a card is its contents.
+ * @note Plus the container's OWN id when it holds a rank (see ranksAsBlock()),
+ * because that id is what moves the panel the contents are sitting on. Left
+ * out, the menu moved everything in a dragged card except the card, which is
+ * the one part of it a ta is looking at. It goes at the BOTTOM of the block,
+ * where a container is always seeded relative to its own children, so a card
+ * brought to the front arrives with its contents still on top of it rather
+ * than buried under its own background.
  * @note Nested containers are skipped for the same reason they're skipped
  * when z-index is handed out: they hold no rank, their leaves do.
  */
 function layerSubtreeIds(el) {
   if (!el) return [];
-  if (!hasTrackedDescendants(el)) {
-    var own = elId(el);
-    return own ? [own] : [];
-  }
+  var own = elId(el);
+  if (!hasTrackedDescendants(el)) return own ? [own] : [];
   var inside = layerMembers().filter(function (m) {
     return el.contains(m.el) && !hasTrackedDescendants(m.el);
   });
   inside.sort(byLayerRank(layerRanks()));
   var ids = [], seen = {};
+  if (own && ranksAsBlock(el)) { seen[own] = true; ids.push(own); }
   inside.forEach(function (m) { if (!seen[m.id]) { seen[m.id] = true; ids.push(m.id); } });
   return ids;
 }
@@ -3526,13 +3613,18 @@ function reconcileLayerOrder(layers) {
  * made "send to back" a half-truth below the first section: nothing could
  * cross between two boxes, and reaching across by dragging each element's
  * whole ancestor chain re-stacked entire SECTIONS as a side effect.
- * @note So a stacking context is only ever escaped by not creating one: NO
- * tracked container is given an explicit z-index at any depth. It stays at
- * z-index:auto, which never establishes a context. Only a LEAF competes for a
- * number, and every leaf on the page shares one ranking - so a hero caption
- * can go behind the hero video, or a day tile's lock icon behind its rect,
- * all through the same list. A container holding no rank isn't the same as
- * being unlayerable: the menu moves everything inside it as one block.
+ * @note So a stacking context is only ever escaped by not creating one:
+ * almost no tracked container is given an explicit z-index at any depth. It
+ * stays at z-index:auto, which never establishes a context. Only a LEAF
+ * competes for a number, and every leaf on the page shares one ranking - so a
+ * hero caption can go behind the hero video, or a day tile's lock icon behind
+ * its rect, all through the same list. A container holding no rank isn't the
+ * same as being unlayerable: the menu moves everything inside it as one block.
+ * @note "Almost" is ranksAsBlock(): a container that has been pasted, dragged
+ * or resized is out of flow and so really does paint against boxes it
+ * overlaps, and its panel is its own to move. Those DO get a number, and their
+ * contents ride with them. Every container still in flow overlaps nothing, so
+ * it keeps the rule and loses nothing observable by keeping it.
  * @note A surface a ta can get behind is always a real element, never a
  * container's own `background`, which is unrankable - css paints it before
  * every descendant whatever z-index they get. The hand-written ones (a tile's
@@ -3557,15 +3649,19 @@ function reconcileLayerOrder(layers) {
  * `.nav`'s hardcoded z-index: 50 stays as the no-js default.
  */
 function applyLayerOrder(layers) {
+  /* back to a clean slate before anything is worked out - see the note on
+     LAYER_ISOLATE_ATTR. Ahead of reconcileLayerOrder(), which builds the
+     surface layers, since which boxes need one depends on which are contexts */
+  clearLayerIsolation();
   reconcileLayerOrder(layers);
   var rank = layerRanks();
 
   /* one flat pass over every actual DOM element: a container (has tracked
-     descendants of its own) never gets an explicit z-index, see the doc
-     comment above - the pasted-copy exception included, see isClipRoot() */
+     descendants of its own) gets no explicit z-index unless it's one of the
+     two that paint against something they overlap, see ranksAsBlock() */
   var members = layerMembers();
   members.forEach(function (m) {
-    m.assignZ = !hasTrackedDescendants(m.el) || isClipRoot(m.el);
+    m.assignZ = !hasTrackedDescendants(m.el) || ranksAsBlock(m.el);
   });
   members.sort(byLayerRank(rank));
   var top = members.length + 1;
@@ -3578,26 +3674,40 @@ function applyLayerOrder(layers) {
      order the menu shows. What stops "hidden but still there" coming back is
      that a member only goes negative when there is a real opaque panel over
      it to be behind. */
-  var behind = members.filter(function (m) { return m.assignZ && surfaceRankedOver(m, rank); });
+  var behind = [];
+  members.forEach(function (m) {
+    if (!m.assignZ) return;
+    var box = surfaceRankedOver(m, rank);
+    if (box) { m.behindBox = box; behind.push(m); }
+  });
+  /* "under the panel and under nothing else" is only true while the panel's
+     own box is a stacking context to be under - so make each one that isn't,
+     and rebuild the surfaces now that the answer has changed for them */
+  if (behind.length) {
+    behind.forEach(function (m) { isolateLayerBox(m.behindBox); });
+    ensureLayerSurfaces();
+  }
   behind.forEach(function (m, i) { m.behindZ = -(behind.length - i + 1); });
 
   var z = 1;
   members.forEach(function (m) {
-    if (!m.assignZ) {
-      /* a container never gets a numbered rank, but a FIXED one still has to
-         visually clear the whole non-fixed band while scrolling. One past the
-         highest number anything on the page can have, so it stays correct
-         however large the page grows - nav used to lean on css's own z-index:
-         50, which stopped being enough past 50 tracked leaves.
+    /* a FIXED container has to visually clear the whole non-fixed band while
+       scrolling. One past the highest number anything on the page can have, so
+       it stays correct however large the page grows - nav used to lean on
+       css's own z-index: 50, which stopped being enough past 50 tracked
+       leaves. Ahead of the ranked path as well as the unranked one: a navbar
+       the ta has dragged is a ranksAsBlock() container now, and an ordinary
+       rank there would drop the bar back under the page it has to clear.
 
-         Only the OUTERMOST fixed container gets it, never one nested inside
-         another. A number on a nested one buys nothing and costs the thing
-         this is for: a flex ITEM with a z-index becomes a stacking context
-         even while position:static, which is exactly what `.brand` is inside
-         `.nav-inner` - sealing the wordmark and logo in above the bar's own
-         surface, so "send to back" on either changed nothing on screen. */
-      m.el.style.zIndex = (m.fixed && !fixedTrackedAncestor(m.el)) ? String(top) : "";
-      return;
+       Only the OUTERMOST fixed container gets it, never one nested inside
+       another. A number on a nested one buys nothing and costs the thing
+       this is for: a flex ITEM with a z-index becomes a stacking context
+       even while position:static, which is exactly what `.brand` is inside
+       `.nav-inner` - sealing the wordmark and logo in above the bar's own
+       surface, so "send to back" on either changed nothing on screen. */
+    if (hasTrackedDescendants(m.el)) {
+      if (m.fixed && !fixedTrackedAncestor(m.el)) { m.el.style.zIndex = String(top); return; }
+      if (!m.assignZ) { m.el.style.zIndex = ""; return; }
     }
     if (getComputedStyle(m.el).position === "static") m.el.style.position = "relative";
     if (m.behindZ !== undefined) { m.el.style.zIndex = String(m.behindZ); return; }
@@ -3642,18 +3752,32 @@ function moveLayer(id, dir) {
   block.forEach(function (b) { inBlock[b] = true; });
 
   /* one step lands past something that can actually paint against the element
-     being moved. Two ids never can if one is inside a navbar and the other
-     isn't - the bar is its own stacking context, so how their ranks compare
-     decides nothing, and stepping the brand past a hero button just looked
-     like the button doing nothing. An id with nothing rendered is skipped for
-     the same reason. */
+     being moved. Two ids never can if they sit in different stacking contexts
+     - css compares z-index inside one and nowhere else, so how their ranks
+     compare decides nothing, and stepping past such an id looks exactly like
+     the button doing nothing. An id with nothing rendered is skipped for the
+     same reason.
+
+     This used to ask only "same <nav>?", which caught the navbar and missed
+     every other context on the page: a reel's masked track, a faded panel, a
+     card the ta has dragged (ranksAsBlock()). Asking for the nearest enclosing
+     context by its real css definition catches the navbar too - a sticky bar
+     is one - and needs no list to be kept up to date. */
   var byId = {};
   layerMembers().forEach(function (m) { if (!byId[m.id]) byId[m.id] = m.el; });
-  function stepNavOf(lid) {
-    var el = byId[lid];
-    return (el && el.closest && el.closest("nav")) || null;
+  var stepScopes = {};
+  function stepScopeOf(lid) {
+    if (stepScopes.hasOwnProperty(lid)) return stepScopes[lid];
+    var box = byId[lid] ? byId[lid].parentElement : null;
+    var found = null;
+    while (box && box !== document.body) {
+      if (createsStackingContext(box)) { found = box; break; }
+      box = box.parentElement;
+    }
+    stepScopes[lid] = found;
+    return found;
   }
-  var myNav = stepNavOf(id);
+  var myScope = stepScopeOf(id);
 
   /* the nearest id on the far side of the block that shares its band: what
      one step has to end up past */
@@ -3667,7 +3791,7 @@ function moveLayer(id, dir) {
   var j = edge + dir;
   while (j >= 0 && j < LAYER_ORDER.length &&
          (inBlock[LAYER_ORDER[j]] || !byId[LAYER_ORDER[j]] ||
-          stepNavOf(LAYER_ORDER[j]) !== myNav)) j += dir;
+          stepScopeOf(LAYER_ORDER[j]) !== myScope)) j += dir;
   if (j < 0 || j >= LAYER_ORDER.length) return false;
 
   /* lift the whole block out and drop it back on the far side of that id */
@@ -3732,8 +3856,14 @@ function moveLayerExtreme(id, toTop) {
  * @param toTop true for "to top", false for "to bottom"
  * @note Stores the whole before/after stack rather than an id+dir, since
  * jumping to an extreme isn't its own inverse the way a swap is.
+ * @note Reconciled before the "before" side is taken, because moveLayerExtreme()
+ * reconciles too and would otherwise append ids the snapshot has never heard
+ * of. Undoing then restored a stack missing them, and reconcileLayerOrder()
+ * put every one of them back on TOP - so undoing a layer move on a page with
+ * anything newly placed on it dragged that new thing to the front as well.
  */
 function pushLayerExtremeUndo(id, toTop) {
+  reconcileLayerOrder(LAYER_ORDER);
   var before = LAYER_ORDER.slice();
   if (!moveLayerExtreme(id, toTop)) return;
   EDIT_UNDO.push({ type: "layerorder", before: before, after: LAYER_ORDER.slice() });
@@ -8608,14 +8738,11 @@ function deleteElement(el) {
   syncProgressPreview();
 }
 
-/* every group of ids a ta has tied together (right-click > "Group N
-   elements", see createGroup()), a flat array of id-arrays, mirrors
-   content.groups exactly. moving, nudging, or deleting one member does the
-   same to every other member of its own group (see groupMembersFor()),
-   its own move/resize/delete stays completely independent otherwise: a
-   group is a deliberate, explicit tie, not a new kind of nesting, this
-   project's whole "no attachment between elements" system (see
-   ancestorPos()'s own doc comment) is exactly the opposite default. */
+/* every group of ids a ta has tied together, a flat array of id-arrays,
+   mirroring content.groups. Moving, nudging or deleting one member does the
+   same to the rest of its group; everything else stays independent. A group is
+   a deliberate, explicit tie, not a new kind of nesting - this project's whole
+   "no attachment between elements" default is the opposite. */
 var GROUPS = [];
 
 /* ids currently queued for grouping (shift-click a tracked element to
@@ -8638,12 +8765,11 @@ function groupOf(id) {
 
 /**
  * Every OTHER member of id's group, resolved to their live element and
- * captured move offset, ready for a move/nudge to broadcast the same delta
- * onto. Locked members are left out, same rule a direct drag on them
- * already follows; a member no longer in the document (deleted, or this id
- * isn't grouped at all) is left out too.
+ * captured offset, ready for a move to broadcast the same delta onto.
  * @param id the element's data-edit-id or data-resize-id
  * @return an array of {id, el, base}
+ * @note Locked members are left out, the same rule a direct drag follows, as
+ * is anything no longer in the document.
  */
 function groupMembersFor(id) {
   var g = groupOf(id);
@@ -8710,9 +8836,8 @@ function updateSelectionHighlight() {
 }
 
 /**
- * Ties the given ids together into a new group (right-click > "Group N
- * elements"): any of them already in another group is pulled out of that
- * one first, so groups never overlap.
+ * Ties the given ids together into a new group. Any of them already in
+ * another group is pulled out of it first, so groups never overlap.
  * @param ids the ids to group (2 or more)
  * @return the new group, the same array passed in
  */
@@ -9421,13 +9546,11 @@ function boxSelection(ids) {
 }
 
 /**
- * Pushes one undo entry for a group move/nudge (see the drag-anywhere
- * mousedown handler and the arrow-key nudge handler in wireResizable()):
- * drops any member that didn't actually move (eg a locked or missing one
- * never included to begin with), and collapses to a plain "move" entry
- * when only one member actually moved, so an ungrouped drag's undo history
- * looks exactly like it always has.
+ * Pushes one undo entry for a group move or nudge.
  * @param moves [{id, before, after}], one entry per member that was moved
+ * @note Drops any member that didn't actually move, and collapses to a plain
+ * "move" entry when only one did - so an ungrouped drag's undo history looks
+ * exactly as it always has.
  */
 function pushGroupMoveUndo(moves) {
   var real = moves.filter(function (m) { return m.before.tx !== m.after.tx || m.before.ty !== m.after.ty; });
@@ -9452,15 +9575,12 @@ var CUSTOM_ELEMENTS = [];
 var VARIABLES = [];
 
 /**
- * Looks up one variable by its stable key (see app/db.py's
- * DEFAULT_CONTENT["variables"]).
- *
- * Resolution is deliberately NOT page-scoped, unlike what a picker offers
- * (see pickableVariables()): a formula chip or progress bar keeps showing
- * its real number wherever it ends up, even bound to one of a page's own
- * local variables that this page would never offer to bind.
+ * Looks up one variable by its stable key.
  * @param key a variable's "key"
  * @return the variable {key, name, type, value, ...}, or null if unknown
+ * @note Resolution is deliberately NOT page-scoped, unlike what a picker
+ * offers: a chip or progress bar keeps showing its real number wherever it
+ * ends up, even bound to a page-local variable this page would never offer.
  */
 function variableByKey(key) {
   /* the gallery's per-pane variables and every day/attachment tile's own
@@ -9484,27 +9604,18 @@ function variableByKey(key) {
 }
 
 /**
- * The variables a picker on THIS page should offer. There are two kinds:
- *
- *   PUBLIC  - content.variables, the ones a ta types into the content
- *             manager's Variables list. Site-wide: every page offers all of
- *             them, including the two builtin workshop-progress numbers.
- *   LOCAL   - a page's own, which exist nowhere in content and so never show
- *             up in the content manager at all. They're derived from what's
- *             placed on the page right now, and only that page can bind them,
- *             see pageLocalVariables().
- *
+ * The variables a picker on THIS page should offer.
  * @param keepKey a key to keep in the list even when the page no longer
- *   offers it - whatever the control being filled is already bound to, so
- *   filling a select can't silently swap an existing binding for something
- *   else (eg a chip built on a pane variable whose pane has since been
- *   deleted). Optional.
- * @param scopeEl the element the picker is being opened FOR (the text field
- *   being edited, the progress bar being configured). Passing it narrows the
- *   tile locals to the one tile that element actually sits inside - see
- *   scopedPageLocalVariables(). Omit it entirely (not null, which means "sits
- *   inside nothing") to offer every tile on the page.
+ *   offers it - whatever the control is already bound to, so filling a select
+ *   can't silently swap an existing binding for something else. Optional.
+ * @param scopeEl the element the picker is being opened FOR. Passing it
+ *   narrows the tile locals to the one tile that element sits inside; omit it
+ *   entirely (not null, which means "sits inside nothing") for every tile.
  * @return an array of variables, content ones first in content order
+ * @note Two kinds. PUBLIC are content.variables, typed into the content
+ * manager and offered site-wide. LOCAL exist nowhere in content and never
+ * appear in the manager - they're derived from what's placed on this page
+ * right now, and only this page can bind them.
  */
 function pickableVariables(keepKey, scopeEl) {
   var out = VARIABLES.concat(arguments.length < 2 ? pageLocalVariables() : scopedPageLocalVariables(scopeEl));
@@ -9516,25 +9627,18 @@ function pickableVariables(keepKey, scopeEl) {
 }
 
 /**
- * The tile locals ONE PLACE on the page may pick from - the same records
- * pageLocalVariables() returns, cut down to the tile scopeEl is physically
- * inside.
- *
- * Every day tile's locals existing everywhere at once is right for
- * RESOLUTION (a chip keeps reading Day 3's title wherever it ends up) but
- * wrong for a picker: editing a field inside Day 1's tile and being offered
- * Day2Header/Day3Header alongside Day1's own is offering a binding that,
- * because these fields are one shared template mirrored onto every tile,
- * isn't the one the ta means. So a picker sees its OWN tile's locals and no
- * other tile's - and a picker opened on something sitting in no tile at all
- * (scopeEl null, or an element outside every tile) sees none of them, since
- * there's no "this tile" for a relative reference to mean.
- *
- * The gallery's own pane variables are page-level rather than tile-relative
- * (a pane is bound to a directory, not to whatever a field sits inside), so
- * they're offered on the gallery page regardless of scope, exactly as before.
+ * The tile locals ONE PLACE on the page may pick from - pageLocalVariables()
+ * cut down to the tile scopeEl is physically inside.
  * @param scopeEl the element the picker is for, or null for none
  * @return an array of variable records, possibly empty
+ * @note Every day tile's locals existing at once is right for RESOLUTION (a
+ * chip keeps reading Day 3's title wherever it ends up) but wrong for a
+ * picker: editing a field inside Day 1's tile and being offered Day2Header
+ * offers a binding that, because these fields are one shared template
+ * mirrored onto every tile, isn't what the ta means. So a picker sees its own
+ * tile's locals and no other's, and one opened outside every tile sees none.
+ * @note The gallery's pane variables are page-level rather than
+ * tile-relative, so they're offered regardless of scope.
  */
 function scopedPageLocalVariables(scopeEl) {
   var out = [];
@@ -9564,19 +9668,15 @@ function scopedPageLocalVariables(scopeEl) {
 
 /**
  * This page's own private variables - the local half of pickableVariables().
- *
- * Every day tile's five locals and every attachment tile's filename are
- * offered on whatever page they're actually placed on (see
- * dayTileVariableInventory()/extrasTileVariableInventory()) - unlike the
- * gallery's own pair, they're not exclusive to one named page, so they're
- * not gated by currentPageKey() the way the gallery's own two-per-pane
- * variables are: those only exist there because gallery panes only exist
- * there. The list grows and shrinks live as tiles/panes are added and
- * removed. The object canvas has no page of its own to read, and
- * currentPageKey() reads it as the landing page - so an object binds
- * whatever tiles happen to be on the landing page plus public variables,
- * which is what an object built to be dropped onto ANY page can honestly use.
  * @return an array of variable records, empty on a page with none
+ * @note Every day tile's five locals and every attachment's filename are
+ * offered on whatever page they're placed on. Unlike the gallery's pair they
+ * aren't exclusive to one named page, so they aren't gated by
+ * currentPageKey(): gallery variables only exist there because panes do. The
+ * list grows and shrinks live as tiles are added.
+ * @note The object canvas has no page of its own and reads as the landing
+ * page, so an object binds whatever tiles are there plus public variables -
+ * what an object built to be dropped anywhere can honestly use.
  */
 function pageLocalVariables() {
   var out = dayTileVariableInventory().concat(extrasTileVariableInventory())
@@ -9586,19 +9686,14 @@ function pageLocalVariables() {
 }
 
 /**
- * The identifier a ta actually types inside {...} to reference one variable
- * - not always the same as .key, which for a derived variable (see
- * galleryVariableFor()/dayTileVariableFor()/extrasTileVariableFor(), all
- * marked .derived) can hold characters the notation itself uses as
- * delimiters (a gallery variable's own key has colons in it). A real
- * content.variables entry has no such split: its own ta-typed "name" IS
- * this identifier, which is exactly why that field can't contain "{", "}",
- * ":" or whitespace either - see app/db.py's _sanitize_variable_name()/js/
- * ta.js's sanitizeVariableName(). Used both by parseVariableTokens() (typed
- * text -> chip) and chipNotation() (chip -> its own re-typable
- * notation while mid-edit).
+ * The identifier a ta actually types inside {...} to reference one variable.
  * @param v a variable record (see variableByKey()), or null
  * @return the token, or "" if v is falsy or has no token to offer
+ * @note Not always the same as .key: a derived variable's key can hold
+ * characters the notation uses as delimiters (a gallery variable's key has
+ * colons in it). A real content.variables entry has no such split - its
+ * ta-typed "name" IS this identifier, which is exactly why that field can't
+ * contain "{", "}", ":" or whitespace.
  */
 function variableNotationToken(v) {
   if (!v) return "";
@@ -9607,14 +9702,11 @@ function variableNotationToken(v) {
 
 /**
  * Finds the variable a typed {token} identifier names - the reverse of
- * variableNotationToken(), searching everything pickableVariables() would
- * offer (content.variables by name, every derived local by its own bare
- * token). A plain linear scan: this list is always small (a handful of
- * content variables plus whatever's placed on the page right now), and it
- * only ever runs at the end of an edit session (see parseVariableTokens()),
- * never per-keystroke.
+ * variableNotationToken().
  * @param token the identifier text between "{" and the "}"/":" that follows
  * @return the matching variable record, or null if token names nothing
+ * @note A plain linear scan: the list is always small, and it only runs at
+ * the end of an edit session, never per keystroke.
  */
 function variableByToken(token) {
   if (!token) return null;
@@ -9626,13 +9718,13 @@ function variableByToken(token) {
 }
 
 /**
- * Reads a variable's current value as a number, for the "progress" custom
- * element's fill-ratio math - a string/boolean/datetime-typed variable (or
- * an unknown key, eg one that's since been deleted) just reads as 0 rather
- * than throwing, same "never crash the page over a stale reference" stance
- * customElementById()/elByAnyId() already take elsewhere in this file.
+ * Reads a variable's current value as a number, for the progress element's
+ * fill-ratio maths.
  * @param key a variable's "key"
  * @return a number, 0 if unset/unparseable
+ * @note A string/boolean/datetime variable, or a since-deleted key, reads as
+ * 0 rather than throwing - the same "never crash the page over a stale
+ * reference" stance taken elsewhere in this file.
  */
 function variableNumericValue(key) {
   var v = variableByKey(key);
@@ -9642,20 +9734,16 @@ function variableNumericValue(key) {
 
 /**
  * Fills a <select> with every variable matching predicate, built with real
- * DOM nodes rather than an innerHTML string since a variable's ta-typed
- * "name" isn't escaped anywhere else in this file. Shared by the "progress"
- * element's right-click Current/Total selects (see
- * populateProgressVarSelect()) and the text toolbar's formula menu (see
- * openFormulaMenu()).
- *
- * Offers every content.variables entry plus whatever the page being edited
- * has of its own, see pickableVariables() - the gallery's per-pane numbers
- * are not something to bind to from anywhere else.
+ * DOM nodes rather than an innerHTML string, since a variable's ta-typed
+ * name isn't escaped anywhere else in this file.
  * @param selectEl the <select> to fill
  * @param predicate function(variable) -> bool, which variables to include
  * @param selectedKey the value to preselect
- * @param scopeEl the element this picker is for, see pickableVariables() -
- *   omit to offer every tile's locals rather than one tile's
+ * @param scopeEl the element this picker is for - omit to offer every tile's
+ *   locals rather than one tile's
+ * @note Shared by the progress element's Current/Total selects and the text
+ * toolbar's formula menu. Offers every content variable plus whatever the
+ * page has of its own.
  */
 function populateVariableSelect(selectEl, predicate, selectedKey, scopeEl) {
   selectEl.textContent = "";
@@ -9669,30 +9757,25 @@ function populateVariableSelect(selectEl, predicate, selectedKey, scopeEl) {
 }
 
 /**
- * Fills a "progress" element's Current/Total <select> (the right-click
- * menu's Variables sub-view, see renderCtxMenuProgressVars()) with every
- * number-typed variable in the content manager's Variables list - a progress
- * bar's fill ratio is only ever meaningful between two numbers, so string/
- * boolean/datetime variables just don't show up as options here. See
- * populateVariableSelect().
+ * Fills a progress element's Current/Total <select> with every number-typed
+ * variable.
  * @param selectEl the ".ctx-var-current"/".ctx-var-total" <select>
  * @param selectedKey the element's current d.varCurrent/d.varTotal
+ * @note A fill ratio is only meaningful between two numbers, so
+ * string/boolean/datetime variables don't show up as options here.
  */
 function populateProgressVarSelect(selectEl, selectedKey, scopeEl) {
   populateVariableSelect(selectEl, function (v) { return v.type === "number"; }, selectedKey, scopeEl);
 }
 
 /**
- * Every operation the text toolbar's ƒx menu offers as a ready-made shape.
- *
- * These are no longer a closed set of stored operations: each one is just a
- * shorthand for an EXPRESSION the ta could equally have typed by hand (see
- * fxParse(), and .build below for the exact text each shape writes). "value"
- * is the only one that accepts a non-number variable (its B select stays
- * hidden); every other shape reads both operands as numbers. "custom" is the
- * escape hatch: it swaps the two variable pickers for a plain text box
- * holding the expression itself, which is also what the menu falls back to
- * when it's opened on something no shape here can describe.
+ * Every operation the text toolbar's fx menu offers as a ready-made shape.
+ * @note No longer a closed set of stored operations: each is shorthand for an
+ * EXPRESSION the ta could have typed by hand. "value" is the only one that
+ * accepts a non-number variable; every other shape reads both operands as
+ * numbers. "custom" is the escape hatch, swapping the two pickers for a plain
+ * text box - also what the menu falls back to when opened on something no
+ * shape here can describe.
  */
 var FX_OPS = {
   value: { label: "Value", needsB: false, anyType: true, build: function (a) { return a; } },
@@ -9706,15 +9789,13 @@ var FX_OPS = {
 };
 
 /**
- * Escapes text being dropped into an innerHTML string. Nothing else in this
- * file needs this (a ta's own contentEditable output is trusted verbatim,
- * see saveEditedField()/applyTextOverrides()), but a formula chip's
- * displayed text is computed from live variable data, not typed by a ta, so
- * building its <span> markup (see buildExpressionChipHtml()) is the one place
- * here that turns arbitrary data into an HTML string and needs to guard
- * against it looking like markup.
+ * Escapes text being dropped into an innerHTML string.
  * @param str any value, coerced to string
  * @return str with &<>"' replaced by entities
+ * @note Nothing else in this file needs it - a ta's own contentEditable
+ * output is trusted verbatim - but a formula chip's text is computed from
+ * live variable data, so building its markup is the one place here that turns
+ * arbitrary data into HTML.
  */
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, function (c) {
@@ -9725,30 +9806,25 @@ function escapeHtml(str) {
 /* ---------------------------------------------------------------------------
    THE EXPRESSION LANGUAGE INSIDE {...}
 
-   What a ta types between the braces is a small expression, not just a
-   variable name: {Day1Header}, {Totaldays - Daysprogressed},
-   {Daysprogressed / Totaldays * 100 + "%"}, {Day1Header + " — day one"}.
+   What a ta types between the braces is a small expression, not just a name:
+   {Day1Header}, {Totaldays - Daysprogressed}, {Day1Header + " - day one"}.
 
    The grammar is deliberately tiny and total - no property access, no calls,
-   no assignment, nothing that could reach the page or the network - and it is
-   parsed and walked here rather than handed to eval()/Function(), so a
-   variable name is the ONLY thing an expression can read.
+   no assignment - and it is parsed and walked here rather than handed to
+   eval(), so a variable name is the ONLY thing an expression can read.
 
-     value     number literal (12, 1.5), string literal ("..." or '...',
-               backslash-escaped quotes), or a variable's own token
+     value     number literal, string literal ("..." or '...', backslash-
+               escaped quotes), or a variable's own token
      operator  + - * / with the usual precedence, parentheses, unary minus
      +         concatenates when either side is a string, adds otherwise
 
-   Numbers become text through the chip's own format flags wherever they land
-   - as the whole result, or spliced into a string by "+" - so
-   {Daysprogressed / Totaldays * 100 + "%":.1f} reads "37.5%" rather than
-   "37.49999999999999%".
+   Numbers become text through the chip's format flags wherever they land, so
+   {Daysprogressed / Totaldays * 100 + "%":.1f} reads "37.5%".
 
-   An expression that doesn't parse, or that names a variable nothing on the
-   page defines, doesn't become a chip at all: the ta's own literal
-   "{whatever}" text stays exactly as typed, which is what makes a half-typed
-   or misremembered name something you can see and fix in place rather than
-   something that silently vanishes.
+   An expression that doesn't parse, or names a variable nothing defines,
+   doesn't become a chip at all: the literal "{whatever}" text stays as typed,
+   which makes a misremembered name something you can see and fix in place
+   rather than something that silently vanishes.
    --------------------------------------------------------------------------- */
 
 /**
@@ -9844,11 +9920,10 @@ function fxParse(src) {
 }
 
 /**
- * Reads one variable token as an expression value, applying the same
- * per-type display rules a "value" formula chip has always used: a number
- * stays a number (so it can still be arithmetic), everything else arrives as
- * the text it displays as.
- * @param token an identifier from an expression, see variableNotationToken()
+ * Reads one variable token as an expression value, applying the same per-type
+ * display rules a "value" chip has always used: a number stays a number so it
+ * can still be arithmetic, everything else arrives as the text it displays as.
+ * @param token an identifier from an expression
  * @return a number or string, or undefined if nothing on the page defines it
  */
 function fxVariableValue(token) {
@@ -9874,11 +9949,11 @@ function fxNumber(v) {
 }
 
 /**
- * Renders a number through a chip's format flags. A non-finite result (÷ 0)
- * reads as an em dash, the same placeholder the old quotient/percent ops
- * showed for exactly that case.
+ * Renders a number through a chip's format flags.
  * @param n the number
  * @param fmt {decimals, comma} from parseFormatFlags()
+ * @note A non-finite result reads as an em dash, the same placeholder the old
+ * quotient/percent ops showed for exactly that case.
  */
 function fxFormatNumber(n, fmt) {
   if (!isFinite(n)) return "—";
@@ -9894,12 +9969,13 @@ function fxText(v, fmt) {
 }
 
 /**
- * Walks a parsed expression. Returns undefined the moment any variable in it
- * is unknown, which propagates all the way out so the caller can leave the
- * ta's literal text alone rather than printing a half-resolved result.
+ * Walks a parsed expression.
  * @param node an fxParse() node
  * @param fmt {decimals, comma}, for numbers concatenated into strings
  * @return a number, a string, or undefined
+ * @note Returns undefined the moment any variable is unknown, which
+ * propagates out so the caller can leave the ta's literal text alone rather
+ * than printing a half-resolved result.
  */
 function fxEval(node, fmt) {
   if (node.t === "num" || node.t === "str") return node.v;
@@ -9936,22 +10012,19 @@ function fxEvaluate(src, fmt) {
 }
 
 /**
- * LEGACY. Computes a formula chip's live display text from its op + operand
- * variable KEYS, the shape every chip had before they carried an expression
- * (see buildExpressionChipHtml()). Still the renderer for any such chip in
- * already-saved content: nothing rewrites them on load, they just render as
- * they always did, and the first time a ta edits the field one sits in it
- * becomes an expression chip like any other (see chipNotation()).
- *
- * Reads current VARIABLES, so this always reflects whatever was last fetched
- * - same reload-to-refresh freshness as the progress bar's own bindings
- * (paintProgressElement()), there is no live polling anywhere in this app.
+ * LEGACY. Computes a formula chip's live display text from its op and operand
+ * variable KEYS - the shape every chip had before they carried an expression.
  * @param op one of FX_OPS's keys
  * @param aKey variable A's key
  * @param bKey variable B's key, ignored for "value"
  * @param decimals decimal places for any numeric result
- * @param comma true to group thousands (python's "," format flag)
+ * @param comma true to group thousands (python's "," flag)
  * @return the text to show inside the chip
+ * @note Still the renderer for any such chip in already-saved content:
+ * nothing rewrites them on load, and the first time a ta edits the field one
+ * sits in, it becomes an expression chip like any other.
+ * @note Reads current VARIABLES, so it reflects whatever was last fetched -
+ * there is no live polling anywhere in this app.
  */
 function formulaChipText(op, aKey, bKey, decimals, comma) {
   var dp = parseInt(decimals, 10);
@@ -9984,27 +10057,22 @@ function formulaChipText(op, aKey, bKey, decimals, comma) {
 }
 
 /**
- * Builds the <span> markup for an expression chip: the expression source and
- * its format flags baked into data-fx-* attributes (read back by
- * repaintFormulaChips() and chipNotation()) riding along inside the same
- * content.text HTML string as everything else a ta types in this field - same
- * self-describing-inline-span approach as the toolbar's own foreColor spans
- * (data-light-color/data-dark-color, see applyThemedForeColor()).
- * contenteditable="false" makes the browser treat it as one atomic unit for
- * caret/backspace navigation - but only OUTSIDE an edit session: a field
- * being edited holds no chips at all, just the notation text they came from,
- * see chipsToNotation().
- *
- * The expression references variables by their typed token rather than their
- * internal key, because the token is what the ta wrote and what they'll see
- * again the next time they open the field. Renaming a variable therefore
- * breaks references to it, the same way renaming a named range breaks a
- * spreadsheet formula - and breaks it visibly, back into the literal
- * "{OldName}" text that says exactly what went missing.
+ * Builds the <span> markup for an expression chip: the source and its format
+ * flags baked into data-fx-* attributes, riding along inside the same
+ * content.text HTML string as everything else in the field.
  * @param expr the expression source, see fxParse()
  * @param decimals decimal places for any numeric result
- * @param comma true to group thousands (python's "," format flag)
+ * @param comma true to group thousands (python's "," flag)
  * @return an HTML string for a single <span class="fx-chip">
+ * @note Same self-describing-inline-span approach as the toolbar's foreColor
+ * spans. contenteditable="false" makes the browser treat it as one atomic
+ * unit for caret navigation - but only OUTSIDE an edit session: a field being
+ * edited holds no chips at all, just the notation text they came from.
+ * @note The expression references variables by their typed token rather than
+ * their internal key, because that's what the ta wrote and will see again.
+ * Renaming a variable therefore breaks references to it, as renaming a named
+ * range breaks a spreadsheet formula - and breaks it visibly, back into the
+ * literal "{OldName}" text that says exactly what went missing.
  */
 function buildExpressionChipHtml(expr, decimals, comma) {
   var dp = parseInt(decimals, 10);
@@ -10017,15 +10085,14 @@ function buildExpressionChipHtml(expr, decimals, comma) {
 }
 
 /**
- * The python-style format-flag suffix (everything after the ":" in
- * "{expr:flags}") a chip's own decimals/comma settings spell out - the exact
- * inverse of parseFormatFlags(), used by chipNotation() to show a chip's
- * real, re-typable notation. Decimals of 0 (the default, same as typing
- * "{expr}" with no flags at all) omits the ".0f" clause entirely, so the
- * common case stays as clean as what a ta would actually type by hand.
- * @param decimals decimal places, as stored in a chip's data-fx-decimals
+ * The python-style format-flag suffix a chip's decimals/comma settings spell
+ * out - the exact inverse of parseFormatFlags(), used to show a chip's real,
+ * re-typable notation.
+ * @param decimals decimal places, as stored in data-fx-decimals
  * @param comma true to include the "," thousands-separator flag
  * @return "" (no flags), or ":" plus the flag characters
+ * @note Decimals of 0 - the default - omits the ".0f" clause entirely, so the
+ * common case stays as clean as what a ta would type by hand.
  */
 function formulaFlagString(decimals, comma) {
   var dp = parseInt(decimals, 10);
@@ -10035,18 +10102,14 @@ function formulaFlagString(decimals, comma) {
 
 /**
  * The literal text one chip came from, and the text it goes back to for the
- * whole of an edit session (see chipsToNotation()). Every chip has one, and
- * retyping it character for character rebuilds the same chip - that round
- * trip is the entire reason chips can be edited as ordinary text at all.
- *
- *   expression chip  its own source, "{Totaldays - Daysprogressed:.1f}"
- *   local chip       the tile-relative token the tile resolves, "{Day1Header}"
- *   legacy op chip   the equivalent expression (see FX_OPS's .build), which
- *                    is how a chip saved before expressions existed migrates:
- *                    the ta edits the field, it re-parses as an expression
- *
+ * whole of an edit session. Retyping it character for character rebuilds the
+ * same chip - that round trip is why chips can be edited as ordinary text.
  * @param chip a .fx-chip element of any kind
  * @return the "{...}" text
+ * @note An expression chip gives its own source; a local chip the
+ * tile-relative token its tile resolves; a legacy op chip the equivalent
+ * expression, which is how a chip saved before expressions existed migrates
+ * the first time its field is edited.
  */
 function chipNotation(chip) {
   if (chip.dataset.fxLocal) return "{" + localChipToken(chip) + "}";
@@ -10059,25 +10122,18 @@ function chipNotation(chip) {
 }
 
 /**
- * Repaints every formula chip's displayed text against current VARIABLES,
- * same role for chips as repaintInlineTextColors() plays for foreColor
- * spans: applyTextOverrides() just set each field's innerHTML from its
- * saved content.text snapshot, which may carry a chip's stale baked-in text
- * from whenever it was last saved, so every load (and every VARIABLES
- * refresh) needs to re-render each chip's text from live data. Called right
- * after VARIABLES is (re)assigned, alongside applyProgressBindings(), and
- * again whenever a gallery pane moves (a chip can be built on a pane
- * variable, see galleryVariableFor()).
- *
- * There is no mid-edit case to handle here any more: a field being edited
- * has no chips in it at all, only the notation text they were unpacked into
- * (see chipsToNotation()), so nothing this touches is ever inside an active
- * edit session.
- *
- * Local chips (data-fx-local: a day tile's Day3Number, an attachment's
- * filename, a gallery pane's own two numbers) share the .fx-chip class but
- * carry no expression at all, and resolve through repaintLocalTileContent()
- * instead - they're skipped here rather than blanked and restored.
+ * Repaints every formula chip's displayed text against current VARIABLES -
+ * the same role for chips that repaintInlineTextColors() plays for foreColor
+ * spans.
+ * @note applyTextOverrides() has just set each field's innerHTML from its
+ * saved snapshot, which may carry a chip's stale baked-in text, so every load
+ * and every VARIABLES refresh needs to re-render from live data. Called again
+ * whenever a gallery pane moves, since a chip can be built on a pane variable.
+ * @note No mid-edit case to handle: a field being edited has no chips in it,
+ * only the notation text they were unpacked into.
+ * @note Local chips share the .fx-chip class but carry no expression and
+ * resolve through repaintLocalTileContent(), so they're skipped here rather
+ * than blanked and restored.
  */
 function repaintFormulaChips() {
   document.querySelectorAll(".fx-chip:not([data-fx-local])").forEach(function (chip) {
@@ -10096,17 +10152,15 @@ function repaintFormulaChips() {
 /* ---------------------------------------------------------------------------
    TYPING {expr}/{expr:flags} BY HAND
 
-   A chip's notation (see chipNotation()) isn't only for display: it is the
-   editable form. For the whole of an edit session a field holds nothing but
-   text - {Totaldays}, {Totaldays:,}, {Day1Header + " (day one)"} - which the
-   ta can select, cut, retype and rearrange with no atomic anything in the
-   way, and which turns back into live chips the moment they're done (see
-   parseVariableTokens()).
+   A chip's notation isn't only for display: it is the editable form. For the
+   whole of an edit session a field holds nothing but text, which the ta can
+   select, cut, retype and rearrange with no atomic anything in the way, and
+   which turns back into live chips the moment they're done.
 
    A token that doesn't parse, or names a variable that doesn't exist, simply
    stays as the text it is. That's the point: typing "{pvar}" over "{var}"
-   leaves "{pvar}" sitting there in plain sight rather than erasing itself.
-   \{ and \} escape a literal brace that was never meant to be notation.
+   leaves it sitting there in plain sight rather than erasing itself. \{ and
+   \} escape a literal brace that was never meant to be notation.
    --------------------------------------------------------------------------- */
 
 /* matches either an escaped brace (\{ or \}, captured in group 1 with the
@@ -10119,15 +10173,11 @@ var VARIABLE_TOKEN_RE = /\\([{}])|\{([^{}]*)\}/g;
 
 /**
  * Parses the flags after a {expr:flags} token's ":" - the same python-style
- * subset formulaFlagString() produces on the way out: an optional ","
- * (thousands separator) followed by an optional ".Nf" (N decimal places, 0-9),
- * in that order, same as python's own "[,][.precision][type]" mini-language.
- * A bare "{expr}" (no ":" at all) means 0 decimals and no grouping.
+ * subset formulaFlagString() produces: an optional "," then an optional
+ * ".Nf", in that order. A bare "{expr}" means 0 decimals and no grouping.
  * @param flags the raw text between ":" and the closing "}", or undefined
- *   for a token with no ":" at all
- * @return {decimals, comma}, or null if flags doesn't match this grammar
- *   (an unrecognized flag string, eg a typo - left as plain text rather than
- *   guessed at)
+ * @return {decimals, comma}, or null if flags doesn't match this grammar -
+ *   an unrecognized flag string is left as plain text rather than guessed at
  */
 function parseFormatFlags(flags) {
   if (flags === undefined) return { decimals: 0, comma: false };
@@ -10138,14 +10188,12 @@ function parseFormatFlags(flags) {
 
 /**
  * Splits a token's body into its expression and its format flags.
- *
- * The separator is a ":", but not just any ":": an expression can contain
- * string literals, and {Day1Header + "10:30"} has one that means nothing of
- * the sort. So this scans right to left over the colons that sit OUTSIDE
- * every string literal, and takes the first one whose tail actually parses
- * as flags. Nothing qualifying means the whole body is the expression.
  * @param body the text between "{" and "}"
  * @return {expr, flags, hasFlags}
+ * @note The separator is a ":", but not just any ":": an expression can
+ * contain string literals, and {Day1Header + "10:30"} has one that means
+ * nothing of the sort. So this scans right to left over the colons OUTSIDE
+ * every string literal and takes the first whose tail parses as flags.
  */
 function splitTokenBody(body) {
   var cuts = [];
@@ -10168,16 +10216,14 @@ function splitTokenBody(body) {
 /**
  * The chip markup one {...} token should become, or null if it should stay
  * the text it is.
- *
- * A bare token naming one of the CONTAINING TILE's own locals rebuilds the
- * tile-relative local chip rather than an absolute reference to that one
- * tile - {Day1Header} typed inside Day 1's tile is the day tile template's
- * own "this day's header", which is what makes it still read Day 2's header
- * on Day 2's copy of that shared template (see mirrorEditedField()). The
- * same token typed anywhere else is an ordinary absolute reference to Day 1.
  * @param body the text between "{" and "}"
- * @param field the field being parsed, for that containing-tile test
+ * @param field the field being parsed, for the containing-tile test
  * @return an HTML string for one chip, or null
+ * @note A bare token naming one of the CONTAINING TILE's own locals rebuilds
+ * the tile-relative chip rather than an absolute reference: {Day1Header}
+ * typed inside Day 1's tile is the template's "this day's header", which is
+ * what makes it read Day 2's header on Day 2's copy. The same token typed
+ * anywhere else is an ordinary absolute reference to Day 1.
  */
 function chipHtmlForToken(body, field) {
   var split = splitTokenBody(body);
@@ -10195,13 +10241,13 @@ function chipHtmlForToken(body, field) {
 
 /**
  * The local-chip markup a token rebuilds, if it names something local at all
- * - the exact inverse of localChipToken(). Everything but the gallery's two
- * pane variables is TILE-RELATIVE, so the token has to match the scope of a
- * tile the field is actually inside; the pane variables carry their own
- * binding instead (data-fx-dir) and so resolve from anywhere on the page.
+ * - the exact inverse of localChipToken().
  * @param token a bare identifier from inside {...}
  * @param field the field being parsed
  * @return an HTML string for one chip, or null if token names no local
+ * @note Everything but the gallery's two pane variables is TILE-RELATIVE, so
+ * the token has to match a tile the field is inside; the pane variables carry
+ * their own binding and resolve from anywhere on the page.
  */
 function localChipHtmlForToken(token, field) {
   var closest = function (sel) { return field && field.closest ? field.closest(sel) : null; };
@@ -10226,13 +10272,13 @@ function localChipHtmlForToken(token, field) {
 
 /**
  * Scans one text node for {...} tokens and \{ \} escapes, replacing it in
- * place with a mix of plain text and new chips wherever a token resolves to
- * one (see chipHtmlForToken()) - anything else is left completely alone as
- * ordinary text, so a stray "{" typed for any other reason is never assumed
- * to be a mistake.
+ * place with a mix of plain text and new chips wherever a token resolves.
  * @param textNode a Text node currently attached to the document
  * @param field the field being parsed, for tile-relative locals
  * @return true if this node was rewritten
+ * @note Anything that doesn't resolve is left completely alone as ordinary
+ * text, so a stray "{" typed for any other reason is never assumed to be a
+ * mistake.
  */
 function parseVariableTokensInNode(textNode, field) {
   var text = textNode.nodeValue;
@@ -10267,18 +10313,15 @@ function parseVariableTokensInNode(textNode, field) {
 
 /**
  * Unpacks every chip in a field into the plain notation text it came from,
- * run the moment the field enters edit mode. This is what makes a variable
- * reference behave like the text it looks like: for the whole of an edit
- * session there is no contenteditable="false" atom anywhere in the field, so
- * a ta can put the caret in the middle of "{Day1Header}", select half of it,
- * retype it as "{Day2Header}", paste one somewhere else, or wrap text around
- * it - all with the browser's ordinary text editing, none of it special-cased.
- *
- * The previous design kept chips atomic while editing and only swapped their
- * LABEL to the notation, which looked identical but wasn't: the only edit
- * those braces would accept was deleting the whole chip, and notation typed
- * beside one was the only notation that could ever be read back.
+ * run the moment the field enters edit mode.
  * @param field the field about to become contentEditable
+ * @note This is what makes a variable reference behave like the text it looks
+ * like: for the whole session there is no contenteditable="false" atom in the
+ * field, so a ta can put the caret inside "{Day1Header}", retype half of it,
+ * or wrap text around it with ordinary text editing.
+ * @note The previous design kept chips atomic and only swapped their LABEL to
+ * the notation, which looked identical but wasn't: the only edit those braces
+ * accepted was deleting the whole chip.
  */
 function chipsToNotation(field) {
   field.querySelectorAll(".fx-chip").forEach(function (chip) {
@@ -10297,19 +10340,16 @@ function chipsToNotation(field) {
 
 /**
  * Converts every {...} token in a field back into a live chip - the exact
- * inverse of chipsToNotation(). Run once, right before a field's edit
- * session commits (see wireTextField()'s blur handler) rather than
- * per-keystroke: rewriting the DOM under a still-focused caret is exactly
- * the kind of thing that makes a cursor jump mid-sentence, and half-typed
- * notation shouldn't resolve out from under the ta anyway.
- *
- * Walks every text node in the field - collected up front via a TreeWalker
- * snapshot so rewriting one node mid-walk can't disturb the walk itself, and
- * normalized first so a token split across adjacent text nodes (which is
- * what typing into the middle of one leaves behind) is still one token by
- * the time the regex sees it.
+ * inverse of chipsToNotation().
  * @param field the data-edit-id field whose edit session just ended
  * @return true if anything in the field was rewritten
+ * @note Run once, right before an edit session commits, rather than per
+ * keystroke: rewriting the DOM under a focused caret is what makes a cursor
+ * jump mid-sentence, and half-typed notation shouldn't resolve out from under
+ * the ta anyway.
+ * @note Walks a TreeWalker snapshot taken up front, so rewriting one node
+ * can't disturb the walk, and normalizes first so a token split across
+ * adjacent text nodes is still one token by the time the regex sees it.
  */
 function parseVariableTokens(field) {
   field.normalize();
@@ -10326,34 +10366,28 @@ function parseVariableTokens(field) {
 
 /**
  * Builds the markup for a "filename" chip: an attachments-tile-only variant
- * of the formula chip above (data-fx-local instead of data-fx-op/data-fx-a)
- * that resolves off whichever tile it's actually rendered inside right now
- * (closest("[data-extras-tile]")'s own data-extras-filename, set by js/
- * dashboard.js's buildExtrasTileHtml()) rather than a content.variables
- * lookup - so unlike every fx-chip above, this one deliberately never shows
- * up in js/ta.js's variables list. Lives inside the shared tile text
- * template (content.text["extras.tile.text"]), same as any other text a ta
- * types there, so deleting it (plain contenteditable backspace - still
- * atomic, contenteditable="false") removes it from every tile at once, same
- * as any other template edit.
+ * of the formula chip that resolves off whichever tile it's rendered inside
+ * rather than a content.variables lookup.
  * @return an HTML string for a single <span class="fx-chip">
+ * @note Because it's tile-local it deliberately never appears in the content
+ * manager's variables list.
+ * @note It lives inside the shared tile text template, so backspacing it out
+ * removes it from every tile at once, like any other template edit.
  */
 function buildExtrasFilenameChipHtml() {
   return '<span class="fx-chip" contenteditable="false" data-fx-local="filename">filename</span>';
 }
 
 /**
- * Repaints every filename chip's displayed text off the tile it's actually
- * rendered inside right now. Needed because content.text's saved template
- * HTML carries whichever tile's filename happened to be resolved when it
- * was last saved - in particular, mirrorEditedField() blindly copies one
- * tile's just-edited innerHTML onto every other tile sharing the same
- * data-edit-id, which for every other chip is exactly right (same template,
- * same everywhere) but would leave every OTHER tile showing the edited
- * tile's own filename. Called unconditionally at the end of
- * mirrorEditedField() (cheap no-op wherever no filename chip exists) so
- * that blind copy is corrected right back to each tile's own filename
- * immediately after.
+ * Repaints every filename chip's text off the tile it's actually rendered
+ * inside right now.
+ * @note Needed because saved template HTML carries whichever tile's filename
+ * was resolved when it was last saved - and mirrorEditedField() blindly
+ * copies one tile's innerHTML onto every other tile sharing the id, which is
+ * right for every other chip but would leave them all showing the edited
+ * tile's filename.
+ * @note Called unconditionally at the end of mirrorEditedField(), a cheap
+ * no-op where no filename chip exists.
  */
 function repaintExtrasFilenameChips() {
   document.querySelectorAll('.fx-chip[data-fx-local="filename"]').forEach(function (chip) {
@@ -10377,12 +10411,9 @@ var DAYS_CHIP_VAR_SUFFIX = {
 };
 
 /* what each local resolves to off its own tile's dataset, in one table so
-   adding a sixth local is one line rather than a fourth near-identical query
-   loop - shared by repaintDaysChips() (repainting an existing chip sitting
-   inside its own tile) and dayTileVariableFor() (reading the same value as
-   an ordinary variable record from anywhere on the page, see below).
-   day-title/day-blurb are the day's real content-manager title/description
-   (see buildDayOpenTileHtml() in js/dashboard.js). */
+   adding a sixth is one line rather than a fourth near-identical query loop.
+   Shared by repaintDaysChips() (a chip inside its own tile) and
+   dayTileVariableFor() (the same value read from anywhere on the page). */
 var DAYS_CHIP_RESOLVERS = {
   "day-number": function (t) { return t.dataset.daysNumber ? "Day " + t.dataset.daysNumber : ""; },
   "day-date": function (t) { return t.dataset.daysDate || ""; },
@@ -10392,19 +10423,15 @@ var DAYS_CHIP_RESOLVERS = {
 };
 
 /**
- * The bare variable token a local chip stands for - what chipNotation()
- * wraps in braces to unpack the chip back into editable text, and what
- * localChipHtmlForToken() reads to pack that text back into a chip.
- *
- * That round trip is the spec's "upon editing them, users will just see the
- * variable inline", now literally: these names are per-tile and deliberately
- * exist nowhere else - they're not in content.variables, so they never
- * appear in the content manager's variables list, and the only way to change
- * what one RESOLVES to is the content manager's own day panel (see
- * js/ta.js's renderPanels()).
+ * The bare variable token a local chip stands for - what chipNotation() wraps
+ * in braces to unpack the chip into editable text, and what
+ * localChipHtmlForToken() reads to pack it back.
  * @param chip a .fx-chip element carrying data-fx-local
- * @return the token, or "" if its tile carries no variable scope (eg the
- *   trailing synthetic locked card)
+ * @return the token, or "" if its tile carries no variable scope
+ * @note That round trip is the spec's "upon editing them, users will just see
+ * the variable inline", literally. These names are per-tile and exist nowhere
+ * else - not in content.variables, so they never appear in the manager's
+ * list, and the only way to change what one RESOLVES to is the day panel.
  */
 function localChipToken(chip) {
   var local = chip.dataset.fxLocal;
@@ -10431,23 +10458,16 @@ function localChipToken(chip) {
 }
 
 /**
- * Repaints every local chip, every expression chip, and every per-tile
- * attachment icon at once - the whole "this piece of content resolves
- * differently depending on live state" set. Called whenever a text field
- * leaves edit mode (its notation text has just been packed back into fresh
- * chips, see parseVariableTokens()) and after any render/mirror that could
- * have copied one tile's resolved text onto another's.
- *
- * repaintFormulaChips() belongs here rather than only inside
- * repaintGalleryChips() (which used to be its one and only caller): that
- * function returns early on any page that hasn't loaded js/gallery.js (see
- * its own comment), which used to silently skip expression-chip repainting
- * everywhere except the gallery page. Harmless back when such a chip's
- * displayed text never changed after being placed (baked in once and left
- * alone), but the moment a chip could be rebuilt from notation on blur, that
- * gate meant one inserted on any OTHER page kept its leftover "{...}" text
- * forever instead of its real resolved value. Called unconditionally here
- * instead, same as every other repaint in this function.
+ * Repaints every local chip, every expression chip and every per-tile
+ * attachment icon at once - the whole "this resolves differently depending on
+ * live state" set. Called whenever a text field leaves edit mode, and after
+ * any render or mirror that could have copied one tile's text onto another's.
+ * @note repaintFormulaChips() belongs here rather than only inside
+ * repaintGalleryChips(), which returns early on any page without
+ * js/gallery.js - silently skipping expression-chip repainting everywhere but
+ * the gallery. Harmless while a chip's text never changed after being placed,
+ * but once a chip could be rebuilt from notation on blur, that gate left one
+ * inserted on any other page showing its leftover "{...}" text forever.
  */
 function repaintLocalTileContent() {
   repaintExtrasFilenameChips();
@@ -10458,15 +10478,14 @@ function repaintLocalTileContent() {
 }
 
 /**
- * Paints each placed "attachment icon" element (see buildCustomElementNode()'s
- * "extrasIcon" kind) with the glyph for the attachment tile it's actually
- * sitting on. This is the tile-exclusive element the right-click menu only
- * offers inside an attachments tile: one element, but a .pdf tile draws the
- * document glyph and a link tile the chain, because the icon is a property
- * of the attachment, not of the element a ta placed. Resolved through
- * js/dashboard.js's attachmentIconSvgFor() so the glyph set lives in exactly
- * one place; a no-op on every page that doesn't load that file (nothing
- * there can match the selector anyway).
+ * Paints each placed "attachment icon" element with the glyph for the tile
+ * it's actually sitting on.
+ * @note This is the tile-exclusive element the right-click menu only offers
+ * inside an attachments tile: one element, but a .pdf tile draws the document
+ * glyph and a link tile the chain, because the icon is a property of the
+ * attachment, not of the element a ta placed.
+ * @note Resolved through js/dashboard.js so the glyph set lives in one place;
+ * a no-op on every page that doesn't load it.
  */
 function repaintExtrasTypeIcons() {
   if (!window.attachmentIconSvgFor) return;
@@ -10476,17 +10495,12 @@ function repaintExtrasTypeIcons() {
 }
 
 /**
- * Handles the attachments area's right-click "Create textbox with filename
- * variable" action (see renderCtxMenuRoot()'s data-extras-add-filename
- * button): restores the filename chip into the shared tile text template at
- * the end of whichever tile the context menu was opened on, so a ta who
- * backspaced the chip out of the template can bring it back without
- * retyping the rest of it by hand. Goes through the exact same
- * commitTextFieldChange()/mirrorEditedField() path a normal typed edit
- * does, so undo and cross-tile mirroring both work identically - the
- * restored chip (and any text the ta adds around it afterward) then shows
- * up on every tile, same as any other template edit.
+ * Restores the filename chip into the shared tile text template, so a ta who
+ * backspaced it out can bring it back without retyping the rest by hand.
  * @param tile the [data-extras-tile] the context menu was opened on
+ * @note Goes through the same commit/mirror path a typed edit does, so undo
+ * and cross-tile mirroring work identically - the restored chip then shows up
+ * on every tile, like any other template edit.
  */
 function insertExtrasFilenameChip(tile) {
   var field = tile.querySelector('[data-extras-role="text"]');
@@ -10497,17 +10511,15 @@ function insertExtrasFilenameChip(tile) {
 }
 
 /**
- * A day tile's local chip variants (day-number/day-date/day-locked): same
+ * A day tile's local chip variants (day-number/day-date/day-locked): the same
  * "resolves off whichever tile it's rendered inside" idea as the filename
- * chip above (data-fx-local, closest("[data-days-tile]")'s own dataset)
- * rather than a content.variables lookup, so none of these show up in
- * js/ta.js's variables list either. day-locked reads as plain "Yes"/"No",
- * same convention formulaChipText() already uses for a real boolean
- * variable's "value" formula chip - no boolean-variable machinery had to
- * change, this is just a third local source feeding the same display rule.
+ * chip, so none of these appear in the content manager's variables list.
  * @param local "day-number", "day-date", or "day-locked"
  * @param label the chip's placeholder text before it resolves
  * @return an HTML string for a single <span class="fx-chip">
+ * @note day-locked reads as plain "Yes"/"No", the convention a real boolean
+ * variable's chip already uses - no boolean machinery had to change, this is
+ * a third local source feeding the same display rule.
  */
 function buildDaysChipHtml(local, label) {
   return '<span class="fx-chip" contenteditable="false" data-fx-local="' + local + '">' + label + '</span>';
@@ -10515,10 +10527,10 @@ function buildDaysChipHtml(local, label) {
 
 /**
  * Repaints every day-tile local chip off the tile it's actually rendered
- * inside right now, same "undo mirrorEditedField()'s blind copy" reasoning
- * as repaintExtrasFilenameChips(). data-days-date is already the tile's
- * pre-formatted display date (see js/dashboard.js's renderDays()), not a
- * raw ISO string, so no date formatting is duplicated here.
+ * inside, the same "undo mirrorEditedField()'s blind copy" reasoning as
+ * repaintExtrasFilenameChips().
+ * @note data-days-date is already the tile's pre-formatted display date, not
+ * a raw ISO string, so no date formatting is duplicated here.
  */
 function repaintDaysChips() {
   Object.keys(DAYS_CHIP_RESOLVERS).forEach(function (local) {
@@ -10530,12 +10542,11 @@ function repaintDaysChips() {
 }
 
 /**
- * Which field on a day tile each local chip is restored INTO by
- * insertDaysChip(). The day/date/locked chips go to whichever generic
- * "day tag" field the tile's template has (the locked template's title, the
- * open template's daytag); the title/description chips belong to their own
- * dedicated fields, so a ta who deleted the title variable gets it back in
- * the title field rather than glued onto the day tag.
+ * Which field on a day tile each local chip is restored INTO.
+ * @note The day/date/locked chips go to whichever generic "day tag" field the
+ * template has; title and description belong to their own dedicated fields,
+ * so a ta who deleted the title variable gets it back in the title field
+ * rather than glued onto the day tag.
  */
 var DAYS_CHIP_FIELD = {
   "day-title": '[data-days-role="open.title"]',
@@ -10544,17 +10555,14 @@ var DAYS_CHIP_FIELD = {
 var DAYS_CHIP_DEFAULT_FIELD = '[data-days-role="locked.title"], [data-days-role="open.daytag"]';
 
 /**
- * Handles the day tile area's right-click "Insert day number"/"Insert unlock
- * date"/"Insert locked-state text"/"Insert title variable"/"Insert
- * description variable" actions (see renderCtxMenuRoot()'s data-days-add-*
- * buttons): restores the given local chip into the tile's matching text
- * field (see DAYS_CHIP_FIELD) - same commitTextFieldChange()/
- * mirrorEditedField() path a normal typed edit takes, so undo and cross-tile
- * mirroring both work identically. This is the whole recovery route for a
- * variable a ta deleted: they can freely retype around it, or delete it
- * outright, and still get it back without hand-writing any markup.
+ * Restores one local chip into the tile's matching text field, from the day
+ * tile's right-click "Insert ..." actions.
  * @param tile the [data-days-tile] the context menu was opened on
  * @param local a DAYS_CHIP_VAR_SUFFIX key
+ * @note Same commit/mirror path a typed edit takes, so undo and cross-tile
+ * mirroring work identically. This is the whole recovery route for a deleted
+ * variable: a ta can retype around it or delete it outright and still get it
+ * back without hand-writing any markup.
  */
 function insertDaysChip(tile, local) {
   var field = tile.querySelector(DAYS_CHIP_FIELD[local] || DAYS_CHIP_DEFAULT_FIELD);
@@ -10571,19 +10579,17 @@ function insertDaysChip(tile, local) {
 /* ---------------------------------------------------------------------------
    DAY TILE / ATTACHMENT TILE LOCALS, READ AS ORDINARY VARIABLE RECORDS
 
-   A day tile's five locals and an attachment tile's filename (both just
-   above) only ever resolve for a chip physically sitting inside their own
-   tile - exactly right for the tile's own template, but it means nothing
-   anywhere else on the page can read, say, Day 1's own title. This section
-   makes the same live values reachable from anywhere, the same way the
-   gallery page's own two variables just below are: a derived record rather
-   than something stored (see galleryVariableFor()), keyed with
-   TILE_VAR_PREFIX so it can never collide with a real content.variables key.
-   That's what lets a "value" formula chip (or the typed {Day1Header}
-   notation, see parseVariableTokens()) reference any tile's own data from
-   anywhere on the page - offered on every page, not gated by
-   currentPageKey() the way the gallery's own pair is, since day/extras tiles
-   aren't exclusive to one page the way gallery panes are.
+   The locals above only resolve for a chip physically inside their own tile -
+   right for the tile's template, but it means nothing elsewhere on the page
+   can read, say, Day 1's title. This section makes the same live values
+   reachable from anywhere, as the gallery's own variables are: a derived
+   record rather than something stored, keyed with TILE_VAR_PREFIX so it can
+   never collide with a real content.variables key.
+
+   That's what lets a chip, or typed {Day1Header} notation, reference any
+   tile's data from anywhere. Offered on every page rather than gated by
+   currentPageKey(), since day and extras tiles aren't exclusive to one page
+   the way gallery panes are.
    --------------------------------------------------------------------------- */
 
 /* the key prefix every tile-local variable record uses, so variableByKey()
@@ -10592,11 +10598,10 @@ function insertDaysChip(tile, local) {
 var TILE_VAR_PREFIX = "tile:";
 
 /**
- * Every day tile currently on the page, one entry per distinct scope
- * (dataset.daysVar, eg "Day1") - a day can render as more than one tile
- * (locked vs open template) but they share the same scope and so collapse
- * to a single set of variables, same dedupe idea as galleryPaneBindings().
- * @return an array of {scope, tile}, tile being the first one seen for that scope
+ * Every day tile currently on the page, one entry per distinct scope.
+ * @return an array of {scope, tile}, tile being the first seen for that scope
+ * @note A day can render as more than one tile (locked vs open template) but
+ * they share a scope and so collapse to a single set of variables.
  */
 function dayTileScopes() {
   var seen = {};
@@ -10611,14 +10616,12 @@ function dayTileScopes() {
 }
 
 /**
- * Builds the variable-shaped record one day tile local resolves to, read
- * live off whichever tile currently carries that scope. Resolves to ""
- * rather than null when no tile currently carries the scope (a day that's
- * since been deleted), so a reference to it just reads blank instead of
- * vanishing outright - same "never crash over a stale reference" stance
- * variableNumericValue() already takes.
+ * Builds the variable-shaped record one day tile local resolves to, read live
+ * off whichever tile currently carries that scope.
  * @param key a key built as TILE_VAR_PREFIX + "day:" + scope + ":" + local
  * @return a {key, name, type, value} record, or null if key isn't one
+ * @note Resolves to "" rather than null when no tile carries the scope (a
+ * since-deleted day), so a reference reads blank instead of vanishing.
  */
 function dayTileVariableFor(key) {
   var prefix = TILE_VAR_PREFIX + "day:";
@@ -10675,8 +10678,8 @@ function extrasTileScopes() {
 
 /**
  * Builds the variable-shaped record one attachment tile's filename resolves
- * to, read live off whichever tile currently carries that scope - the
- * extras-tile counterpart of dayTileVariableFor().
+ * to, read live off whichever tile carries that scope - the extras-tile
+ * counterpart of dayTileVariableFor().
  * @param key a key built as TILE_VAR_PREFIX + "extras:" + scope
  * @return a {key, name, type, value} record, or null if key isn't one
  */
@@ -10721,18 +10724,14 @@ function galleryDirTileScopes() {
 
 /**
  * Builds the variable-shaped record one directory tile's NAME resolves to -
- * the rail's counterpart of extrasTileVariableFor(), and the record behind the
- * ${Gallery2026Name} chip a directory tile's label ships with (see
- * buildGalleryDirChipHtml()).
- *
- * It could always be typed and it always resolved (localChipHtmlForToken()
- * has recognised the token since the chip existed), but nothing ever OFFERED
- * it: the formula menu's picker is built from pageLocalVariables(), and the
- * gallery only ever contributed its two per-pane numbers there. So the one
- * variable a ta actually needs while editing a directory tile was the one
- * variable they had to already know the name of.
+ * the rail's counterpart of extrasTileVariableFor(), and the record behind
+ * the name chip a directory tile's label ships with.
  * @param key a key built as TILE_VAR_PREFIX + "gallerydir:" + directory name
  * @return a {key, name, type, value} record, or null if key isn't one
+ * @note It could always be typed and always resolved, but nothing OFFERED
+ * it: the formula picker is built from pageLocalVariables(), and the gallery
+ * only contributed its two per-pane numbers - so the one variable a ta needs
+ * while editing a directory tile was the one they had to already know.
  */
 function galleryDirVariableFor(key) {
   var prefix = TILE_VAR_PREFIX + "gallerydir:";
@@ -10761,24 +10760,19 @@ function galleryDirVariableInventory() {
 /* ---------------------------------------------------------------------------
    THE GALLERY PAGE'S OWN VARIABLES AND ACTIONS
 
-   Both exist per PANE BINDING rather than per element: a placed "galleryPane"
-   (see buildCustomElementNode()) names a directory, and that binding is what
-   brings a pair of variables (which image it's on, how many there are) and a
-   pair of actions (step it back, step it forward) into existence. Two
-   directories on the page therefore means four variables to pick from, which
-   is exactly the ta's own "if we put BOTH on the page right now, we will have
-   4 (2x2)".
+   Both exist per PANE BINDING rather than per element: a placed pane names a
+   directory, and that binding is what brings a pair of variables (which image
+   it's on, how many there are) and a pair of actions (step back, step
+   forward) into existence. Two directories on the page therefore means four
+   variables to pick from.
 
-   Neither is site content. The variables are LOCAL CHIPS (data-fx-local, same
-   machinery as a day tile's ${Day3Number}), so they never enter
-   content.variables and never show up in the content manager's variables list
-   - they're meaningless anywhere but here. They DO show up in the formula
-   menu's picker, but only while editing this page (see pageLocalVariables()),
-   and as derived entries rather than stored ones: that's what lets a ta write
-   "Percent (current of total)" over a pane the same way they'd write it over
-   any other pair of numbers. The actions aren't stored at all either: they're
-   derived from whichever panes are currently placed, and an element "is" the
-   forward button purely because its content.links entry points at one of them.
+   Neither is site content. The variables are LOCAL CHIPS, so they never enter
+   content.variables and never appear in the content manager - they're
+   meaningless anywhere but here. They DO show up in the formula picker, but
+   only while editing this page, and as derived entries rather than stored
+   ones. The actions aren't stored either: they're derived from whichever
+   panes are placed, and an element "is" the forward button purely because its
+   content.links entry points at one.
    --------------------------------------------------------------------------- */
 
 /* the seeded pane's binding: "whatever the directory rail has selected", as
@@ -10789,11 +10783,11 @@ var GALLERY_SELECTED_DIR = "";
 
 /**
  * The variable-name scope one pane binding contributes: "Gallery2026" for a
- * pane pinned to the "2026" directory, "GallerySelected" for one following the
- * rail. Non-alphanumerics are dropped so a directory a ta named "Field trip
- * 2027" still spells a token they can read and type back.
+ * pane pinned to "2026", "GallerySelected" for one following the rail.
  * @param dir the binding's directory name, or "" for the rail-following one
  * @return the scope, eg "Gallery2026"
+ * @note Non-alphanumerics are dropped, so a directory named "Field trip 2027"
+ * still spells a token a ta can read and type back.
  */
 function galleryVarScope(dir) {
   if (!dir) return "GallerySelected";
@@ -10802,10 +10796,10 @@ function galleryVarScope(dir) {
 
 /**
  * Every distinct pane binding currently on the page, in the order the panes
- * were placed. Read off the live DOM rather than CUSTOM_ELEMENTS so a pane a
- * ta has just deleted stops offering its variables/actions immediately -
- * the same "the dom is the state" stance pageLinkInventory() takes.
+ * were placed.
  * @return an array of directory names ("" for the rail-following binding)
+ * @note Read off the live DOM rather than CUSTOM_ELEMENTS, so a just-deleted
+ * pane stops offering its variables and actions immediately.
  */
 function galleryPaneBindings() {
   var seen = {};
@@ -10830,10 +10824,10 @@ function galleryBindingLabel(dir) {
 }
 
 /**
- * Builds the markup for one gallery variable chip - the page-exclusive
- * equivalent of buildDaysChipHtml(), carrying the binding it reads from in
- * data-fx-dir rather than resolving off a tile it sits inside (these are
- * placed anywhere on the page, not inside anything).
+ * Builds one gallery variable chip - the page-exclusive equivalent of
+ * buildDaysChipHtml(), carrying the binding it reads from in data-fx-dir
+ * rather than resolving off a tile it sits inside, since these are placed
+ * anywhere on the page rather than inside anything.
  * @param local "gallery-current" or "gallery-total"
  * @param dir the binding's directory name, "" for the rail-following one
  * @return an HTML string for a single <span class="fx-chip">
@@ -10846,10 +10840,9 @@ function buildGalleryChipHtml(local, dir) {
 }
 
 /**
- * Builds the markup for a directory tile's own name chip. Tile-local like the
- * filename/day chips (it resolves off whichever tile it's rendered inside),
- * which is what lets one shared label template print a different directory
- * name on every tile in the rail.
+ * Builds a directory tile's own name chip. Tile-local like the filename and
+ * day chips, which is what lets one shared label template print a different
+ * directory name on every tile in the rail.
  * @return an HTML string for a single <span class="fx-chip">
  */
 function buildGalleryDirChipHtml() {
@@ -10858,10 +10851,8 @@ function buildGalleryDirChipHtml() {
 
 /**
  * Repaints every gallery chip off live data: the two page-level ones through
- * js/gallery.js's own hook (it owns which image each binding is sitting on),
- * the per-tile name chip off the tile it's actually inside. A no-op on every
- * page that doesn't load js/gallery.js, same window.-gated cross-script
- * pattern repaintExtrasTypeIcons() uses.
+ * js/gallery.js's hook (it owns which image each binding is on), the per-tile
+ * name chip off the tile it's inside. A no-op on pages without that file.
  */
 function repaintGalleryChips() {
   document.querySelectorAll('.fx-chip[data-fx-local="gallery-dir"]').forEach(function (chip) {
@@ -10873,23 +10864,17 @@ function repaintGalleryChips() {
     '.fx-chip[data-fx-local="gallery-total"]').forEach(function (chip) {
     chip.textContent = window.galleryChipValue(chip.dataset.fxLocal, chip.dataset.fxDir || "");
   });
-  /* a formula chip can be built on a pane variable too (see
-     galleryVariableFor()), and those read live off the pane, so stepping an
-     image has to repaint them alongside the local chips above. Kept here
-     (not just in repaintLocalTileContent(), which now also calls this
-     unconditionally) because js/gallery.js calls this function directly on
-     every image step, independent of any text field entering/leaving edit
-     mode - a harmless redundant call whenever repaintLocalTileContent() IS
-     the caller instead, repaintFormulaChips() is cheap and idempotent. */
+  /* a formula chip can be built on a pane variable too, and those read live
+     off the pane, so stepping an image has to repaint them alongside the
+     local chips. Kept here because js/gallery.js calls this directly on every
+     step, independent of any field entering or leaving edit mode. */
   repaintFormulaChips();
 }
 
 /**
  * Appends one gallery variable chip to the end of a text field, through the
- * same commitTextFieldChange() path a typed edit takes (so undo and the shared-
- * template mirror both work identically) - the gallery's answer to
- * insertDaysChip(), reached from the right-click menu's "Insert gallery
- * variable..." sub-view.
+ * same commit path a typed edit takes - the gallery's answer to
+ * insertDaysChip(), reached from the right-click menu.
  * @param field the [data-edit-id] text field to insert into
  * @param local "gallery-current" or "gallery-total"
  * @param dir the binding to read from
@@ -10902,15 +10887,14 @@ function insertGalleryChip(field, local, dir) {
 }
 
 /**
- * The key a formula chip/progress binding uses to name one of this page's
- * pane variables: "gallery:current" for the rail-following pane,
- * "gallery:total:2026" for one pinned to a directory. Same prefix and same
- * shape as an action link value (see GALLERY_ACTION_PREFIX) - one family of
- * "this means something to the gallery page", with disjoint verbs so
- * galleryActionOf() and galleryVarOf() can never claim each other's strings.
+ * The key a chip or progress binding uses to name one of this page's pane
+ * variables: "gallery:current" for the rail-following pane,
+ * "gallery:total:2026" for one pinned to a directory.
  * @param local "gallery-current" or "gallery-total"
  * @param dir the binding's directory name, "" for the rail-following one
  * @return the key
+ * @note Same prefix and shape as an action link value, with disjoint verbs so
+ * the two lookups can never claim each other's strings.
  */
 function galleryVarKey(local, dir) {
   return GALLERY_ACTION_PREFIX + (local === "gallery-total" ? "total" : "current") + (dir ? ":" + dir : "");
@@ -10933,10 +10917,8 @@ function galleryVarOf(key) {
 
 /**
  * Builds the variable-shaped record one pane variable resolves to, read live
- * off js/gallery.js (which owns which image each binding is sitting on)
- * rather than out of any stored value - so this is a fresh reading every
- * time, and the chip/bar built on it repaints with the pane, see
- * repaintGalleryChips().
+ * off js/gallery.js rather than out of any stored value - so it's a fresh
+ * reading every time, and whatever is built on it repaints with the pane.
  * @param key a key from galleryVarKey()
  * @return a {key, name, type, value} record, or null if key isn't one
  */
@@ -10961,10 +10943,8 @@ function galleryVariableFor(key) {
 
 /**
  * Every variable this page currently offers: two per pane binding (which
- * image it's on, how many it has), in the same order the bindings come in.
- * This is the list that goes from two to four the moment a ta places a
- * second image pane, which is exactly the ta's own "if we add another, it
- * should go up to 4".
+ * image it's on, how many it has), in the order the bindings come in - so the
+ * list goes from two to four the moment a ta places a second pane.
  * @return an array of variable records
  */
 function galleryVariableInventory() {
@@ -10999,10 +10979,9 @@ function galleryActionOf(url) {
 }
 
 /**
- * A human name for one action, for the link editor's picker and the links
- * view's rows - "Previous image (2026)" rather than the raw "gallery:prev:2026"
- * a ta should never have to read, per "they will be named clearly to indicate
- * what they are for".
+ * A human name for one action, for the link editor and the links view -
+ * "Previous image (2026)" rather than the raw "gallery:prev:2026" a ta should
+ * never have to read.
  * @param url a links map value
  * @return the label, or "" if url isn't a gallery action
  */
@@ -11041,15 +11020,11 @@ var THEME_ICON_DEFAULT_SVG =
   '<svg class="tic moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
   'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /></svg>';
 
-/* every distinct icon actually used anywhere on the site (index.html's
-   learn cards, schedule day rows, prizes, countdown, theme toggle, about
-   section burst, plus dashboard.html/js/dashboard.js's attachment-type and
-   lock/unlock glyphs), reused verbatim rather than pulling in an icon
-   library: "icons that exist already", not new ones, and not just the
-   handful off one page. class="cic" for the same fixed 30x30 accent-colored
-   sizing every other content icon on the site already uses. Built-in, so
-   unlike CUSTOM_ICONS (see fetchCustomAssets()) none of these are ever
-   deletable from the picker. */
+/* every distinct icon already used anywhere on the site, reused verbatim
+   rather than pulling in an icon library: "icons that exist already", and not
+   just the handful off one page. class="cic" for the same fixed 30x30
+   accent-coloured sizing every other content icon uses. Built-in, so unlike
+   CUSTOM_ICONS none of these are ever deletable from the picker. */
 var ICON_LIBRARY = [
   { label: "Checkmark", svg: '<svg class="cic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" ' +
     'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12.5l5 5L20 6.5" /></svg>' },
@@ -11153,12 +11128,10 @@ var ICON_LIBRARY = [
 ];
 
 /* ta-uploaded icons/videos/fonts, shared with every ta the moment they're
-   added (unlike a profile there's no separate share step), fetched fresh
-   whenever the relevant picker opens (see fetchCustomAssets()). Each entry
-   is {id, owner, name, url}; only its owner can remove it (enforced
-   server-side too, see app/main.py's api_delete_asset()) - never a built-in
-   (ICON_LIBRARY/TEXT_FONTS aren't rows in this table at all) and never
-   another ta's upload. */
+   added (unlike a profile there's no separate share step), refetched whenever
+   a picker opens. Each entry is {id, owner, name, url}; only its owner can
+   remove it, enforced server-side too - never a built-in, never another ta's
+   upload. */
 var CUSTOM_ICONS = [];
 var CUSTOM_FONTS = [];
 
@@ -11173,9 +11146,9 @@ function currentTaUsername() {
 }
 
 /**
- * Bearer-authed fetch for the shared icon/video/font asset endpoints, same
- * token convention as uploadEditorFile() (js/ta.js's authedFetch() isn't
- * loaded on this file's pages).
+ * Bearer-authed fetch for the shared icon/video/font asset endpoints, the
+ * same token convention as uploadEditorFile() (js/ta.js's authedFetch()
+ * isn't loaded on this file's pages).
  * @param url request url
  * @param opts fetch options
  * @return the fetch promise
@@ -11230,12 +11203,11 @@ function deleteCustomAsset(kind, id) {
 }
 
 /**
- * Parses a raw `<svg>...</svg>` string (see ICON_LIBRARY) into a real,
- * detached svg element: document.createElement() can't build one directly,
- * it needs the svg namespace, so this goes through innerHTML on a plain
- * div instead and pulls the parsed node back out.
+ * Parses a raw `<svg>...</svg>` string into a real, detached svg element.
  * @param markup the svg markup
  * @return the parsed, detached svg element
+ * @note document.createElement() can't build one directly - it needs the svg
+ * namespace - so this goes through innerHTML on a plain div instead.
  */
 function svgFromMarkup(markup) {
   var tmp = document.createElement("div");
@@ -11244,18 +11216,16 @@ function svgFromMarkup(markup) {
 }
 
 /**
- * Wraps a not-yet-inserted element in its own `.free-wrap` (see
- * detachFromFlow()) positioned at (x, y) in document coordinates and
- * attaches it to the page, so every existing resize/move/delete/text-edit
- * mechanism already treats it exactly like a template element that's been
- * dragged out of flow, no special-casing needed anywhere else. Appended
- * directly to body, never nested inside page content, so deleting or
- * moving an existing section can never take a newly-added element down
- * with it (see ancestorPos()'s "no attachment between elements" rule).
+ * Wraps a not-yet-inserted element in its own `.free-wrap` at (x, y) in
+ * document coordinates and attaches it, so every existing resize, move,
+ * delete and text-edit mechanism treats it exactly like a template element
+ * dragged out of flow.
  * @param el the element to place (not yet in the document)
  * @param x left, document (page) px
  * @param y top, document (page) px
  * @return el, now attached
+ * @note Appended directly to body, never nested inside page content, so
+ * deleting or moving a section can't take a newly-added element with it.
  */
 function placeFreeElement(el, x, y) {
   var wrap = document.createElement("span");
@@ -11274,10 +11244,9 @@ function placeFreeElement(el, x, y) {
 }
 
 /**
- * Freezes a freshly-placed free element (see placeFreeElement()) at its
- * just-rendered size, the same finishing step detachFromFlow() already
- * does for an existing element on its first resize, so double-clicking a
- * resize handle later has a sane "as first created" size to reset back to.
+ * Freezes a freshly-placed free element at its just-rendered size - the same
+ * finishing step detachFromFlow() does on an existing element's first resize,
+ * so a later double-click has a sane "as first created" size to reset to.
  * @param el the element, already filled with its real content
  */
 function freezeFreeElement(el) {
@@ -11291,53 +11260,39 @@ function freezeFreeElement(el) {
 }
 
 /**
- * Builds and places the DOM node for one custom-element descriptor (see
- * addCustomElement()/renderCustomElements()), tagging it with the same
- * data-edit-id/data-resize-id convention every template element already
- * uses, so the rest of this file (resize, move, delete, text edit, text
- * style, undo) needs zero special-casing for anything created here. A
- * "button" is a single tagged `<a>` (data-edit-id right on it, no separate
- * inner textbox), same "the button IS the textbox" rule every other CTA on
- * the site follows; the link entered when adding it becomes a real href
- * via the same right-click "Add link" mechanism every other element uses
- * (see LINKS/applyOneLink(), addCustomElement()). An "image" with a `d.url` is a real
- * uploaded photo (see uploadEditorFile()/renderCtxMenuImagePicker()), a plain
- * `<img>` with the site's usual object-fit: cover so its box dictates the
- * crop rather than stretching the pixels; one saved before real uploads
- * existed (no `d.url`) still falls back to the site's flat `.ph` placeholder
- * box (see the Media bullets in CLAUDE.md). A "video" is a real uploaded
- * clip (same upload flow as an image), a plain looping muted autoplay
- * `<video>`, same object-fit: cover - that being only its DEFAULT: whether it
- * autoplays, shows the browser's own player controls, or play/pauses on a
- * click is a per-video choice on its right-click menu, applied over this by
- * applyVideoPlaybackOverrides(). A "datetime" is a live countdown or a
- * formatted static date/time (see renderDatetimeContent()), driven by its
- * own `d.target`/`d.format` rather than a click-to-edit text field. A
- * "theme" is a real functional light/dark toggle (see js/theme.js's
- * `[data-theme-toggle]` listener), always built with the default sun/moon
- * icon (a fixed replacement is a content.theme_icons override applied
- * afterward, see applyThemeIconOverrides(), same two-pass shape the nav's
- * static #themeBtn also relies on), its label a normal click-to-edit
- * `.tic-label` span nested inside. An icon (the catch-all last branch)
- * with a `d.url` is a ta-uploaded icon (see fetchCustomAssets()) rendered as
- * a plain `<img>` rather than parsed svg markup; `elKind()` already treats
- * any "icon."-prefixed id as icon kind (locked aspect ratio) regardless of
- * tag, so this needs no special-casing anywhere else.
+ * Builds and places the DOM node for one custom-element descriptor, tagging
+ * it with the same data-edit-id/data-resize-id convention every template
+ * element uses - so resize, move, delete, text edit, style and undo need zero
+ * special-casing for anything created here.
  * @param d {id, kind, left, top, w, h, icon, href, url, target, format}
  * @return the built, attached element
+ * @note A "button" is a single tagged `<a>` with no separate inner textbox -
+ * the button IS the textbox, as every other CTA on the site is - and its link
+ * becomes a real href through the same "Add link" mechanism.
+ * @note An "image" with a d.url is a real uploaded photo, a plain `<img>`
+ * with object-fit: cover so its box dictates the crop; one saved before
+ * uploads existed falls back to the flat `.ph` placeholder.
+ * @note A "video" is an uploaded clip, looping muted autoplay by DEFAULT -
+ * autoplay, controls and click-to-pause are per-video choices applied over
+ * this afterward.
+ * @note A "datetime" is a countdown or formatted static date driven by its
+ * own d.target/d.format rather than a click-to-edit field.
+ * @note A "theme" is a real functional light/dark toggle, always built with
+ * the default sun/moon icon (a replacement is an override applied after), its
+ * label an ordinary click-to-edit span nested inside.
+ * @note An icon with a d.url is a ta-uploaded icon rendered as a plain `<img>`
+ * rather than parsed svg. elKind() already treats any "icon."-prefixed id as
+ * icon kind regardless of tag, so that needs no special-casing elsewhere.
  */
 function buildCustomElement(d) {
   var el = buildCustomElementNode(d);
   placeFreeElement(el, d.left, d.top);
-  /* the student dashboard is two pages in one file (see applyDashView()), so
-     a free-placed element there belongs to one of them: whichever half was on
-     show when it was placed, defaulting to the dashboard itself - which is
-     where everything placed before the locked-out page became editable
-     belongs, the seeded progress bar and the two tile areas included. Without
-     this they'd all float over the gate, and pinned to 0,0 at that, since the
-     in-flow spacers they anchor to measure nothing while #dashApp is out of
-     the document. A bound child (see buildReelElement()) needs none of this:
-     it lives inside its tile and follows it. */
+  /* the dashboard is two pages in one file, so a free-placed element there
+     belongs to one of them: whichever half was on show when it was placed,
+     defaulting to the dashboard itself. Without this they'd float over the
+     gate, pinned to 0,0 at that, since the spacers they anchor to measure
+     nothing while #dashApp is out of the document. A bound child needs none
+     of this: it lives inside its tile and follows it. */
   if (currentPageKey() === "dashboard") {
     el.parentNode.setAttribute("data-dash-view", d.dashView === "gate" ? "gate" : "app");
   }
@@ -11359,11 +11314,10 @@ function buildCustomElement(d) {
 }
 
 /**
- * The kind-dispatch half of buildCustomElement(): builds and fills in one
- * descriptor's DOM node, but doesn't place it - split out so a reel tile's
- * bound child (see buildReelElement()) can be built the exact same way
- * every top-level custom element is, then appended straight into its tile
- * instead of going through placeFreeElement()/document.body.
+ * The kind-dispatch half of buildCustomElement(): builds and fills one
+ * descriptor's DOM node but doesn't place it - split out so a reel tile's
+ * bound child can be built exactly as every top-level element is, then
+ * appended straight into its tile instead of onto document.body.
  * @param d see buildCustomElement()
  * @return the built, unplaced element
  */
@@ -11428,18 +11382,13 @@ function buildCustomElementNode(d) {
     el.setAttribute("data-extras-typeicon", "1");
     el.innerHTML = window.attachmentIconSvgFor ? window.attachmentIconSvgFor(null) : "";
   } else if (d.kind === "extrasArea") {
-    /* transparent layout container for the student dashboard's "Extra
-       attachments" tile list (see app/db.py's _DASH_EXTRAS_AREA_ENTRY) -
-       js/dashboard.js's renderExtras() finds it by data-resize-id and
-       renders the actual per-attachment tiles inside; this only builds the
-       empty shell. Deliberately no background (kept transparent, unlike
-       "box") - see toggleStyleMenu()'s isExtrasArea handling, which hides
-       the generic Color row for it the same way it does for "progress".
-       Both axes are draggable, but what a stored size MEANS depends on the
-       container's own axis locks (see areaFlowFor()): a locked axis keeps
-       that size and makes the tiles fit inside it, an unlocked one is sized
-       by its content and ignores the stored figure. Width is locked by
-       default, height grows to fit. */
+    /* transparent layout container for the dashboard's attachments list -
+       js/dashboard.js finds it by data-resize-id and renders the tiles
+       inside; this builds the empty shell. Deliberately background-less,
+       unlike "box". Both axes are draggable, but what a stored size MEANS
+       depends on the container's own axis locks: a locked axis keeps that
+       size and fits the tiles inside it, an unlocked one is sized by its
+       content and ignores the figure. Width locked, height grows. */
     el = document.createElement("div");
     el.setAttribute("data-resize-id", d.id);
     el.setAttribute("data-extras-area", "1");
@@ -11451,21 +11400,14 @@ function buildCustomElementNode(d) {
     el.style.width = "100%";
     el.style.minHeight = "40px";
   } else if (d.kind === "daysArea") {
-    /* transparent layout container for the student dashboard's "The days"
-       tile grid (see app/db.py's _DASH_DAYS_AREA_ENTRY) - js/dashboard.js's
-       renderDays() finds it by data-resize-id and renders the actual
-       per-day tiles inside; this only builds the empty shell. Same shape as
-       the "extrasArea" kind just above, see its doc comment for how its axis
-       locks decide what a stored size means.
-       The old static #dayGrid's fixed "grid grid-3" is gone: three columns
-       was a constant, so neither dragging the container narrower nor dragging
-       a day card wider changed anything about the tiling. .tile-flow's
-       auto-fill tracks give the same three columns at the page's own width
-       (the --tile-gap and data-tile-w below are the old .grid gap and an
-       equivalent track size) while making the count a real function of both,
-       which is what lets a ta
-       re-tile the grid at all - and it keeps collapsing to 2 and 1 columns on
-       narrow screens the way .grid-3's media queries did. */
+    /* transparent layout container for the dashboard's day grid, same shape
+       as "extrasArea" above - see it for how the axis locks decide what a
+       stored size means.
+       The old static #dayGrid's fixed three columns was a constant, so
+       neither dragging the container narrower nor a day card wider changed
+       the tiling. .tile-flow's auto-fill tracks give the same three columns
+       at the page's own width while making the count a real function of
+       both, and still collapse to 2 and 1 on narrow screens. */
     el = document.createElement("div");
     el.setAttribute("data-resize-id", d.id);
     el.setAttribute("data-days-area", "1");
@@ -11480,17 +11422,13 @@ function buildCustomElementNode(d) {
     el.style.width = "100%";
     el.style.minHeight = "40px";
   } else if (d.kind === "galleryDirArea") {
-    /* transparent layout container for the gallery's directory rail (see
-       app/db.py's _GALLERY_DIRS_AREA_ENTRY) - js/gallery.js's renderDirs()
-       finds it by data-gallery-dirs-area and renders one tile per directory
-       inside; this only builds the empty shell. Exactly the same shape as the
-       dashboard's "extrasArea"/"daysArea" kinds above, and for exactly the
-       same reason: the ta's spec calls for "a transparent box, with tiles in
-       it or the text saying theres nothing", with the coloured rectangle
-       behind a tile kept separate from the area itself. It ships stacked
-       vertically (see AREA_FLOW_DEFAULTS) since that's where the rail has
-       always sat, but every stacking/lock control works on it like any other
-       flow container. */
+    /* transparent layout container for the gallery's directory rail -
+       js/gallery.js renders one tile per directory inside; this builds the
+       empty shell. Exactly the same shape as the dashboard's areas, and for
+       the same reason: "a transparent box, with tiles in it or the text
+       saying theres nothing", with each tile's coloured rectangle kept
+       separate from the area. Ships stacked vertically, since that's where
+       the rail has always sat, but every control works on it as usual. */
     el = document.createElement("div");
     el.setAttribute("data-resize-id", d.id);
     el.setAttribute("data-gallery-dirs-area", "1");
@@ -11500,15 +11438,12 @@ function buildCustomElementNode(d) {
     el.style.setProperty("--tile-gap", "8px");
     el.style.minHeight = "40px";
   } else if (d.kind === "galleryPane") {
-    /* one photo/clip stage (see app/db.py's _GALLERY_PANE_ENTRY). Unlike every
-       other kind here, a page can carry SEVERAL of these, each bound to a
-       named directory through d.dir - so a ta can show 2025 beside 2026 on the
-       same page. d.dir === "" is the special "follow the rail" binding the
-       page ships with, which is what keeps the directory tiles worth clicking.
-       js/gallery.js paints the actual media into the two children below and
-       owns which image each binding is currently on; this only builds the
-       empty stage, same "build the shell, fill it from the page's own script"
-       split as the dashboard's tile areas. */
+    /* one photo/clip stage. Unlike every other kind here a page can carry
+       SEVERAL, each bound to a named directory through d.dir, so a ta can
+       show 2025 beside 2026. d.dir === "" is the "follow the rail" binding
+       the page ships with, which is what keeps the directory tiles worth
+       clicking. js/gallery.js paints the media and owns which image each
+       binding is on; this only builds the empty stage. */
     el = document.createElement("div");
     el.className = "gv-stage";
     el.setAttribute("data-resize-id", d.id);
@@ -11530,39 +11465,27 @@ function buildCustomElementNode(d) {
     hardenVideo(gpVid);
     el.appendChild(gpVid);
   } else if (d.kind === "loginField") {
-    /* one of the login page's two credential boxes (see app/db.py's
-       _LOGIN_USER_ENTRY/_LOGIN_PASS_ENTRY), the first of the three kinds the
-       right-click menu only offers on that page - "under elements, with an
-       indicator", see renderCtxMenuRoot()'s "Login page only" section.
+    /* one of the login page's two credential boxes, the first of the three
+       kinds the right-click menu only offers on that page.
 
-       The "Username"/"Password" caption above the box is deliberately NOT
-       part of this: it's ordinary markup in templates/login.html carrying an
-       ordinary data-edit-id (login.label.username/.password), because it has
-       no functionality beyond being a line of text and shouldn't inherit any
-       of this kind's special handling - no page-exclusive add menu, no
-       violet outline, no undeletable rectangle. It moves, restyles, deletes
-       and re-adds exactly like the card's own title and subtitle beside it.
+       The "Username"/"Password" caption above is deliberately NOT part of it:
+       that's ordinary markup with an ordinary data-edit-id, because it has no
+       functionality beyond being a line of text and shouldn't inherit any of
+       this kind's special handling.
 
-       What's left is built out of two tracked pieces rather than one opaque
-       widget, because the spec asks for exactly that: the box around the
-       input is "a regular rectangle with text in it" (a data-resize-id div -
-       so the radius/border/color/shadow rows of the style popover all
-       already work on it with no new plumbing), and the greyed placeholder
-       inside it is a plain text field rather than the <input>'s own
-       placeholder attribute,
-       which is the only way it could be edited, moved and restyled like
-       every other piece of text on the site. js/login.js hides it the moment
-       the field has a value, so it still READS as a placeholder to a real
-       visitor. The real <input> is still a real <input> (autocomplete,
-       password masking, autofill all intact), just visually transparent
-       inside that rectangle.
+       What's left is two tracked pieces rather than one opaque widget,
+       because the spec asks for exactly that: the box is "a regular rectangle
+       with text in it" (so the style popover's rows all work on it with no
+       new plumbing), and the greyed placeholder is a plain text field rather
+       than the <input>'s placeholder attribute - the only way it could be
+       edited and restyled like any other text. js/login.js hides it once the
+       field has a value, so it still READS as a placeholder. The real <input>
+       is still real: autocomplete, masking and autofill all intact.
 
        The box carries data-login-fixed: a field with its rectangle deleted
-       would be an <input> with nothing around it, so it's the same deliberate
-       exception the attachments tile's download button already makes (see
-       deleteElement()) - move/resize/restyle it freely, just never delete
-       it. The field as a WHOLE is deletable and re-addable like anything
-       else. */
+       would be an <input> with nothing around it, so it's the same exception
+       the attachments tile's download button makes - move and restyle it
+       freely, just never delete it. The field as a WHOLE is deletable. */
     var lfName = d.field === "password" ? "password" : "username";
     el = document.createElement("div");
     el.className = "login-field";
@@ -11590,15 +11513,12 @@ function buildCustomElementNode(d) {
     lfBox.appendChild(lfPh);
     el.appendChild(lfBox);
   } else if (d.kind === "loginButton") {
-    /* the login page's submit button (app/db.py's _LOGIN_SUBMIT_ENTRY).
-       Everything cosmetic about it is a ta's to change - its label is a
-       normal click-to-edit field, its box takes size/rounding/color/border/
-       shadow like any other button - but what it DOES is not: js/login.js
-       binds the actual credential post to the data-login-el marker, not to
-       an id or a link, so it can't be pointed somewhere else by accident.
-       That's why it draws in the login-page outline color in edit mode (see
-       css/style.css's [data-login-el] rule), same "this one is wired up"
-       signal the navbar-fixed and linked elements already get. */
+    /* the login page's submit button. Everything cosmetic is a ta's to
+       change - its label is a normal click-to-edit field, its box takes the
+       usual style rows - but what it DOES is not: js/login.js binds the
+       credential post to the data-login-el marker, not to an id or a link,
+       so it can't be pointed elsewhere by accident. That's why it draws in
+       the login-page outline colour in edit mode. */
     el = document.createElement("button");
     el.type = "button";
     el.className = "btn btn-primary login-submit";
@@ -11611,22 +11531,17 @@ function buildCustomElementNode(d) {
     lbLabel.textContent = "Log in";
     el.appendChild(lbLabel);
   } else if (d.kind === "loginError") {
-    /* the login page's failure line (app/db.py's _LOGIN_ERROR_ENTRY).
-       Invisible to a real visitor until something actually goes wrong, which
-       is precisely why it needs the faint diagonal hazard hatching in the
-       editor (see css/style.css): without it a ta is looking at a line of
-       red text that never appears on the live page with nothing to say so.
+    /* the login page's failure line. Invisible to a real visitor until
+       something goes wrong, which is exactly why it needs the hazard hatching
+       in the editor: without it a ta is looking at red text that never
+       appears on the live page, with nothing to say so.
 
-       Carries BOTH strings it can show - wrong credentials, and the
-       "you were idled out" line js/idle.js bounces people here with
-       (?expired=1) - as two independently editable fields, rather than one
-       field js/login.js overwrites at runtime: a ta who reworded the login
-       failure shouldn't find their wording silently replaced on an expired
-       bounce, and the expired copy would otherwise be the one string on this
-       page that nobody could edit at all. Only one of them is ever visible
-       at a time on the real page; edit mode shows both, same "keep it
-       reachable even when the live page wouldn't show it" rule
-       .extras-empty already follows on the dashboard. */
+       Carries BOTH strings it can show - wrong credentials, and the "you were
+       idled out" line - as two independently editable fields rather than one
+       js/login.js overwrites at runtime: a ta who reworded the failure
+       shouldn't find it silently replaced on an expired bounce, and the
+       expired copy would otherwise be the one string here nobody could edit.
+       Only one shows on the real page; edit mode shows both. */
     el = document.createElement("div");
     el.className = "login-error";
     el.setAttribute("data-resize-id", d.id);
@@ -11647,29 +11562,22 @@ function buildCustomElementNode(d) {
     leExpired.textContent = "You were logged out after a while of inactivity. Log in again.";
     el.appendChild(leExpired);
   } else if (d.kind === "navPortal" || d.kind === "navDashboard" || d.kind === "navLogout") {
-    /* the landing page's three nav buttons, offered by the right-click menu on
-       that page only and only for the navbar state currently on show (see
-       renderCtxMenuRoot()'s "Landing page navbar" section): an Access portal
-       button belongs to the signed-out navbar, Dashboard and Log out to the
-       signed-in one, and offering any of them in the wrong state would be
-       offering to place something the page can never show.
+    /* the landing page's three nav buttons, offered by the right-click menu
+       on that page only and only for the navbar state currently on show: an
+       Access portal button belongs to the signed-out navbar, Dashboard and
+       Log out to the signed-in one, and offering either in the wrong state
+       would be offering to place something the page can never show.
 
-       Shaped like the ordinary "button" kind - one tagged element, its own
-       label click-to-edit, size/rounding/colour/border all the usual controls
-       - with one difference: what it DOES is wired to its data-nav-el marker
-       (wireNavButtons()/applyNavSessionState()), not to its id or its href, so
-       it can't be pointed somewhere else by accident and a placed copy works
-       the moment it lands. That's why these draw in the page-exclusive outline
-       colour in edit mode, the same signal the login page's own elements get.
+       Shaped like the ordinary "button" kind, with one difference: what it
+       DOES is wired to its data-nav-el marker rather than its id or href, so
+       it can't be pointed elsewhere by accident and a placed copy works the
+       moment it lands. Hence the page-exclusive outline colour in edit mode.
 
        Which session state it shows in is the kind's default and the ta's
-       choice: the kind decides where it STARTS (an Access portal button is a
-       signed-out thing, Dashboard and Log out signed-in ones), and the
-       right-click menu's "Shown to" switch can override that per element, all
-       the way to "everyone" - see navStateForDescriptor(). A button dropped in
-       the middle of the page isn't a navbar button any more, and a ta who put
-       one there generally means it as page furniture that every reader gets,
-       which the kind alone had no way to express. */
+       choice: the kind decides where it STARTS, and the "Shown to" switch can
+       override that per element, all the way to "everyone". A button dropped
+       mid-page isn't a navbar button any more, and a ta who put one there
+       generally means page furniture every reader gets. */
     var navKind = d.kind === "navPortal" ? "portal" :
       d.kind === "navDashboard" ? "dashboard" : "logout";
     el = document.createElement(navKind === "logout" ? "button" : "a");
@@ -11724,22 +11632,16 @@ function buildCustomElementNode(d) {
     el.setAttribute("data-datetime", "1");
     renderDatetimeContent(el, d);
   } else if (d.kind === "progress") {
-    /* the outer div (data-resize-id) IS the track/background rectangle:
-       applyRadiusOverrides()/applyBorderOverrides()/the opacity slider all
-       already work generically on any data-resize-id div (see
-       toggleStyleMenu()'s isProgress handling for the one exception, the
-       generic Color row, which this has its own replacement for), so
-       rounding it into a pill or adding a border needs no new plumbing.
-       overflow:hidden clips the inner fill bar to whatever shape the radius
-       slider picks. Its own two colors (this div's background is the
-       track, the child's is the fill) are independent from the generic
-       Color row - see colorTarget()/applyColorOverrides(), both skip
-       data-progress elements - and get painted, along with the live fill
-       width off the two bound variables (d.varCurrent/d.varTotal), by
-       applyProgressBindings()/paintProgressElement(), not here: this only
-       builds the static structure with placeholder default colors, same
-       two-pass "build with defaults, then apply overrides" shape every
-       other kind here follows. */
+    /* the outer div IS the track rectangle: radius, border and the opacity
+       slider all already work generically on any data-resize-id div, so
+       rounding it into a pill needs no new plumbing. overflow:hidden clips
+       the inner fill bar to whatever shape the radius picks.
+
+       Its two colours (this div's background is the track, the child's the
+       fill) are independent of the generic Color row, which skips
+       data-progress elements. They're painted, along with the live fill width
+       off the two bound variables, by applyProgressBindings() - not here.
+       This only builds the static structure with placeholder colours. */
     el = document.createElement("div");
     el.setAttribute("data-resize-id", d.id);
     el.setAttribute("data-progress", "1");
@@ -11753,28 +11655,20 @@ function buildCustomElementNode(d) {
     progressFillEl.style.cssText = "position:absolute;left:0;top:0;bottom:0;width:0;display:block;background:var(--accent);transition:width 1s ease;";
     el.appendChild(progressFillEl);
   } else if (d.kind === "theme") {
-    /* a real, functional light/dark toggle (not a decorative copy): clicking
-       it anywhere it's placed calls the exact same setTheme() the nav's own
-       #themeBtn uses (see js/theme.js's delegated [data-theme-toggle]
-       listener), so every instance and the live nav toggle always agree.
-       Always starts on the auto sun/moon swap (THEME_ICON_DEFAULT_SVG, css
-       [data-theme] rule): a ta's fixed replacement icon isn't baked in here,
-       it's a per-id override applied afterward by applyThemeIconOverrides(),
-       same two-pass "build with defaults, then apply overrides" shape every
-       other kind already follows (colors, text, size, ...) - the nav's own
-       static #themeBtn (templates/index.html) needs that same override pass
-       since it isn't a custom element at all, so one shared mechanism
-       covers both instead of a custom_elements-only field that the real nav
-       button could never use. The label is a normal click-to-edit field
-       (data-edit-id) defaulting to the live theme's own "Light mode"/"Dark
-       mode" text (see refreshThemeToggles() in js/theme.js) rather than a
-       fixed default like "text"/"button" kind gets, up until a ta types
-       custom text over it. The sun/moon pair lives inside its own ".tic-icon"
-       span (d.id + ".icon"), a RESIZABLE_SEL element in its own right, so
-       the icon can be resized/moved/colored independently of the button's
-       own box and the label - see replaceThemeIcon()/applyThemeIconOverrides()
-       for why a picked replacement icon lands inside that same wrapper
-       rather than replacing the button's whole innerHTML. */
+    /* a real, functional light/dark toggle, not a decorative copy: clicking
+       it anywhere calls the same setTheme() the nav's own #themeBtn does, so
+       every instance and the live nav toggle always agree.
+
+       Always starts on the auto sun/moon swap - a ta's fixed replacement is a
+       per-id override applied afterward, the same two-pass shape every other
+       kind follows. That matters because the nav's static #themeBtn isn't a
+       custom element at all and needs the same override pass, so one shared
+       mechanism covers both.
+
+       The label is a normal click-to-edit field defaulting to the live
+       theme's own wording until a ta types over it. The sun/moon pair lives
+       in its own ".tic-icon" span, a tracked element in its own right, so the
+       icon resizes and recolours independently of the button and the label. */
     el = document.createElement("button");
     el.type = "button";
     el.className = "theme-btn";
@@ -11821,34 +11715,28 @@ function buildCustomElementNode(d) {
 }
 
 /**
- * Appends el into tileEl at (x, y), the reel-tile equivalent of
- * placeFreeElement(): same position:absolute + zeroed-margin/max-width
- * setup, wrapped in the same ".free-wrap" span placeFreeElement() uses,
- * just appended into tileEl instead of document.body. Using the exact same
- * wrap convention means detachFromFlow()'s existing "already free" short-
- * circuit (checking el.parentNode for a .free-wrap class) recognizes a
- * bound child immediately, so every later independent move/resize/delete
- * on it (see startResizeDrag()/startMoveDrag()/deleteElement()) needs zero
- * reel-specific code - it works exactly as it would for any other custom
- * element, just anchored to its tile (data-resize-id="1" on the tile, see
- * buildReelElement()) instead of the page.
+ * Appends el into tileEl at (x, y) - the reel-tile equivalent of
+ * placeFreeElement(), same absolute setup and same ".free-wrap" span, just
+ * appended into tileEl instead of document.body.
  * @param tileEl the reel-tile div to append into
  * @param el the built, unplaced element (see buildCustomElementNode())
  * @param x left, tile-relative px
  * @param y top, tile-relative px
  * @return el
+ * @note Using the same wrap convention means detachFromFlow()'s "already
+ * free" short-circuit recognises a bound child immediately, so every later
+ * move, resize and delete on it needs zero reel-specific code - it works as
+ * it would for any other element, just anchored to its tile.
  */
 function placeInTile(tileEl, el, x, y) {
   var wrap = document.createElement("span");
   wrap.className = "free-wrap";
-  /* marks this wrap as holding a BOUND CHILD rather than one of the tile's own
-     template pieces. Both end up in a .free-wrap - detachFromFlow() wraps any
-     tile role that carries a saved size or position - and renderTileChildren()
-     clears the children out before rebuilding them, so without something to
-     tell the two apart it would take the tile's own rect and label with them.
-     Harmless where that function is called right after a fresh innerHTML (the
-     dashboard's two areas, where nothing has been detached yet); the gallery
-     rail's shared children are rebuilt into LIVE tiles, where it isn't. */
+  /* marks this wrap as holding a BOUND CHILD rather than one of the tile's
+     own template pieces. Both end up in a .free-wrap, and
+     renderTileChildren() clears the children before rebuilding, so without
+     something to tell them apart it would take the tile's own rect and label
+     too. Harmless right after a fresh innerHTML; the gallery rail's shared
+     children are rebuilt into LIVE tiles, where it isn't. */
   wrap.dataset.tileChild = "1";
   wrap.style.position = "absolute";
   wrap.style.left = x + "px";
@@ -11864,27 +11752,18 @@ function placeInTile(tileEl, el, x, y) {
 }
 
 /**
- * Builds a reel's whole DOM subtree (see js/learn-reel.js for the runtime
- * drift/hover/loop behavior this markup drives): a resizable/movable/
- * deletable panel (.reel > .reel-mask > .reel-track), and a fixed set of
- * content tiles inside the track. Tiles are individually selectable/
- * stylable (data-resize-id, so the generic color/radius/border/opacity
- * style-popover rows apply to them automatically, see colorTarget()/
- * elKind()) but are marked data-reel-tile="1" so they're excluded from
- * every path that would otherwise detachFromFlow() them out of the flex
- * track (deleteElement(), the arrow-key nudge, and the generic override maps
- * - see isMoveLockedTileRole()/isResizeLockedTileRole()). Dragging and
- * resizing a tile ARE both available, they just run through the reel instead
- * of through those maps: a drag reorders the track (startReelTileDrag()) and
- * a resize sets the one tile size every tile in the reel shares
- * (startReelTileResize()). Whatever a ta has already dropped onto a tile
- * (d.tiles[i].children) is built via buildCustomElementNode() and appended
- * straight into that tile via placeInTile(), so it's a real DOM descendant
- * that travels with its tile once js/learn-reel.js starts scrolling it -
- * not just a page element that happens to visually overlap it.
+ * Builds a reel's whole DOM subtree: a resizable, movable, deletable panel
+ * and a fixed set of content tiles inside its track.
  * @param d {id, orientation, tileW, tileH, gap, pad, tiles: [{id, children}]}
- * @return the unplaced panel element (placeFreeElement()'d by the caller,
- *   buildCustomElement(), exactly like every other kind)
+ * @return the unplaced panel element, placed by the caller like every kind
+ * @note Tiles are individually selectable and stylable, but marked
+ * data-reel-tile so they're excluded from every path that would detach them
+ * out of the flex track. Dragging and resizing are still available - they
+ * just run through the reel: a drag reorders the track, and a resize sets the
+ * one tile size every tile in the reel shares.
+ * @note Whatever a ta has dropped onto a tile is built and appended straight
+ * into that tile, so it's a real DOM descendant that travels with it once the
+ * reel starts scrolling - not a page element that happens to overlap it.
  */
 function buildReelElement(d) {
   var panel = document.createElement("div");
@@ -11923,13 +11802,12 @@ function buildReelElement(d) {
 }
 
 /**
- * How far apart a reel's tiles sit along the axis they're laid out on - the
- * gap between one tile and the next. Horizontal for a horizontal reel,
- * vertical for a vertical one, which is why the style popover labels the same
- * slider differently depending on which way the reel runs (see
- * toggleStyleMenu()).
+ * How far apart a reel's tiles sit along the axis they're laid out on.
  * @param d the reel's custom-element entry
  * @return px
+ * @note Horizontal for a horizontal reel, vertical for a vertical one, which
+ * is why the style popover labels the same slider differently depending on
+ * which way the reel runs.
  */
 function reelGap(d) {
   return d && d.gap !== undefined ? d.gap : REEL_DEFAULT_GAP;
@@ -11948,14 +11826,13 @@ function reelPad(d) {
 
 /**
  * Paints a reel's two spacing figures onto its track: the gap as the flex
- * gap (which is the between-tiles axis either way round, since the track's
- * flex-direction is what decides that), the pad as track padding on the other
- * axis only. Inline, not a stylesheet rule, because every reel carries its
- * own pair - and inline is also what survives js/learn-reel.js cloning the
- * track's tiles for the live loop, since the padding/gap sit on the track
- * itself rather than on anything cloned.
+ * gap (which is the between-tiles axis either way round), the pad as track
+ * padding on the other axis only.
  * @param panel the .reel element
  * @param d its custom-element entry
+ * @note Inline rather than a stylesheet rule, because every reel carries its
+ * own pair - and inline is what survives js/learn-reel.js cloning the tiles,
+ * since padding and gap sit on the track rather than on anything cloned.
  */
 function applyReelSpacing(panel, d) {
   var track = panel.querySelector(".reel-track");
@@ -11967,13 +11844,13 @@ function applyReelSpacing(panel, d) {
 }
 
 /**
- * Sets one of a reel's spacing figures, live and saved. Both go on the reel's
- * own entry rather than into any of the per-id override maps: they describe
- * the strip as a whole, and there's no single element they could be keyed to
- * (the track itself isn't a tracked element).
+ * Sets one of a reel's spacing figures, live and saved.
  * @param panel the .reel element
  * @param key "gap" or "pad"
  * @param px the new value
+ * @note Both live on the reel's own entry rather than a per-id override map:
+ * they describe the strip as a whole, and there's no single element they
+ * could be keyed to, since the track isn't a tracked element.
  */
 function setReelSpacing(panel, key, px) {
   var d = customElementById(elId(panel));
@@ -11984,18 +11861,16 @@ function setReelSpacing(panel, key, px) {
 }
 
 /**
- * Resizes every tile in a reel at once. Per the spec a ta resizes ONE tile
- * and "all other tiles will attempt to mirror it" - the same shared-template
- * rule an attachments/day tile role already follows (see
- * mirrorTiledRoleGeometry()), except a reel's tiles share one stored size on
- * the reel entry instead of a per-id entry in content.sizes, so there's
- * nothing to mirror across ids: painting them all here IS the mirror.
- * Includes js/learn-reel.js's cloned loop copies, which are plain .reel-tile
- * markup with their tracked attributes stripped and would otherwise keep the
- * old size on the live page.
+ * Resizes every tile in a reel at once.
  * @param panel the .reel element
  * @param w new tile width in px
  * @param h new tile height in px
+ * @note Per the spec a ta resizes ONE tile and the rest mirror it - the same
+ * shared-template rule a day tile role follows, except a reel's tiles share
+ * one stored size on the reel entry rather than a per-id entry, so there's
+ * nothing to mirror across ids: painting them all here IS the mirror.
+ * @note Includes the cloned loop copies, plain markup with their tracked
+ * attributes stripped, which would otherwise keep the old size live.
  */
 function applyReelTileSize(panel, w, h) {
   panel.querySelectorAll(".reel-tile").forEach(function (t) {
@@ -12031,13 +11906,13 @@ function reelTileOrder(panel) {
 }
 
 /**
- * Persists the order a reel's tiles are currently in, by reordering the
- * entry's own tiles[] to match. Each tile keeps its id and its bound children
- * (they're the same objects, just moved), so nothing about a tile's contents
- * has to be rewritten - which is the whole reason a reorder is a cheap edit
- * and not a rebuild.
+ * Persists the order a reel's tiles are in, by reordering the entry's own
+ * tiles[] to match.
  * @param panel the .reel element
  * @param ids tile ids in their new order
+ * @note Each tile keeps its id and its bound children - they're the same
+ * objects, just moved - so nothing about a tile's contents is rewritten,
+ * which is why a reorder is a cheap edit and not a rebuild.
  */
 function saveReelOrder(panel, ids) {
   var d = customElementById(elId(panel));
@@ -12071,21 +11946,17 @@ function applyReelOrder(panel, ids) {
 }
 
 /**
- * Recreates every custom element a ta has added via the visual editor's
- * right-click "Add element" menu, on every load, live site included, same
- * as applyTextOverrides(). These don't exist in the template at all, so
- * unlike a text/size/position override there's no page markup to lay an
- * override on top of, the element itself has to be built from scratch
- * first. Called before every apply*Overrides() pass so they can find these
- * elements by id exactly like any template one.
- *
- * CUSTOM_ELEMENTS itself stays the FULL, unscoped list (every save path that
- * reads it back out, eg saveCustomElements(), expects "the whole current
- * list" - see that function's doc comment) - only the actual DOM building
- * below is filtered to this page's own entries (see currentPageKey()), so a
- * page never renders another page's placed elements, but also never drops
- * them from what gets saved back.
+ * Recreates every custom element a ta has added via the right-click "Add
+ * element" menu, on every load, live site included.
  * @param list content.custom_elements
+ * @note These don't exist in the template at all, so unlike a text or size
+ * override there's no markup to lay something on top of - the element has to
+ * be built first. Called before every apply pass, so they find these by id
+ * exactly like a template element.
+ * @note CUSTOM_ELEMENTS stays the FULL, unscoped list, since every save path
+ * expects the whole current list; only the DOM building is filtered to this
+ * page, so a page never renders another's elements but never drops them from
+ * what gets saved back either.
  */
 function renderCustomElements(list) {
   CUSTOM_ELEMENTS = (list || []).slice();
@@ -12094,35 +11965,20 @@ function renderCustomElements(list) {
 }
 
 /**
- * Re-pins any custom element carrying a stored `d.anchor` selector (right
- * now, just the migrated "What You'll Learn" reel - see app/db.py's
- * _LEARN_REEL_ENTRY and the #learnReelAnchor spacer in templates/index.html)
- * to that in-flow anchor's real, current position, instead of trusting the
- * element's stored left/top verbatim.
- *
- * Why this exists: `d.left`/`d.top` for a migrated element is a plain
- * document-pixel offset, hand-measured once against one browser window.
- * Content that used to sit in normal document flow doesn't stay put at a
- * fixed pixel the way template markup does - anything above it that changes
- * height (eg the hero section, sized with vh units, growing taller on a
- * taller browser window) silently drags the real heading/paragraph down
- * without moving the reel's frozen pixel position, so on a tall enough
- * window the two overlap instead of stacking cleanly. The spacer div
- * (`#learnReelAnchor`) still reserves real in-flow space exactly where the
- * reel belongs, so re-reading its live rect on every load (and resize)
- * keeps the reel correctly aligned under any window size, without having to
- * make the whole free-placed custom-element system responsive.
- *
- * Deliberately doesn't touch anything a ta has since dragged the reel to:
- * a manual move is stored as a separate translate offset on top of this
- * base position (see setOwnPos()/commitPosition()), never by overwriting
- * the wrap's left/top, so re-anchoring the base here can never fight or
- * undo a ta's own drag.
- *
- * Must run after every apply*Overrides() call that could change layout
- * height above the anchor (text/size/position/hidden), so the anchor's own
- * rect already reflects whatever a ta has customized - see the call site
- * next to initAllReels() in fetchContent()'s success handler.
+ * Re-pins any custom element carrying a stored `d.anchor` selector to that
+ * in-flow anchor's real, current position, instead of trusting the element's
+ * stored left/top verbatim.
+ * @note d.left/d.top for a migrated element is a document-pixel offset
+ * hand-measured once against one window. Content that used to sit in flow
+ * doesn't stay put at a fixed pixel: anything above it that changes height -
+ * the hero, sized in vh, on a taller window - drags the real heading down
+ * without moving the frozen pixel, so the two overlap. The spacer still
+ * reserves real in-flow space, so re-reading its live rect keeps the element
+ * aligned at any window size without making the whole system responsive.
+ * @note Never touches a ta's own drag: a manual move is a separate translate
+ * on top of this base position, so re-anchoring can't fight it.
+ * @note Must run after every apply pass that could change layout height above
+ * the anchor, so its rect already reflects whatever a ta customized.
  */
 function applyElementAnchors() {
   /* every position below is a document coordinate read off a live spacer, so
@@ -12142,23 +11998,17 @@ function applyElementAnchors() {
     wrap.style.left = (r.left + window.scrollX) + "px";
     wrap.style.top = (r.top + window.scrollY) + "px";
     /* a live area's WIDTH is anchor-driven too, not just its position. Its
-       seeded d.w is a hand-measured 1160 (see app/db.py's
-       _DASH_DAYS_AREA_ENTRY), but the spacer it anchors to is a real in-flow
-       child of the section's own .wrap, whose content width is whatever the
-       shared page column actually resolves to at this window size (1076 at a
-       1440px viewport). Pinning the tiles to the stale figure hung the whole
-       grid ~84px past the column its own heading lines up with, so the last
-       day tile overflowed the section. Only when a ta hasn't dragged a width
-       of their own - applySizeOverrides() records that as ovW, and an
-       explicit choice always wins over the column default.
+       seeded d.w is a hand-measured 1160, but the spacer it anchors to is a
+       real in-flow child of the section's .wrap, whose content width is
+       whatever the shared page column resolves to (1076 at 1440px). Pinning
+       to the stale figure hung the grid ~84px past the column its own heading
+       lines up with. Only when a ta hasn't dragged a width of their own -
+       recorded as ovW, and an explicit choice always wins.
 
-       The dashboard's progress bar is anchored the same way and was seeded
-       with the same stale 1160 (_DASH_PROGRESS_ENTRY), so it overhung the
-       column by the same ~84px - its right edge visibly past every heading
-       and tile on the page, and past the window entirely on a narrower one.
-       Same fix, for the same reason: a bar pinned to a full-width in-flow
-       spacer is meant to span that column, whatever the column measures
-       today, and a ta dragging their own width still wins. */
+       The progress bar is anchored the same way and was seeded with the same
+       stale 1160, so it overhung by the same ~84px, past the window entirely
+       on a narrower one. Same fix: a bar pinned to a full-width spacer is
+       meant to span that column, whatever it measures today. */
     /* a login field/button spans its auth card for exactly the same reason a
        live area spans its section: the card's width is whatever the shared
        column resolves to today, not the hand-measured seed in app/db.py */
@@ -12170,14 +12020,11 @@ function applyElementAnchors() {
         el.dataset.ovW === undefined) {
       var colW = anchor.getBoundingClientRect().width;
       el.style.width = colW + "px";
-      /* and this IS the element's natural size now, not just what it happens
-         to be painted at: natW is what getSize() falls back to when a resize
-         drag starts (and what resetBox() restores to on a double-click), so
-         leaving the seeded d.w in there meant the first mousemove of a drag
-         snapped the element straight to that stale figure - roughly 84px past
-         the page column at a 1440px viewport, its right edge hanging off the
-         section. natH follows so getSize() sees a complete pair (a live area
-         is never seeded with one, see buildCustomElement()). */
+      /* and this IS the element's natural size now, not just what it's
+         painted at: natW is what getSize() falls back to when a resize starts
+         and what a double-click resets to, so leaving the seeded d.w meant
+         the first mousemove snapped the element to that stale figure. natH
+         follows so getSize() sees a complete pair. */
       el.dataset.natW = colW;
       if (el.dataset.natH === undefined) el.dataset.natH = el.getBoundingClientRect().height;
       /* a login field's input rectangle rides along. It's a plain block child,
@@ -12197,28 +12044,39 @@ function applyElementAnchors() {
   });
 }
 
-/* re-runs applyElementAnchors() whenever the browser window is resized
-   (debounced), since a vh-sized section above an anchored element changes
-   height live as the window resizes, not just between page loads. One
-   listener for the page's whole lifetime is enough - applyElementAnchors()
-   itself is a safe no-op before the first real content load (CUSTOM_ELEMENTS
-   starts empty). */
+/* re-runs applyElementAnchors() whenever the browser window is resized, since
+   a vh-sized section above an anchored element changes height live as the
+   window resizes, not just between page loads. One listener for the page's
+   whole lifetime is enough - applyElementAnchors() itself is a safe no-op
+   before the first real content load (CUSTOM_ELEMENTS starts empty).
+
+   Once per animation frame, NOT on a trailing timer: an anchored element is
+   absolutely positioned at a document coordinate, so until the pass re-reads
+   its spacer it stays where the OLD width put it - visibly adrift from the
+   card it belongs to. On a 150ms trailing debounce every zoom step reset the
+   timer, so the login fields flew loose of their card for as long as the ta
+   kept zooming and only snapped back once they stopped. A frame-throttled
+   pass tracks the layout instead, and there are only a handful of anchored
+   elements on a page to re-read. The trailing pass stays as well: heights
+   that resolve a frame or two later (font swaps, rewrapped text) move the
+   spacers again after the last resize event. */
 (function () {
-  var timer = null;
+  var timer = null, frame = null;
   window.addEventListener("resize", function () {
+    if (frame === null) frame = requestAnimationFrame(function () {
+      frame = null;
+      applyElementAnchors();
+    });
     if (timer) clearTimeout(timer);
     timer = setTimeout(applyElementAnchors, 150);
   });
-  /* the first pass runs the instant the content lands, which is well before
-     the page above has finished settling: the landing page's own photos and
-     videos are still unsized, and the webfonts haven't swapped in. Anything
-     anchored below all that gets measured against a layout that isn't final
-     and then stays there, since nothing re-measured until the window was
-     resized - which is how the "What You'll Learn" reel ended up sitting 64px
-     below its own heading's reserved slot, overhanging the video row under
-     it. Both of these are cheap and idempotent (applyElementAnchors() just
-     re-reads each anchor's live rect), so they simply run again once the
-     layout is real. */
+  /* the first pass runs the instant the content lands, well before the page
+     above has settled: photos and videos are still unsized and the webfonts
+     haven't swapped in. Anything anchored below that gets measured against a
+     layout that isn't final and stays there, since nothing re-measured until
+     a resize - which is how the reel ended up 64px below its own heading.
+     Both are cheap and idempotent, so they simply run again once the layout
+     is real. */
   window.addEventListener("load", applyElementAnchors);
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(applyElementAnchors);
 })();
@@ -13151,13 +13009,12 @@ function saveCustomElements(list) {
 }
 
 /**
- * Persists the whole extras list into the shared snapshot, same merge-one-
- * field-in shape as saveCustomElements() just above - needed so a bound
- * child added onto an attachments tile (see addBoundElement()) survives
- * Apply/reload, since content.extras otherwise isn't a field this file ever
- * writes to (it's js/dashboard.js's/js/ta.js's own domain the rest of the
- * time).
+ * Persists the whole extras list into the shared snapshot, the same
+ * merge-one-field-in shape as saveCustomElements().
  * @param list js/dashboard.js's EXTRAS array
+ * @note Needed so a bound child added onto an attachments tile survives
+ * Apply/reload, since content.extras otherwise isn't a field this file ever
+ * writes to.
  */
 function saveExtras(list) {
   var raw;
@@ -13183,13 +13040,12 @@ function saveDays(list) {
 }
 
 /**
- * Persists the whole gallery block into the shared snapshot, the gallery
- * page's equivalent of saveExtras()/saveDays() - needed so a directory rail a
- * ta has reordered from the visual editor (see startFlowTileDrag()) survives
- * Apply/reload. Called from js/gallery.js, which owns the block; written
- * wholesale rather than key-by-key because the caller always hands over the
- * complete object it is itself rendering from.
+ * Persists the whole gallery block into the shared snapshot - the gallery
+ * page's equivalent of saveExtras(), so a rail a ta reordered from the editor
+ * survives Apply/reload.
  * @param gallery content.gallery, {years, images, video, ...}
+ * @note Written wholesale rather than key-by-key, because the caller always
+ * hands over the complete object it is itself rendering from.
  */
 function saveGallery(gallery) {
   var raw;
@@ -13202,59 +13058,45 @@ function saveGallery(gallery) {
 window.saveGallery = saveGallery;
 
 /**
- * Looks up any element by its id, the page's own included (see idSel()),
- * same query every override in this file uses to find its target. First match
- * only: an id shared by mirrored elements (eg nav.brand in the nav and
- * footer) resolves to whichever one happens to come first in the DOM,
- * which is fine here since mirrored elements are always kept identical by
- * design (see mirrorEditedField()).
+ * Looks up any element by its id, the page's own included - the same query
+ * every override in this file uses to find its target.
  * @param id the element's id
  * @return the element, or null if none match
+ * @note First match only: an id shared by mirrored elements resolves to
+ * whichever comes first in the DOM, which is fine here since mirrored
+ * elements are always kept identical by design.
  */
 function elByAnyId(id) {
   return document.querySelector(idSel(id));
 }
 
 /**
- * A fresh suffix to append to every id in a duplicated subtree (see
- * buildDuplicateClone()), same timestamp+random uid scheme
- * addCustomElement() already uses for the same "guaranteed collision-free,
- * no lookup needed" reason: checking just the root id against the live dom
- * isn't enough here, since one duplicate operation renames a whole subtree
- * of ids at once, and two unrelated duplicates (say, this element's icon
- * duplicated on its own earlier, then the element's whole parent
- * duplicated later) could otherwise land on the same nested id if they
- * both happened to pick the same small counter value. The "~" is
- * deliberately not a character any hand-written id in this codebase uses
- * (ids are dot-separated words), so a duplicate's id can never collide
- * with a genuine template/custom-element id no matter how it's suffixed.
+ * A fresh suffix to append to every id in a duplicated subtree.
  * @return a fresh suffix, "~dupk3j2x1a4b" or similar
+ * @note Checking just the root id against the live dom isn't enough: one
+ * duplicate renames a whole subtree at once, and two unrelated duplicates
+ * could otherwise land on the same nested id if both picked the same small
+ * counter. The "~" is deliberately not a character any hand-written id uses,
+ * so a duplicate's id can never collide with a genuine one.
  */
 function uniqueDupSuffix() {
   return "~dup" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 }
 
 /**
- * Clones sourceEl (or, if it's already been individually moved/resized/
- * deleted at some point, its whole .free-wrap, see detachFromFlow()) and
- * gives the clone and every tracked descendant inside it a fresh id: the
- * same suffix appended to every original id found in the subtree, so
- * nested ids stay unique relative to each other exactly as they were
- * (two elements that used to mirror each other, eg the brand text sitting
- * inside a duplicated nav, would still mirror each other within the
- * clone, just not with the original anymore). Any DOM id="..." attribute
- * (a handful of nav elements like #portalLink are addressed that way
- * elsewhere in this file) is stripped from the clone so it can never
- * collide with the original's, since the clone doesn't inherit that
- * element's singleton role. Pure: doesn't touch the DOM, storage, or undo,
- * see insertDuplicateClone()/copyDuplicateOverrides() for the parts that do.
+ * Clones sourceEl (or its whole .free-wrap, if it's been individually moved
+ * or resized) and gives the clone and every tracked descendant a fresh id.
  * @param sourceEl the element (or one of its mirrored instances) to clone
  * @param suffix see uniqueDupSuffix()
- * @return {clone, wrap, pairs, rootEl}: clone is the node to insert into
- *   the dom (either sourceEl's clone or its wrap's clone), wrap is the
- *   original's .free-wrap parent if it has one (else null), pairs is
- *   every {old, new, el} id remap found (el is the clone's own node), and
- *   rootEl is the pairs entry (a live node) corresponding to sourceEl itself
+ * @return {clone, wrap, pairs, rootEl}: clone is the node to insert, wrap the
+ *   original's .free-wrap parent if it has one, pairs every {old, new, el} id
+ *   remap, and rootEl the pairs entry corresponding to sourceEl itself
+ * @note One suffix for every id in the subtree, so nested ids stay unique
+ * relative to each other exactly as they were - two elements that mirrored
+ * each other still do within the clone, just not with the original.
+ * @note Any DOM id="..." attribute is stripped, since the clone doesn't
+ * inherit that element's singleton role.
+ * @note Pure: doesn't touch the DOM, storage or undo.
  */
 function buildDuplicateClone(sourceEl, suffix) {
   var sourceId = elId(sourceEl);
@@ -13273,14 +13115,13 @@ function buildDuplicateClone(sourceEl, suffix) {
 }
 
 /**
- * Renames root and every tracked element inside it (data-edit-id/
- * data-resize-id) by appending one shared suffix, the id-remap half of
- * buildDuplicateClone() - split out because the editor clipboard has to do the
- * same remap to a subtree it parsed out of stored markup rather than cloned
- * off a live node (see pasteClipAsElement()). Mutates root in place.
+ * Renames root and every tracked element inside it by appending one shared
+ * suffix - the id-remap half of buildDuplicateClone(). Mutates root in place.
  * @param root the subtree's root node (itself remapped if it's tracked)
  * @param suffix see uniqueDupSuffix()
  * @return every {old, new, el} remap made, in document order
+ * @note Split out because the clipboard has to do the same remap to a subtree
+ * parsed out of stored markup rather than cloned off a live node.
  */
 function remapTrackedIds(root, suffix) {
   var tracked = [];
@@ -13298,17 +13139,13 @@ function remapTrackedIds(root, suffix) {
 }
 
 /**
- * Inserts a built duplicate (see buildDuplicateClone()) into the dom: a
- * still-in-flow source (never individually moved/resized) gets its clone
- * dropped in right after it as a plain sibling, so it slots naturally into
- * whatever flex/grid layout the two now share (a duplicated card in a row
- * of cards, say), no coordinate math needed. A source that's been detached
- * from flow gets its whole wrap cloned in beside the original wrap
- * instead, then nudged +24px/+24px from the original so the copy doesn't
- * render exactly on top of it (an in-flow insert never needs this, flow
- * layout already separates the two).
+ * Inserts a built duplicate into the dom.
  * @param sourceEl the element that was duplicated
  * @param built the object buildDuplicateClone() returned
+ * @note A still-in-flow source gets its clone dropped in as a plain sibling,
+ * so it slots naturally into whatever layout the two now share - no
+ * coordinate maths. A detached source gets its whole wrap cloned beside the
+ * original and nudged +24px so the copy doesn't land exactly on top of it.
  */
 function insertDuplicateClone(sourceEl, built) {
   if (built.wrap) {
@@ -13323,24 +13160,19 @@ function insertDuplicateClone(sourceEl, built) {
 }
 
 /**
- * One-time copy of every existing per-id override (size, position, font
- * size, text style, color, opacity, click-to-edit text) from a
- * duplicate's old ids to its new ones, so the copy starts out looking
- * identical to the original instead of snapping back to the template
- * default. Only ever called right when a duplicate is created
- * (duplicateElement()), never on a later reload (renderDuplicates()):
- * every one of these maps is already keyed by the new ids permanently
- * after this runs once, so redoing it on every load would blow away any
- * independent edit made to the duplicate afterward. text_styles gets a
- * shallow copy of its per-id object rather than sharing the same
- * reference, since saveTextStyle()/saveFontFamily() mutate that object
- * in place, sharing it would leak a later font/align change on either
- * copy onto the other.
+ * One-time copy of every per-id override from a duplicate's old ids to its
+ * new ones, so the copy starts out identical instead of snapping back to the
+ * template default.
  * @param pairs the {old, new} id pairs from buildDuplicateClone()
- * @param skipMaps optional list of map names NOT to carry over - the clipboard
- *   paste passes ["positions"], since a translate offset that meant something
- *   relative to the source's own place in its page would only drag the pasted
- *   copy away from where it was actually dropped (see pasteClipAsElement())
+ * @param skipMaps optional map names NOT to carry over - the clipboard passes
+ *   ["positions"], since an offset that meant something relative to the
+ *   source's place would only drag the pasted copy away from where it landed
+ * @note Only ever called when a duplicate is created, never on a later
+ * reload: every map is permanently keyed by the new ids afterwards, so
+ * redoing it would blow away any independent edit made to the duplicate.
+ * @note text_styles gets a shallow copy rather than a shared reference, since
+ * the savers mutate that object in place - sharing it would leak a later font
+ * change on either copy onto the other.
  */
 function copyDuplicateOverrides(pairs, skipMaps) {
   var raw;
@@ -13372,14 +13204,13 @@ function copyDuplicateOverrides(pairs, skipMaps) {
 }
 
 /**
- * Registers a duplicate so it survives a reload: content.duplicates is a
- * flat list of {sourceId, suffix}, just enough for renderDuplicates() to
- * redo the exact same clone+remap on every future load (the actual style/
- * text overrides for its ids are already sitting in the normal maps by
- * then, see copyDuplicateOverrides(), this only has to recreate the DOM
- * structure itself).
+ * Registers a duplicate so it survives a reload: content.duplicates is a flat
+ * list of {sourceId, suffix}, just enough to redo the same clone and remap on
+ * every future load.
  * @param sourceId the id that was duplicated
  * @param suffix see uniqueDupSuffix()
+ * @note The style and text overrides for its ids are already in the normal
+ * maps by then, so this only has to recreate the DOM structure.
  */
 function saveDuplicateEntry(sourceId, suffix) {
   var raw;
@@ -13392,24 +13223,18 @@ function saveDuplicateEntry(sourceId, suffix) {
 }
 
 /**
- * Duplicates one element from the visual editor's right-click menu
- * (Duplicate): clones it (or its whole free-wrap, if it's been moved/
- * resized/deleted before) with a fresh id on itself and every tracked
- * element nested inside it, drops the copy into the dom right next to the
- * original (or nudged +24px/+24px if the original was out of flow),
- * copies over any existing style/text overrides so it starts out looking
- * identical, registers it in content.duplicates so it survives a reload,
- * and wires up click-to-edit on every text field inside the copy (dom
- * clones don't carry over js event listeners, only markup). Undo/redo
- * reuses the plain "add" entry shape: undoing just hides the new element
- * again (setElementHidden(), same as any delete), redoing unhides it,
- * neither side ever needs to rebuild or discard content.duplicates' own
- * entry, which is exactly how a right-click "Add element" already works.
- * @param sourceEl the specific element node that was right-clicked (see
- *   CTX_TARGET_EL, not just its id, which a mirrored element can share
- *   with another node)
- * @return the new copy's own live node (see buildDuplicateClone()'s
- *   rootEl), so a caller like the Ctrl+C/Ctrl+V handler can select it
+ * Duplicates one element from the right-click menu: clones it with a fresh id
+ * on itself and every tracked element inside, drops the copy next to the
+ * original, copies over existing overrides so it starts out identical,
+ * registers it so it survives a reload, and wires up click-to-edit on every
+ * text field in the copy (dom clones don't carry js listeners).
+ * @param sourceEl the specific element node that was right-clicked - not just
+ *   its id, which a mirrored element can share with another node
+ * @return the new copy's own live node, so a caller like the Ctrl+V handler
+ *   can select it
+ * @note Undo/redo reuses the plain "add" entry shape: undoing hides the new
+ * element, redoing unhides it, and neither side ever has to rebuild or
+ * discard the content.duplicates entry.
  */
 function duplicateElement(sourceEl) {
   var sourceId = elId(sourceEl);
@@ -13450,25 +13275,20 @@ function duplicateElement(sourceEl) {
 /* ---------------------------------------------------------------------------
    THE EDITOR CLIPBOARD
 
-   Ctrl+C used to hold the copied element in a plain variable, which meant the
-   copy died the moment the editor's iframe navigated to another page - so
-   "copy this from the landing page onto the dashboard", the one thing a
-   clipboard is actually for, was the one thing it couldn't do.
+   Ctrl+C used to hold the copied element in a plain variable, so the copy died
+   the moment the iframe navigated to another page - which made "copy this from
+   the landing page onto the dashboard", the one thing a clipboard is for, the
+   one thing it couldn't do.
 
-   It's a localStorage entry now, so it outlives the page it was taken from.
-   Not the real system clipboard: that needs a permission prompt for reads, and
-   would also mean anything else the ta copied while working (a url, some text)
-   would silently overwrite their element. This is the editor's own clipboard,
-   holding exactly one element, only ever written by Ctrl+C in here.
+   It's a localStorage entry now, so it outlives the page it came from. Not the
+   real system clipboard: that needs a permission prompt to read, and anything
+   else the ta copied while working would silently overwrite their element.
 
-   What's stored is the element's markup, not a reference to it, and a paste
-   rebuilds that markup as a free-placed custom element wherever it lands - on
-   the page it was copied from just as much as on any other (see
-   pasteEditorClip(), which places it overlapping whatever it was pasted off).
-   Free-placed is also what makes a paste survive a reload: a duplicate is
-   re-cloned from its source id on every load and would have nothing to clone on
-   a page the source doesn't exist on, whereas a custom element carries
-   everything it needs to rebuild itself.
+   What's stored is the markup, not a reference, and a paste rebuilds it as a
+   free-placed custom element wherever it lands. Free-placed is also what makes
+   a paste survive a reload: a duplicate is re-cloned from its source id and
+   would have nothing to clone on a page the source doesn't exist on, whereas a
+   custom element carries everything it needs to rebuild itself.
    --------------------------------------------------------------------------- */
 
 /* one element, shared by every page of the editor. Deliberately its own key
@@ -13495,20 +13315,17 @@ var LAST_PASTE_ID = null;
 
 /**
  * Strips the bits of a copied subtree that only meant something where it came
- * from, so the markup can be dropped onto any page:
- * - dom id="..." (a singleton role like #portalLink the copy doesn't inherit),
- *   same reason buildDuplicateClone() strips them
- * - the editor-only outline classes, which are recomputed per page anyway
- * - contenteditable, in case the source was mid-edit when it was copied
- * - data-nav-state/data-dash-view, which mark an element as belonging to one
- *   state of a two-state page (see applyNavState()/applyDashView()) - on any
- *   other page nothing ever flips that state back on, so a copy carrying one
- *   in could arrive hidden
- * - the ROOT's own data-ov-tx/ovTy (its record of having been dragged): the
- *   paste is placed wherever it's dropped, not wherever the source was pushed
- *   to. Kept on everything below the root, where an offset is a real part of
- *   how the thing is arranged internally.
+ * from, so the markup can be dropped onto any page.
  * @param root the cloned subtree to clean, mutated in place
+ * @note Removed: dom id="..." (a singleton role the copy doesn't inherit);
+ * the editor-only outline classes, recomputed per page anyway;
+ * contenteditable, in case the source was mid-edit; and
+ * data-nav-state/data-dash-view, which mark an element as belonging to one
+ * state of a two-state page - on any other page nothing flips that state back
+ * on, so a copy carrying one in could arrive hidden.
+ * @note Also the ROOT's own drag offset, since a paste is placed where it's
+ * dropped. Kept on everything below the root, where an offset is a real part
+ * of how the thing is arranged internally.
  */
 function stripClipAttrs(root) {
   var all = [root].concat(Array.prototype.slice.call(root.querySelectorAll("*")));
@@ -13525,15 +13342,15 @@ function stripClipAttrs(root) {
 }
 
 /**
- * Ctrl+C: puts one element on the editor's clipboard. Stores its markup frozen
- * at the size it's currently rendered at, so a paste looks like what was
- * copied even when the source was an in-flow element whose width came from the
- * column it sat in - the pasted copy is free-placed and has no such column.
- * Measured off offsetWidth/Height where they're available, not the bounding
- * rect, which for a rotated element reports the box its corners sweep out
- * rather than the box itself.
+ * Ctrl+C: puts one element on the editor's clipboard, its markup frozen at
+ * the size it's currently rendered at - so a paste looks like what was copied
+ * even when the source was in-flow and got its width from the column it sat
+ * in, which the free-placed copy has no equivalent of.
  * @param sourceEl the element to copy (RING_EL)
  * @return true if it was stored
+ * @note Measured off offsetWidth/Height where available rather than the
+ * bounding rect, which for a rotated element reports the box its corners
+ * sweep out rather than the box itself.
  */
 function copyElementToClipboard(sourceEl) {
   var sourceId = elId(sourceEl);
@@ -13565,14 +13382,14 @@ function readEditorClip() {
 }
 
 /**
- * What a paste should be measured from: the previous paste of the same clip if
- * it's still on this page (so a run of Ctrl+V walks down the diagonal rather
- * than piling every copy on one spot), otherwise the element that was copied,
- * if the ta is still on the page it came from. Null on any other page, where
- * there's nothing on screen for the copy to sit near and the drop falls back to
- * the pointer.
+ * What a paste should be measured from: the previous paste of the same clip
+ * if it's still on this page, so a run of Ctrl+V walks down the diagonal
+ * rather than piling every copy on one spot - otherwise the element that was
+ * copied, if the ta is still on the page it came from.
  * @param clip see readEditorClip()
  * @return the element to place the next paste relative to, or null
+ * @note Null on any other page, where there's nothing on screen for the copy
+ * to sit near and the drop falls back to the pointer.
  */
 function pasteAnchorEl(clip) {
   var prev = LAST_PASTE_ID && elByAnyId(LAST_PASTE_ID);
@@ -13583,29 +13400,23 @@ function pasteAnchorEl(clip) {
 
 /**
  * Ctrl+V: pastes whatever's on the editor clipboard, landing PASTE_OFFSET px
- * down-and-right of whatever it was pasted off (see pasteAnchorEl()) so the
- * copy overlaps the original with one corner clear of it - the "there are two
- * of these now" read every other design tool gives you.
- *
- * That drop point is the whole reason this no longer routes a same-page paste
- * through duplicateElement(). A duplicate is inserted into the source's own
- * FLOW position, which is right for the right-click Duplicate button (a second
- * card slots into the row of cards its original sits in) but is the one thing a
- * paste must not do: flow decides where the copy goes, so it lands a full
- * element away - a duplicated hero image appeared 342px down the page - and it
- * reflows everything below it on the way. A paste is rebuilt as a free-placed
- * element instead, exactly as a paste onto any OTHER page already was, so it
- * takes the coordinates it's given and costs the page no layout at all.
- *
- * The exception is an element living in the fixed navbar, which stays on
- * duplicateElement(): the bar doesn't scroll with the document, so a copy
- * pinned to document coordinates would slide out from under it on the first
- * scroll. A clone dropped into the bar's own flex row is beside its original
- * and stays there.
+ * down-and-right of whatever it was pasted off, so the copy overlaps the
+ * original with one corner clear - the "there are two of these now" read
+ * every other design tool gives you.
  * @param x fallback drop point (the pointer), document px, used only when
  *   there's no anchor on this page
  * @param y fallback drop point, document px
  * @return the pasted element, or null if the clipboard was empty
+ * @note That drop point is why a same-page paste no longer routes through
+ * duplicateElement(). A duplicate is inserted into the source's own FLOW
+ * position, right for the Duplicate button but the one thing a paste must not
+ * do: flow decides where the copy goes, so it lands a full element away - a
+ * duplicated hero image appeared 342px down the page - and reflows everything
+ * below on the way. A paste is rebuilt free-placed instead, so it takes the
+ * coordinates it's given and costs the page no layout at all.
+ * @note The exception is an element in the fixed navbar, which stays on
+ * duplicateElement(): the bar doesn't scroll with the document, so a copy
+ * pinned to document coordinates would slide out from under it.
  */
 function pasteEditorClip(x, y) {
   var clip = readEditorClip();
@@ -13627,12 +13438,10 @@ function pasteEditorClip(x, y) {
 }
 
 /**
- * Rebuilds a stored clipboard entry as a brand new free-placed element: parses
- * the markup, gives it and everything tracked inside it fresh ids (so it can
- * be styled, moved and deleted with no tie back to whatever it was copied
- * from), carries the source's style/text overrides across onto those new ids,
- * and registers the whole thing in content.custom_elements as a "clip" so it
- * rebuilds itself on every future load, live site included.
+ * Rebuilds a stored clipboard entry as a brand new free-placed element:
+ * parses the markup, gives it and everything tracked inside fresh ids, copies
+ * the source's overrides onto those ids, and registers the whole thing in
+ * content.custom_elements as a "clip" so it rebuilds on every future load.
  * @param clip see readEditorClip()
  * @param x drop point, document px
  * @param y drop point, document px
@@ -13681,24 +13490,18 @@ function pasteClipAsElement(clip, x, y) {
 }
 
 /**
- * Recreates every duplicate a ta has made via the visual editor's
- * right-click "Duplicate" option, on every load, live site included, same
- * as renderCustomElements(). Unlike a custom element (built from scratch
- * off a structured recipe), a duplicate is reconstructed by re-cloning
- * whatever its source id currently renders as, so it always matches the
- * source's own template markup/structure even if that source was a
- * template element this codebase's markup later changed. Runs in
- * repeated passes (capped) so a duplicate-of-a-duplicate (chained
- * suffixes) renders correctly regardless of array order: each pass
- * renders whatever entries have a currently-findable source and skips the
- * rest, stopping once a full pass makes no progress. Called before every
- * apply*Overrides() pass (same spot renderCustomElements() runs), so those
- * can find a duplicate's ids exactly like any template one; specifically
- * before applyHiddenOverrides(), so a duplicate created from a
- * since-deleted source still gets cloned from what the source looked like
- * before it was hidden, not skipped because the live source node is
- * momentarily still mid-reload.
+ * Recreates every duplicate a ta has made via the right-click "Duplicate"
+ * option, on every load, live site included.
  * @param list content.duplicates
+ * @note Unlike a custom element, built from a structured recipe, a duplicate
+ * is reconstructed by re-cloning whatever its source id currently renders as,
+ * so it always matches the source's own markup even if that markup changed.
+ * @note Runs in repeated capped passes so a duplicate-of-a-duplicate renders
+ * correctly regardless of array order: each pass renders whatever has a
+ * findable source, stopping once a full pass makes no progress.
+ * @note Called before applyHiddenOverrides() specifically, so a duplicate of
+ * a since-deleted source is still cloned from what it looked like before it
+ * was hidden.
  */
 function renderDuplicates(list) {
   var remaining = (list || []).slice();
@@ -13725,16 +13528,13 @@ function renderDuplicates(list) {
 }
 
 /**
- * Uploads one file for the "Add element" menu (Image, Video, or an
- * uploaded Icon), the same ta-only /api/upload endpoint every other upload
- * on the site already posts to (attachments, gallery, hero video, home
- * images). Reads the session token straight out of localStorage rather
- * than going through js/ta.js's authedFetch()/authHeaders(), since this
- * file runs on pages that never load ta.js; same-origin, so the token's
- * already there whether this runs in the ta's real portal tab or the
- * preview iframe it shares localStorage with.
+ * Uploads one file for the "Add element" menu, to the same ta-only
+ * /api/upload endpoint every other upload on the site posts to.
  * @param file the File object from the picker
  * @return a promise resolving to the uploaded file's url
+ * @note Reads the token straight out of localStorage rather than going
+ * through js/ta.js, which never loads on this file's pages; same-origin, so
+ * the token is there whether this runs in the portal tab or its iframe.
  */
 function uploadEditorFile(file) {
   var fd = new FormData();
@@ -13750,12 +13550,12 @@ function uploadEditorFile(file) {
 }
 
 /**
- * Looks up a placed custom element's own data entry (eg a datetime
- * element's target/format) by id, for the right-click "Edit date/time"
- * flow. Unlike elByAnyId() (finds the live DOM node), this finds the plain
- * data object CUSTOM_ELEMENTS holds for it.
+ * Looks up a placed custom element's own data entry by id, for the right-click
+ * "Edit date/time" flow.
  * @param id the element's id
  * @return the CUSTOM_ELEMENTS entry, or null if none match
+ * @note Unlike elByAnyId(), which finds the live DOM node, this finds the
+ * plain data object held for it.
  */
 function customElementById(id) {
   for (var i = 0; i < CUSTOM_ELEMENTS.length; i++) {
@@ -13787,21 +13587,18 @@ var BOUND_TILE_SELECTORS = ['[data-reel-tile="1"]', '[data-extras-tile="1"]', '[
   '[data-gallery-tile="1"]'];
 
 /**
- * Finds the tile (reel, attachments, or day - see BOUND_TILE_SELECTORS)
- * that a new element being placed at document (x, y) should bind into
- * instead of landing as an independent page element (see
- * addCustomElement()/addBoundElement()): the drop point itself, OR - for
- * kinds with a known fixed placed size (box/image/video, see
- * REEL_DEFAULT_HIT_SIZE) - the element's own about-to-be-placed hitbox,
- * either one touching a tracked tile's box. Cursor alone is the fallback
- * for every other kind, since text/button/icon/datetime/theme all size
- * themselves from their own content/default rather than a fixed box, so
- * there's nothing to hit-test until after they're already built.
+ * Finds the tile a new element being placed at document (x, y) should bind
+ * into, instead of landing as an independent page element.
  * @param x drop point left, document px
  * @param y drop point top, document px
  * @param kind the element kind being added
- * @return the hit tile element, or null if neither the cursor nor the
- *   hitbox touches any tracked tile
+ * @return the hit tile element, or null if neither the cursor nor the hitbox
+ *   touches any tracked tile
+ * @note Tested against the drop point itself, or - for kinds with a known
+ * fixed placed size - the element's about-to-be-placed hitbox. Cursor alone
+ * is the fallback for every other kind, since text, buttons and icons size
+ * themselves from their own content, so there's nothing to hit-test until
+ * after they're built.
  */
 function findBoundTileHit(x, y, kind) {
   var size = REEL_DEFAULT_HIT_SIZE[kind];
@@ -13822,12 +13619,10 @@ function findBoundTileHit(x, y, kind) {
 }
 
 /**
- * Finishes wiring a freshly built custom element identically regardless of
- * whether it landed as a top-level page element (addCustomElement()) or
- * bound into a reel tile (addBoundElement()): text/button fields get
- * click-to-edit wiring, a theme toggle gets its nested label wired and
- * synced to the live theme, and a button's initial link (if any) is applied
- * as a real href.
+ * Finishes wiring a freshly built element identically whether it landed as a
+ * top-level page element or bound into a tile: text fields get click-to-edit,
+ * a theme toggle gets its nested label wired and synced to the live theme,
+ * and a button's initial link is applied as a real href.
  * @param el the built, placed element
  * @param d its descriptor (already has final left/top/w/h)
  * @param kind the element kind
@@ -13855,16 +13650,13 @@ function finishAddedElement(el, d, kind, extra) {
      placed inside a tile, see repaintExtrasTypeIcons() */
   if (kind === "extrasIcon") repaintExtrasTypeIcons();
   if (kind === "reel" && window.initReel) {
-    /* every other kind is fully live the instant it's built, but a reel's
-       drift/hover/loop only starts once js/learn-reel.js clones and wires
-       it (initAllReels(), normally run once at page load right after
-       renderCustomElements()) - a freshly placed one needs that same call
-       made on it directly, or it'd just sit as a static, unclipped row of
-       tiles until the next reload. Runs AFTER freezeFreeElement() above has
-       already frozen the panel at its pre-clone (4-tile) natural size, so
-       the clones added here correctly overflow into that already-frozen
-       box instead of growing it, exactly like the migrated reel's own
-       explicit w/h does (see _learn_reel_overlay() in app/db.py). */
+    /* every other kind is live the instant it's built, but a reel's
+       drift/hover/loop only starts once js/learn-reel.js clones and wires it,
+       normally once at page load - a freshly placed one needs that call made
+       directly or it just sits as a static row of tiles until the next
+       reload. Runs AFTER freezeFreeElement() has frozen the panel at its
+       pre-clone size, so the clones overflow into that box instead of
+       growing it. */
     window.initReel(el);
   }
   if (kind === "progress") {
@@ -13886,6 +13678,10 @@ function finishAddedElement(el, d, kind, extra) {
        which is js/login.js's job (this page's own script, same window.-hook
        convention window.renderExtras uses on the dashboard) */
     if (window.refreshLoginPage) window.refreshLoginPage();
+    /* a failure line placed while the State switch is on "Timed out" has to
+       land showing the timed-out wording, or the one thing the ta is looking
+       at the page FOR comes up as the other string */
+    applyLoginView(LOGIN_VIEW);
   }
   if (kind === "galleryPane") {
     /* a brand new stage is empty markup until js/gallery.js paints the
@@ -13916,27 +13712,23 @@ function finishAddedElement(el, d, kind, extra) {
 }
 
 /**
- * Adds one new element via the visual editor's right-click "Add element"
- * menu (see wireAddElementMenu()): built through buildCustomElement(), the
- * exact same construction that recreates it on every future load, then
- * measured/frozen at its just-rendered size and pushed onto
- * content.custom_elements so it round-trips through Apply/profiles like
- * everything else the editor creates. Always lands on the very top of the
- * stacking order (see moveLayer()), matching what a ta would expect from
- * something they just placed. If (x, y) (or, for box/image/video, the new
- * element's own hitbox) lands on a reel tile, delegates to
- * addBoundElement() instead - see findReelTileHit().
+ * Adds one new element via the right-click "Add element" menu, built through
+ * the exact same construction that recreates it on every future load, then
+ * frozen at its just-rendered size and pushed onto content.custom_elements so
+ * it round-trips through Apply and profiles like everything else.
  * @param kind "text", "button", "box", "image", "video", "icon", "datetime",
  *   "theme", or "reel"
  * @param x left, document px (where the menu was opened)
  * @param y top, document px
- * @param extra {icon, url} for kind "icon" (a built-in's svg markup, or an
- *   uploaded one's url), {href} for kind "button", {url} for kind "image"/
- *   "video" (the uploaded file's url, see uploadEditorFile()); "datetime"
- *   takes sensible defaults (countdown, 30 days out) and is configured from
- *   the style popover afterward (see buildStyleMenu()); {orientation} for
- *   kind "reel" ("horizontal" or "vertical")
+ * @param extra {icon, url} for "icon", {href} for "button", {url} for
+ *   "image"/"video"; "datetime" takes sensible defaults (countdown, 30 days
+ *   out) and is configured from the style popover afterward; {orientation}
+ *   for "reel"
  * @return the new element
+ * @note Always lands on top of the stacking order, as a ta would expect from
+ * something they just placed.
+ * @note If the drop point (or, for box/image/video, the new element's own
+ * hitbox) lands on a tile, delegates to addBoundElement() instead.
  */
 function addCustomElement(kind, x, y, extra) {
   extra = extra || {};
@@ -14025,21 +13817,16 @@ function addCustomElement(kind, x, y, extra) {
 }
 
 /**
- * Resolves which content array actually owns tileEl (see
- * BOUND_TILE_SELECTORS/findBoundTileHit()), so addBoundElement() can push a
- * new bound child onto it and persist it back to the shared snapshot
- * regardless of which kind of tile it is:
- * - a reel tile's owner is its reel entry's own tiles[].children (nested
- *   inside content.custom_elements, see buildReelElement()'s doc comment)
- * - an attachments tile's owner is the matching content.extras[] entry's
- *   own children (js/dashboard.js's EXTRAS, keyed by data-extras-id)
- * - a day tile's owner is the matching content.days[] entry's own children
- *   (js/dashboard.js's DAYS, keyed by data-days-id)
- * Either of the last two only exist as globals on the student dashboard
- * page (js/dashboard.js isn't loaded anywhere else), which is also the only
- * place their tile selectors ever match, so referencing them here is safe.
+ * Resolves which content array actually owns tileEl, so addBoundElement() can
+ * push a new bound child onto it and persist it regardless of tile kind.
  * @param tileEl a tile matching one of BOUND_TILE_SELECTORS
  * @return {children, persist()}, or null if no matching owner is found
+ * @note A reel tile's owner is its reel entry's own tiles[].children; an
+ * attachments tile's is the matching content.extras[] entry's children; a day
+ * tile's is the matching content.days[] entry's.
+ * @note The last two only exist as globals on the student dashboard, which is
+ * also the only place their selectors ever match, so referencing them here is
+ * safe.
  */
 function findBoundTileOwner(tileEl) {
   var tileId = elId(tileEl);
@@ -14098,22 +13885,20 @@ function findBoundTileOwner(tileEl) {
 }
 
 /**
- * The "drop landed on a tracked tile" branch of addCustomElement(): builds
- * the same descriptor via the same buildCustomElementNode(), but appends it
- * into tileEl (see placeInTile()) instead of document.body, and persists it
- * nested inside the owning tile's own children array (see
- * findBoundTileOwner()) instead of as a new top-level content.custom_elements
- * entry - this is what makes bound content travel with its tile (reel
- * scrolling, or an attachments/day tile's shared-template re-render). Falls
- * back to the normal unbound path if no owner can be found for some reason
- * (shouldn't happen - findBoundTileHit() only ever returns a live tracked
- * tile - but a silently dropped element would be a worse failure mode than
- * a stray top-level one).
+ * The "drop landed on a tracked tile" branch of addCustomElement(): the same
+ * descriptor and the same builder, but appended into tileEl rather than
+ * document.body, and persisted nested inside the owning tile's own children
+ * array instead of as a new top-level entry.
  * @param tileEl the hit tile DOM node (see findBoundTileHit())
  * @param kind the element kind being added
  * @param d its descriptor, left/top still in page coordinates at this point
  * @param extra see addCustomElement()
  * @return the built, bound (or, on fallback, unbound) element
+ * @note That nesting is what makes bound content travel with its tile through
+ * reel scrolling or a shared-template re-render.
+ * @note Falls back to the unbound path if no owner is found - it shouldn't
+ * happen, but a silently dropped element would be a worse failure than a
+ * stray top-level one.
  */
 function addBoundElement(tileEl, kind, d, extra) {
   var owner = findBoundTileOwner(tileEl);
@@ -14160,18 +13945,15 @@ function addBoundElement(tileEl, kind, d, extra) {
 }
 
 /**
- * Rebuilds every bound child inside tileEl (see findBoundTileOwner()) from
- * its saved descriptor array, the attachments/day tile equivalent of what
- * buildReelElement() already does for a reel tile's own children on every
- * render. Called by js/dashboard.js's renderExtras()/renderDays() right
- * after a tile's own shared-template pieces (rect/icon/text/button, or the
- * locked/open template) are built, since those functions fully rebuild the
- * tile's innerHTML from scratch on every call - any previously-rendered
- * bound children need rebuilding right along with it. Repainting their saved
- * overrides is the caller's job, once for the whole area, see
- * applyLiveAreaOverrides().
+ * Rebuilds every bound child inside tileEl from its saved descriptors - the
+ * attachments/day tile equivalent of what buildReelElement() does for a reel
+ * tile's children on every render.
  * @param tileEl a tile matching one of BOUND_TILE_SELECTORS
- * @param children the tile's own saved children array (may be empty/undefined)
+ * @param children the tile's own saved children array (may be empty)
+ * @note Called right after a tile's shared-template pieces are built, since
+ * those renderers rebuild the tile's innerHTML from scratch every call.
+ * @note Repainting their saved overrides is the caller's job, once for the
+ * whole area - see applyLiveAreaOverrides().
  */
 function renderTileChildren(tileEl, children) {
   /* only the wraps holding bound children, never the ones detachFromFlow() put
@@ -14190,50 +13972,41 @@ function renderTileChildren(tileEl, children) {
 window.renderTileChildren = renderTileChildren;
 
 /**
- * Re-runs the generic override sweeps (text/size/font/position/color/radius/
- * hidden) over a live area that has just rebuilt its tiles, then repaints
- * every per-tile local chip and attachment icon.
- *
- * Needed because an extras/days area renders AFTER applySharedEditorOverrides()'s
- * own sweep pass already ran once (see its window.renderExtras hook), against
- * a DOM that had none of these tiles in it yet. Every tile role and every
- * bound child would otherwise come out at its raw template geometry, silently
- * dropping every move/resize a ta has saved. The sweeps are plain
- * document-wide queries keyed by id, so re-running them is both safe and
- * exactly what makes the shared template mirror: one saved {tx,ty} or {w,h}
- * for "extras.tile.icon" lands on every rendered tile's icon at once, the
- * reload-time counterpart of mirrorTiledRoleGeometry().
+ * Re-runs the generic override sweeps over a live area that has just rebuilt
+ * its tiles, then repaints every per-tile local chip and attachment icon.
  * @param data the full content blob (for the override maps)
+ * @note Needed because an extras/days area renders AFTER the shared sweep
+ * pass already ran once, against a DOM with none of these tiles in it. Every
+ * tile role and bound child would otherwise come out at raw template
+ * geometry, silently dropping every move a ta has saved.
+ * @note The sweeps are plain document-wide queries keyed by id, so re-running
+ * them is both safe and exactly what makes the shared template mirror: one
+ * saved {tx,ty} lands on every rendered tile's icon at once.
  */
 function applyLiveAreaOverrides(data) {
   if (!data) return;
   applyTextOverrides(data.text || {});
   applyAreaFlowOverrides(data.area_flow);
   applyTileChildrenOverrides(data.tile_children);
-  /* the tiles are tiled to their real track width BEFORE the size sweep, not
-     just after it. applySizeOverrides() detaches every element that carries a
-     saved size, and detachFromFlow() freezes that element's wrap at whatever it
-     measures AT THAT MOMENT - so running it first froze the wraps inside a day
-     card against a card that was still a full-width one-column grid item,
-     leaving ~1030px slots inside a card about to become ~340px wide. That stale
-     figure then became the card's own min-content width (see
-     minContentWidthOf(), which no longer trusts a wrap either) and snapped the
-     tile to full width on the first mousemove of any resize.
-     EDIT_SIZES is seeded by hand here because that's the one thing this pass
-     needs out of the sizes map - it's the map applyTileFlow() reads a tile's
-     track size back out of, and applySizeOverrides() assigns exactly the same
-     thing as its own first statement a line later. */
+  /* the tiles are tiled to their real track width BEFORE the size sweep.
+     applySizeOverrides() detaches every element carrying a saved size, and
+     detachFromFlow() freezes its wrap at whatever it measures AT THAT MOMENT
+     - so running it first froze the wraps inside a day card against a card
+     that was still a full-width grid item, leaving ~1030px slots inside a
+     card about to become ~340px. That stale figure then became the card's own
+     min-content width and snapped the tile to full width on the first
+     mousemove of any resize. EDIT_SIZES is seeded by hand because it's the
+     one thing this pass needs out of the sizes map. */
   EDIT_SIZES = data.sizes || {};
   applyTileFlow();
   applySizeOverrides(data.sizes);
-  /* between the size and position sweeps, not after both. It reads the tile
-     and container sizes applySizeOverrides() has just loaded, and what it
-     does with them - how many columns, therefore how wide a tile, therefore
-     how much room an element inside one has - is exactly what
-     applyPositionOverrides()' clamp pass then measures against. Run the other
-     way round, that pass clamps every saved offset against a grid still laid
-     out at its pre-load defaults, and silently rewrites offsets that are
-     perfectly legal once the real layout lands. */
+  /* between the size and position sweeps, not after both. It reads the sizes
+     just loaded, and what it does with them - how many columns, therefore how
+     wide a tile, therefore how much room an element inside one has - is
+     exactly what the position pass then clamps against. The other way round,
+     that pass clamps every saved offset against a grid still at its pre-load
+     defaults, silently rewriting offsets that are legal once the real layout
+     lands. */
   applyTileFlow();
   applyFontSizeOverrides(data.font_sizes);
   applyTextStyleOverrides(data.text_styles);
@@ -14257,26 +14030,19 @@ function applyLiveAreaOverrides(data) {
 window.applyLiveAreaOverrides = applyLiveAreaOverrides;
 
 /**
- * Drops a saved object (see the right-click "Add element" > "Object"
- * picker, renderCtxMenuObjectPicker()) onto the canvas at (x, y): every part
- * in objData.custom_elements is rebuilt (buildCustomElement(), same
- * construction renderCustomElements() already uses on every load) under a
- * freshly suffixed id (uniqueDupSuffix(), same collision-free scheme
- * duplicateElement() uses to rename a whole subtree at once), offset so the
- * object's own bounding box lands with its top-left at (x, y) regardless of
- * where its parts happened to sit in the object's own mini editor canvas.
- * Every per-id override map the object bundle carries (sizes, positions,
- * colors, ..., even its own internal groupings/stacking order from the
- * mini editor) is remapped onto the new ids and merged into the live
- * snapshot, the same "copy old id's overrides onto the new id" trick
- * copyDuplicateOverrides() already uses for a plain duplicate, just sourced
- * from a separate bundle instead of the same document. Every part not
- * already tied together by one of those internal groupings still ends up
- * in one new all-parts group regardless, so the placed object always moves
- * as a single rigid unit, the whole point of placing one.
+ * Drops a saved object onto the canvas at (x, y): every part is rebuilt under
+ * a freshly suffixed id, offset so the object's own bounding box lands with
+ * its top-left at (x, y) regardless of where its parts sat in the mini editor.
  * @param objData the object's stored bundle (an object row's "data")
  * @param x left, document px (where the menu was opened)
  * @param y top, document px
+ * @note Every per-id override the bundle carries - sizes, positions, colours,
+ * even its internal groupings and stacking order - is remapped onto the new
+ * ids and merged into the live snapshot, the same trick a plain duplicate
+ * uses, just sourced from a separate bundle rather than the same document.
+ * @note Every part not already tied together by an internal grouping still
+ * ends up in one all-parts group, so a placed object moves as a single rigid
+ * unit - the whole point of placing one.
  */
 function placeObject(objData, x, y) {
   var parts = (objData.parts || objData.custom_elements || []).slice();
@@ -14340,16 +14106,12 @@ function placeObject(objData, x, y) {
      placing a saved object rather than pasting loose parts */
   if (allNewIds.length > 1) snap.groups.push(allNewIds);
 
-  /* land the whole placed object above everything already on the canvas:
-     applyLayerOrder() appends any id MISSING from content.layers, in dom
-     order, straight after whatever IS explicitly listed there, so a
-     "layers" array holding only the new ids (the naive concat this used to
-     do) would leave every pre-existing element, never having been
-     explicitly listed itself, appended AFTER them instead, on top of the
-     object just placed, exactly backwards. Resolving the current full
-     effective order first (explicit list + domOrderIds() fallback, the
-     same resolution applyLayerOrder() itself does) before appending the
-     new ids is what actually guarantees they land last. */
+  /* land the whole placed object above everything already on the canvas.
+     applyLayerOrder() appends any id MISSING from content.layers straight
+     after whatever IS listed, so a layers array holding only the new ids
+     would leave every pre-existing element - never explicitly listed itself -
+     appended after them, on top of the object just placed. Resolving the full
+     effective order first is what guarantees the new ids land last. */
   var fullOrder = (snap.layers || []).slice();
   var haveLayer = {};
   fullOrder.forEach(function (id) { haveLayer[id] = true; });
@@ -14457,13 +14219,12 @@ function noteTileSelection(el) {
 
 /**
  * The tile the context menu's tile-scoped actions should act on: the one the
- * right-click actually landed inside, else the last one selected - but only
- * when the right-click landed somewhere inside the live area that owns these
- * tiles at all. That last condition is what keeps these per-tile variables
- * invisible "outside the tile", per the spec: right-clicking anywhere else
- * on the page offers nothing about them.
+ * right-click landed inside, else the last one selected - but only when the
+ * click landed somewhere inside the live area that owns these tiles at all.
  * @param kind "extras" or "days"
  * @return the tile element, or null
+ * @note That last condition keeps these per-tile variables invisible "outside
+ * the tile": right-clicking elsewhere offers nothing about them.
  */
 function ctxTileFor(kind) {
   if (!CTX_TARGET_EL || !CTX_TARGET_EL.closest) return null;
@@ -14476,11 +14237,10 @@ function ctxTileFor(kind) {
 
 /**
  * The tile flow container the context menu's Container section should act on:
- * the innermost one the right-click landed inside. A right-click on a day
- * card's attachment therefore offers that day's attachment sub-area (the
- * closest container that actually owns what was clicked), while one on the
- * day card itself offers the days area around it.
+ * the innermost one the right-click landed inside.
  * @return the container element, or null if the click wasn't inside one
+ * @note So a right-click on a day card's attachment offers that day's
+ * sub-area, while one on the card itself offers the days area around it.
  */
 function ctxFlowArea() {
   if (!CTX_TARGET_EL || !CTX_TARGET_EL.closest) return null;
@@ -14498,34 +14258,20 @@ function buildCtxMenu() {
  * The right-click menu's second line, for an element that only exists in one
  * of the landing page's two navbar states - "" for everything else, which on
  * every page but the landing page is everything.
- *
- * The landing page ships two navbars and shows exactly one (applyNavState()),
- * and "one" means display:none on the whole <nav> - so an element belongs to a
- * state either by carrying data-nav-state itself (a placed Access portal /
- * Dashboard / Log out button gets one stamped on it from its kind, see
- * buildCustomElementNode()) or by sitting inside a navbar that does.
- *
- * The editor has always rendered this faithfully - flip the Navbar switch and
- * the element goes - but faithfully is not the same as legibly, and the gap
- * bit hard in exactly the case you'd predict. Both halves of it need an
- * element to have LEFT the navbar visually: drag the "Schedule" link down into
- * the hero and it is still a child of the signed-out <nav>, drop an Access
- * portal button in the middle of the page and it still carries
- * data-nav-state="out". Either one then looks like ordinary hero content in
- * the editor, sitting hundreds of pixels from any navbar, while remaining
- * invisible to every signed-in visitor - and since a ta works with the switch
- * on whichever state they're building, the only way to find that out was to
- * publish and then be told by someone who was logged in.
- *
- * So: say it, on the element, at the moment a ta is looking at it. Not a
- * warning - this is correct and often deliberate behaviour, an "Access portal"
- * button in the navbar genuinely has no business on a page its reader is
- * already signed in to - just the fact, and then whatever the ta can do about
- * it from here: a placed nav button is re-pointed on the spot by the "Shown
- * to" switch right below this note (see navStateForDescriptor()), and anything
- * else is pointed at the portal's Navbar switch, since looking at the other
- * state is the only way to check the other half of the page.
  * @return the note's html, or "" if the element isn't state-bound
+ * @note The landing page ships two navbars and shows one, and "one" means
+ * display:none on the whole <nav> - so an element belongs to a state either
+ * by carrying data-nav-state itself or by sitting inside a navbar that does.
+ * @note The editor has always rendered this faithfully, but faithfully isn't
+ * legibly. Both halves need an element to have LEFT the navbar visually: drag
+ * the "Schedule" link into the hero and it's still a child of the signed-out
+ * <nav>. It then looks like ordinary hero content while staying invisible to
+ * every signed-in visitor - and since a ta works with the switch on whichever
+ * state they're building, the only way to find out was to publish.
+ * @note So: say it, on the element, as they look at it. Not a warning - this
+ * is often deliberate - just the fact, plus what they can do about it: a
+ * placed nav button is re-pointed by the "Shown to" switch below this note,
+ * and anything else is pointed at the portal's Navbar switch.
  */
 function ctxNavStateNoteHtml() {
   if (!CTX_TARGET_EL) return "";
@@ -14551,24 +14297,16 @@ function ctxNavStateNoteHtml() {
 }
 
 /**
- * Renders the menu's root list: an optional "This element" section first
- * (only when the menu was opened by right-clicking an existing tagged
- * element, see CTX_TARGET_ID) with Duplicate, Lock/Unlock, and Promote/
- * Remove from navbar, then the 7 things that can be added (an 8th, Reel/
- * Vertical reel, lives inside "Object..." - see renderCtxMenuObjectPicker()).
- * Duplicate is
- * left out for the countdown box/info tiles (ids starting "countdown."/
- * "logistics."), anything containing #heroCountdown/#logisticsGrid (eg the
- * whole logistics section), and any placed "datetime" custom element: all
- * three render their content from their own structured data
- * (content.logistics, the countdown's text overrides, a datetime element's
- * own target/format/strftime) via getElementById()/renderDatetimeContent()
- * rather than static template markup a generic clone can carry over, so a
- * duplicate of one would come out empty (or frozen, un-ticking) the moment
- * it's reconstructed on a reload rather than just visually copied in the
- * moment, see duplicateElement()'s doc comment. A datetime element's own
- * format/pattern/target/style are all edited from the style popover (see
- * buildStyleMenu()), not here.
+ * Renders the menu's root list: an optional "This element" section first,
+ * only when the menu was opened on an existing tagged element, then the seven
+ * things that can be added (an eighth, Reel, lives inside "Object...").
+ * @note Duplicate is left out for the countdown box, the info tiles, anything
+ * containing them, and any placed "datetime" element: all three render their
+ * content from structured data rather than static markup a generic clone can
+ * carry over, so a duplicate would come out empty - or frozen, un-ticking -
+ * the moment it's reconstructed on a reload rather than just copied visually.
+ * @note A datetime element's own format, pattern, target and style are edited
+ * from the style popover, not here.
  */
 function renderCtxMenuRoot() {
   /* a right-click somewhere else re-renders this list without the menu ever
@@ -14619,8 +14357,10 @@ function renderCtxMenuRoot() {
        the attachments tile's download button is - see deleteElement() */
     var isLoginFixed = CTX_TARGET_EL && CTX_TARGET_EL.hasAttribute("data-login-fixed");
     /* the failure line has two strings but only ever shows one (see
-       buildCustomElementNode()'s "loginError" kind), so reaching the other
-       one to edit it needs a way to say which is on show */
+       buildCustomElementNode()'s "loginError" kind). The portal's State switch
+       is the way to say which, and this is the same flip offered on the
+       element itself - a ta who's right-clicked the line to edit its wording
+       is already looking at the thing the switch is about */
     var loginErrorEl = CTX_TARGET_EL && CTX_TARGET_EL.closest &&
       CTX_TARGET_EL.closest('[data-login-el="error"]');
     var isSpecial = isDatetime || isTile || isTileBox || isExtrasFixed || isDaysFixed || isLoginFixed || CTX_TARGET_ID.indexOf("logistics.") === 0 || CTX_TARGET_ID.indexOf("countdown.") === 0 ||
@@ -14639,7 +14379,7 @@ function renderCtxMenuRoot() {
       (isSpecial ? "" : '<button type="button" data-delete="1">Delete</button>') +
       (extrasTile ? '<button type="button" data-extras-add-filename="1">Create textbox with filename variable</button>' : "") +
       (loginErrorEl ? '<button type="button" data-login-msg-swap="1">' +
-        (loginErrorEl.classList.contains("edit-show-expired")
+        (loginViewIsExpired()
           ? "Show wrong-password wording" : "Show timed-out wording") +
         '</button>' : "") +
       (galleryTile ? '<button type="button" data-gallery-add-name="1">Insert directory name</button>' : "") +
@@ -14674,21 +14414,18 @@ function renderCtxMenuRoot() {
       (isFixed(CTX_TARGET_ID) ? "Remove from navbar" : "Promote to navbar") +
       '</button>' +
       (groupOf(CTX_TARGET_ID) ? '<button type="button" data-ungroup="1">Ungroup</button>' : "") +
-      /* the way OUT of a box that doesn't need a drag - a box small enough to
-         be a tight fit around what it holds leaves nowhere obvious to drag to,
-         and the element goes back to a free position exactly where it already
-         sits. See unseatFromBox(). */
+      /* the way OUT of a box that doesn't need a drag: a box tight around
+         what it holds leaves nowhere obvious to drag to, and the element
+         lands back at a free position exactly where it sits. See
+         unseatFromBox(). */
       (CTX_TARGET_EL && boxOf(CTX_TARGET_EL)
         ? '<button type="button" data-box-unseat="1">Take out of box</button>' : "");
-    /* how this particular clip plays, in its own labelled section rather than
-       mixed into the generic list above - none of it applies to any other
-       kind of element. A placed video has always been a muted, looping,
-       autoplaying wallpaper clip with no player chrome (see
-       buildCustomElementNode()); these three hand back the ordinary html5
-       video behaviours it was hiding, one at a time. Every label names the
-       state it's in FIRST and what clicking does second, the same
-       "current &rarr; next" shape the Container section below uses. */
-    if (CTX_TARGET_EL && CTX_TARGET_EL.tagName === "VIDEO") {
+    /* how this clip plays, in its own labelled section rather than mixed into
+       the generic list - none of it applies to any other kind of element. A
+       placed video has always been a muted, looping, autoplaying wallpaper
+       clip; these three hand back the ordinary html5 behaviours it was
+       hiding, one at a time. Every label names the state it's in FIRST and
+       what clicking does second, the same shape the Container section uses. */    if (CTX_TARGET_EL && CTX_TARGET_EL.tagName === "VIDEO") {
       toggleHtml += '<div class="ctx-title">Video</div>' +
         '<button type="button" data-video-play="video_no_autoplay">Autoplay: ' +
         (videoPlaybackOn(CTX_TARGET_EL, "video_no_autoplay")
@@ -14703,15 +14440,14 @@ function renderCtxMenuRoot() {
           ? "on &rarr; off" : "off &rarr; on") +
         '</button>';
     }
-    /* a PLACED Access portal / Dashboard / Log out button's "Shown to" switch
-       (see navStateForDescriptor()). Only offered for a placed one - the
-       navbars' own buttons are template markup inside a <nav> that IS one
-       state, and there's nothing to choose there.
+    /* a PLACED nav button's "Shown to" switch. Only offered for a placed one:
+       the navbars' own buttons are template markup inside a <nav> that IS one
+       state, so there's nothing to choose there.
 
-       Same "current &rarr; next" wording as every other switch in this menu,
-       and deliberately right under the note that explains what the current
-       state costs: the moment a ta reads "a signed-in visitor never sees
-       this" is the moment they want to change it. */
+       Same "current -> next" wording as every other switch here, and
+       deliberately right under the note explaining what the current state
+       costs - the moment a ta reads "a signed-in visitor never sees this" is
+       the moment they want to change it. */
     if (CTX_TARGET_EL && CTX_TARGET_EL.hasAttribute("data-nav-el") &&
         customElementById(CTX_TARGET_ID)) {
       var navShown = navStateForDescriptor(customElementById(CTX_TARGET_ID));
@@ -14822,7 +14558,14 @@ function renderCtxMenuRoot() {
         '<button type="button" data-add="loginUsername">Username box</button>' +
         '<button type="button" data-add="loginPassword">Password box</button>' +
         '<button type="button" data-add="loginButton">Log in button</button>' +
-        '<button type="button" data-add="loginError">Error message</button>'
+        /* one kind, two names: the line it places carries both wordings and
+           shows the one the portal's State switch is on, so naming it "Error
+           message" while the editor is showing the timed-out page would be
+           offering something other than what lands. The name is also the
+           clearest signal the switch did anything to this menu at all. */
+        '<button type="button" data-add="loginError">' +
+        (loginViewIsExpired() ? "Timed-out message" : "Error message") +
+        '</button>'
       : "") +
     /* the gallery's own kind, in its own labelled section for the same reason
        the login page's are: a photo stage has nothing to resolve against on
@@ -14914,11 +14657,16 @@ function renderCtxMenuRoot() {
   var loginMsgSwapBtn = CTX_MENU.querySelector("[data-login-msg-swap]");
   if (loginMsgSwapBtn) {
     loginMsgSwapBtn.addEventListener("click", function () {
-      /* a pure view toggle - which of the failure line's two strings a ta is
-         currently looking at. Never saved: what a real visitor sees is
-         decided by what actually happened to them, see js/login.js */
-      var el = CTX_TARGET_EL && CTX_TARGET_EL.closest('[data-login-el="error"]');
-      if (el) el.classList.toggle("edit-show-expired");
+      /* a pure view toggle - which state of the login page a ta is currently
+         looking at. Never saved: what a real visitor sees is decided by what
+         actually happened to them, see js/login.js.
+
+         Goes through the page-wide toggle rather than flipping this one
+         element's class, so it and the portal's State switch can't end up
+         disagreeing about which state is on show - which they would the
+         moment either was used, since the switch also renames what the "Add
+         element" menu would place. */
+      toggleLoginView();
       hideCtxMenu();
     });
   }
@@ -15085,21 +14833,16 @@ function renderCtxMenuRoot() {
 }
 
 /**
- * Swaps the menu into its link-editor sub-view (the right-click menu's
- * "Add link"/"Edit link"), for whatever element CTX_TARGET_ID/CTX_TARGET_EL
- * currently point at. Works the same for every element kind: a real `<a>`
- * (a button, the brand link) just gets a real href (see applyOneLink()),
- * anything else gets a click listener that navigates outside the editor.
- * A "Remove link" button only shows once one's actually set, same
- * pattern as the style popover's color/fill reset buttons.
- *
- * Opens on what the element already does, always: the target it has (see
- * elementLinkTarget(), which counts the template's own href, not just a
- * ta-set one) spelled out in words at the top, in the box below it, and
- * ticked in the action list if it's one of those. This view used to answer
- * "what is this link?" with an empty box no matter what the element was
- * pointed at, which read as "there isn't one" for every link a ta hadn't set
- * personally.
+ * Swaps the menu into its link-editor sub-view, for whatever element
+ * CTX_TARGET_ID points at.
+ * @note Works the same for every kind: a real `<a>` gets a real href,
+ * anything else gets a click listener that navigates outside the editor. A
+ * "Remove link" button only shows once one is set.
+ * @note Opens on what the element already does, always: the target it has -
+ * counting the template's own href, not just a ta-set one - spelled out at
+ * the top, in the box, and ticked in the action list if it's one of those.
+ * This view used to answer "what is this link?" with an empty box whatever
+ * the element pointed at, which read as "there isn't one".
  */
 function renderCtxMenuLinkEditor() {
   var id = CTX_TARGET_ID;
@@ -15203,18 +14946,16 @@ function renderCtxMenuJoinLinkEditor() {
   });
 }
 
-/* tagged elements that navigate (or un-navigate) on their own with no
-   content.links entry behind them at all, because a real click handler
-   elsewhere in this codebase does the work: js/dashboard.js's logout() on the
-   student dashboard, wireNavButtons()'s own sign-out wiring on the landing
-   page. The links view below LISTS these - "what does Log out actually do?"
-   is exactly the question it exists to answer - but never lets one be edited:
-   a content.links url layered on top would just fight the handler that's
-   already wired to it. Keyed by data-edit-id/data-resize-id.
+/* tagged elements that navigate on their own with no content.links entry
+   behind them, because a real click handler elsewhere does the work - the
+   dashboard's logout(), the landing page's own sign-out wiring. The links view
+   LISTS these, since "what does Log out actually do?" is exactly the question
+   it exists to answer, but never lets one be edited: a url layered on top
+   would just fight the handler already wired to it. Keyed by id.
 
-   A nav button a ta PLACES themselves is covered without being listed here:
-   its behaviour is keyed off data-nav-el, not off its id (which is a fresh
-   custom.* one), so navButtonAction() below answers for any number of them. */
+   A nav button a ta PLACES is covered without being listed: its behaviour is
+   keyed off data-nav-el rather than its id, so navButtonAction() answers for
+   any number of them. */
 var BUILTIN_LINK_ACTIONS = {
   "dash.nav.logout": "Logs out, back to login.html",
   "navin.nav.logout": "Logs out, stays on this page"
@@ -15235,16 +14976,13 @@ function navButtonAction(el) {
   return "";
 }
 
-/* the gallery page's own two arrows - app/db.py's _GALLERY_ENTRIES seeds the
-   buttons AND the gallery:prev/gallery:next links that make them step the
-   pane, so the action is part of what those elements are rather than
-   something a ta added to them. Re-pointable (a ta running two panes can aim
-   an arrow at either one, through the link editor's action picker) but never
-   removable: clearing one leaves an arrow that looks exactly as it did and
-   does nothing, on a page whose whole point is flipping through photos, and
-   nothing on screen would say why. Listed under "Built in" rather than "Set
-   here" for that reason - same shelf as the things this view explains but
-   doesn't hand over. Keyed by id, like BUILTIN_LINK_ACTIONS above. */
+/* the gallery's own two arrows: the seed ships the buttons AND the links that
+   make them step the pane, so the action is part of what those elements are
+   rather than something a ta added. Re-pointable - a ta running two panes can
+   aim an arrow at either - but never removable: clearing one leaves an arrow
+   that looks exactly as it did and does nothing, on a page whose whole point
+   is flipping through photos, with nothing on screen to say why. Listed under
+   "Built in" for that reason. Keyed by id. */
 var FIXED_LINK_IDS = { "seed.gallery.prev": 1, "seed.gallery.next": 1 };
 
 /**
@@ -15258,18 +14996,15 @@ function hasFixedLink(id) {
 }
 
 /**
- * Where one element actually goes when it's clicked, whether or not a ta is
- * the one who decided that: their own content.links entry first, then the url
- * every "Apply Now" shares, then the template's own href.
- *
- * The link editor and the right-click menu's own "Add link"/"Edit link"
- * wording both used to read content.links and nothing else, so every element
- * that ships with a link - the nav's scroll links, the brand, a placed nav
- * button - opened an empty box that offered to "add" a link it already had.
- * A ta then had no way to see, let alone edit, the target it really has.
+ * Where one element actually goes when clicked, whether or not a ta decided
+ * it: their own content.links entry first, then the url every "Apply Now"
+ * shares, then the template's own href.
  * @param el the element, or null if it isn't on this page
  * @param id its data-edit-id/data-resize-id
  * @return the target, "" if it has none
+ * @note The link editor used to read content.links and nothing else, so every
+ * element that ships with a link opened an empty box offering to "add" a link
+ * it already had, with no way to see the target it really has.
  */
 function elementLinkTarget(el, id) {
   if (LINKS[id]) return LINKS[id];
@@ -15292,16 +15027,13 @@ function linkTargetLabel(url) {
 
 /**
  * Works out what a ta meant by whatever they typed into a link box.
- *
- * Anything that doesn't name an element on this page is taken at face value -
- * a url is a url. But the links view lists every row by its id, that id is
- * the obvious thing to copy when the question is "how do I make THIS button
- * do what THAT one does", and typing "seed.gallery.next" used to be saved as
- * a url, which sent the visitor to /seed.gallery.next and a 404. Naming an
- * element now means what it looks like it means: point this one wherever that
- * one points, action included.
  * @param text the raw box contents
  * @return {url, error} - error non-empty means don't save, say this instead
+ * @note Anything that doesn't name an element on this page is taken at face
+ * value. But the links view lists every row by its id, that id is the obvious
+ * thing to copy when the question is "how do I make THIS button do what THAT
+ * one does", and typing one used to be saved as a url and send the visitor to
+ * a 404. Naming an element now means what it looks like it means.
  */
 function resolveLinkInput(text) {
   var v = (text || "").trim();
@@ -15327,26 +15059,19 @@ function resolveLinkInput(text) {
 
 /**
  * Collects every link that exists on this page right now, split into the
- * three groups the links view renders as its own sections.
- *
- * Why the built-in group matters: this inventory used to live in the content
- * manager (a "Links" list under Day panels, see the note in js/ta.js), which
- * could only ever know about content.links - so a ta looking up where the
- * nav's "Extra attachments" link scrolls to, or what the brand logo points
- * at, or what "Log out" does, found an empty list, because nobody had "added"
- * those links, the templates ship with them. Reading them straight off the
- * live DOM in the editor is the only place all of them are actually visible
- * at once, next to the elements they belong to.
- *
- * One row per id even where the same id is rendered more than once (the brand
- * text sits in both the nav and the footer), pointing at the first instance -
- * the same "an id is the unit, not a node" rule LINKS/applyOneLink() already
- * follow. Inline links (see the INLINE LINKS section) are the one exception:
- * they're pieces of text, not elements, so several in one field are several
- * rows, listed read-only since the place to change one is the text toolbar
- * with the words themselves selected.
+ * three groups the links view renders as its sections.
  * @return {set, builtin, inline, elsewhere}, each an array of
  *   {id, el, url, editable, removable, note}
+ * @note Why the built-in group matters: this inventory used to live in the
+ * content manager, which could only know about content.links - so a ta
+ * looking up where the nav's link scrolls to, or what "Log out" does, found
+ * an empty list, because nobody had "added" those, the templates ship with
+ * them. Reading them off the live DOM is the only place all of them are
+ * visible at once, next to the elements they belong to.
+ * @note One row per id even where an id renders more than once, pointing at
+ * the first instance. Inline links are the exception: they're pieces of text,
+ * so several in one field are several rows, listed read-only since the place
+ * to change one is the text toolbar with the words selected.
  */
 function pageLinkInventory() {
   var seen = {};
@@ -15433,9 +15158,8 @@ function pageLinkInventory() {
 
 /**
  * A short, recognizable name for one links-view row: whatever text the
- * element actually shows ("Extra attachments", "Log out", "Access portal"),
- * which is how a ta thinks of it, falling back to the raw id for anything
- * with no text of its own (the brand logo's wrapper, a linked image or box).
+ * element actually shows, which is how a ta thinks of it, falling back to the
+ * raw id for anything with no text of its own.
  * @param el the element, or null for an entry with none on this page
  * @param id its data-edit-id/data-resize-id
  * @return the label text
@@ -15447,13 +15171,12 @@ function linkRowLabel(el, id) {
 }
 
 /**
- * Scrolls one element into view and selects it (the ring follows the smooth
- * scroll on its own, see the scroll listener next to positionRing()). The
- * "click through to the element itself" half of the links view: a row can
- * name something a ta has no way to spot by eye - a link on a small icon
- * inside a tile, an element sitting far off screen - so the list has to be
- * able to put the selection straight onto it.
+ * Scrolls one element into view and selects it - the "click through to the
+ * element itself" half of the links view.
  * @param el the element to reveal
+ * @note A row can name something a ta has no way to spot by eye - a link on a
+ * small icon inside a tile, an element far off screen - so the list has to be
+ * able to put the selection straight onto it.
  */
 function revealElement(el) {
   if (!el) return;
@@ -15464,15 +15187,13 @@ function revealElement(el) {
 }
 
 /**
- * Builds one links-view row: the element's name/id on the left (click to
- * select it in the editor), and on the right either an editable url + remove
- * button, or a plain read-only note for anything this view deliberately
- * doesn't own (see BUILTIN_LINK_ACTIONS and the join-link branch in
- * pageLinkInventory()). Built as real DOM nodes rather than an innerHTML
- * string, since a row's label is a ta's own typed element text and nothing
- * else in this file escapes that - same reasoning as populateVariableSelect().
+ * Builds one links-view row: the element's name on the left (click to select
+ * it), and on the right either an editable url plus remove button, or a plain
+ * read-only note for anything this view deliberately doesn't own.
  * @param entry one pageLinkInventory() entry
  * @return the row element
+ * @note Built as real DOM nodes rather than an innerHTML string, since a
+ * row's label is a ta's own typed text and nothing else here escapes that.
  */
 function buildLinkListRow(entry) {
   var row = document.createElement("div");
@@ -15583,19 +15304,16 @@ function buildLinkListRow(entry) {
 }
 
 /**
- * Swaps the menu into its links sub-view (the root menu's "This page > Links
- * on this page"): everything on the page that navigates, in one list, each
- * row clickable through to the element itself. Re-renders itself in place
- * after every edit so a built-in template link that just got a ta's own url
- * moves up into "Set here" (and gets its remove button) immediately, rather
- * than only on the next open.
- *
- * Clearing a ta-set url off a template link (the nav's own scroll links, the
- * brand) drops the override, not the template's href: the element loses its
- * live target for the rest of this editor session and gets its own back on
- * the next load, since the href is markup, not content this editor stores.
+ * Swaps the menu into its links sub-view: everything on the page that
+ * navigates, in one list, each row clickable through to the element itself.
  * @param msg optional line to show above the list, for a row that refused to
  *   save what was typed into it
+ * @note Re-renders in place after every edit, so a template link that just
+ * got a ta's own url moves up into "Set here" immediately rather than only on
+ * the next open.
+ * @note Clearing a ta-set url off a template link drops the override, not the
+ * template's href: the element loses its live target for the rest of the
+ * session and gets it back on the next load, since the href is markup.
  */
 function renderCtxMenuLinkList(msg) {
   var inv = pageLinkInventory();
@@ -15658,19 +15376,16 @@ function renderCtxMenuLinkList(msg) {
 }
 
 /**
- * Swaps the menu into its gallery-variable sub-view (the root menu's "Insert
- * gallery variable..."): one row per pane binding on the page, each offering
- * the two things a binding knows about itself - which image it's on, and how
- * many it has. A sub-view rather than a flat list of buttons like the day
- * tile's chips get, because this list GROWS with the page: two directories
- * already means four entries, and a ta with eight would have sixteen buried in
- * the root menu.
- *
- * The field these land in is whichever one was right-clicked - the chips are
- * ordinary markup inside it (see buildGalleryChipHtml()), so the surrounding
- * words, styling and layout stay completely the ta's, which is the whole point
- * of "the progress button is just a normal text element ... with the variables
- * nested inside".
+ * Swaps the menu into its gallery-variable sub-view: one row per pane binding
+ * on the page, each offering the two things a binding knows about itself -
+ * which image it's on, and how many it has.
+ * @note A sub-view rather than a flat list of buttons like the day tile's
+ * chips get, because this list GROWS with the page: two directories already
+ * means four entries, and eight would bury sixteen in the root menu.
+ * @note The chips land in whichever field was right-clicked, as ordinary
+ * markup inside it, so the surrounding words and styling stay the ta's -
+ * which is the whole point of the variables being nested inside a normal
+ * text element.
  */
 function renderCtxMenuGalleryVars() {
   var field = CTX_TARGET_EL;
@@ -15701,12 +15416,12 @@ function renderCtxMenuGalleryVars() {
 }
 
 /**
- * Swaps the menu into the image pane's directory picker (the root menu's
- * "Gallery page only > Image pane..."): which directory the new stage flips
- * through, chosen before it's placed the same way a login box's username/
- * password is (see handleCtxAdd()). "Selected directory" is offered first and
- * is what the page ships with - a pane that follows the rail, which is the
- * only binding that makes the rail's tiles worth clicking.
+ * Swaps the menu into the image pane's directory picker: which directory the
+ * new stage flips through, chosen before it's placed the same way a login
+ * box's username/password is.
+ * @note "Selected directory" is offered first and is what the page ships
+ * with - a pane that follows the rail, the only binding that makes the rail's
+ * tiles worth clicking.
  */
 function renderCtxMenuGalleryDirPicker() {
   var dirs = (window.galleryDirNames ? window.galleryDirNames() : []).slice();
@@ -15732,17 +15447,15 @@ function renderCtxMenuGalleryDirPicker() {
 }
 
 /**
- * Commits one "progress" element's Current/Total variable binding: updates
- * the descriptor (varCurrent/varTotal live right on it, like a datetime
- * element's own target/format - see addCustomElement()), repersists
- * CUSTOM_ELEMENTS, repaints just this element's fill ratio, and pushes one
- * undo step. Called from the right-click menu's Variables sub-view (see
- * renderCtxMenuProgressVars()), which is the only place a bar's bindings are
- * chosen - the style popover owns its two COLORS and nothing else, since what
- * a bar is measuring isn't a paint decision.
+ * Commits one progress element's Current/Total binding: updates the
+ * descriptor, repersists it, repaints just this element's fill ratio, and
+ * pushes one undo step.
  * @param id the element's data-resize-id
  * @param field "varCurrent" or "varTotal"
  * @param key the variable key to bind to
+ * @note Called from the right-click menu's Variables sub-view, the only place
+ * a bar's bindings are chosen - the style popover owns its two COLOURS and
+ * nothing else, since what a bar is measuring isn't a paint decision.
  */
 function setProgressVar(id, field, key) {
   var d = customElementById(id);
@@ -15761,20 +15474,15 @@ function setProgressVar(id, field, key) {
 }
 
 /**
- * Swaps the menu into its progress-bar Variables sub-view (the root menu's
- * "Bind variables..."), for whichever bar CTX_TARGET_ID points at: the two
- * number variables its fill ratio is "Current of Total" between.
- *
- * Lives on the right-click menu rather than the style popover (where it used
- * to) because a binding isn't styling - the popover is where a bar's progress
- * color, bar color, radius, and border are chosen, and burying "what is this
- * bar even measuring" among the paint controls made the one structural choice
- * the hardest one to find.
- *
- * Both selects list every number-typed variable this page can bind to (see
- * populateProgressVarSelect()/pickableVariables()): the content manager's
- * own, which are site-wide, plus whatever the page itself contributes - on
- * the gallery, a bar can therefore measure an image pane's own "which image
+ * Swaps the menu into its progress-bar Variables sub-view: the two number
+ * variables the bar's fill ratio is "Current of Total" between.
+ * @note Lives on the right-click menu rather than the style popover, where it
+ * used to, because a binding isn't styling - burying "what is this bar even
+ * measuring" among the paint controls made the one structural choice the
+ * hardest to find.
+ * @note Both selects list every number-typed variable this page can bind to:
+ * the content manager's own site-wide ones, plus whatever the page
+ * contributes - so on the gallery a bar can measure a pane's own "which image
  * of how many".
  */
 function renderCtxMenuProgressVars() {
@@ -15804,14 +15512,13 @@ function renderCtxMenuProgressVars() {
 }
 
 /**
- * Swaps the menu into its icon-picker sub-view: the built-in library (see
- * ICON_LIBRARY) plus whatever custom icons any ta has uploaded (see
- * fetchCustomAssets()), fetched fresh every time this opens so a teammate's
- * just-added icon shows up without a reload. A custom icon shows a small
- * delete "x" only when the current ta is the one who added it (enforced
- * server-side too, never a built-in and never another ta's upload). The
- * file input at the bottom uploads a new one, shared with every ta
- * immediately, same /api/upload + /api/assets round trip as a video/image.
+ * Swaps the menu into its icon-picker sub-view: the built-in library plus
+ * whatever custom icons any ta has uploaded, refetched every time this opens
+ * so a teammate's just-added icon shows up without a reload.
+ * @note A custom icon shows a delete "x" only for the ta who added it,
+ * enforced server-side too - never a built-in, never another ta's upload.
+ * @note The file input at the bottom uploads a new one, shared immediately,
+ * the same round trip as a video or image.
  */
 function renderCtxMenuIconPicker() {
   var replacing = !!ICON_REPLACE_TARGET;
@@ -15855,14 +15562,12 @@ function renderCtxMenuIconPicker() {
       btn.title = ic.name + " (added by " + ic.owner + ")";
       btn.innerHTML = '<img src="' + ic.url + '" alt="">';
       btn.addEventListener("click", function () {
-        /* fetch the uploaded file's real svg markup and inline it (same as a
-           built-in icon) rather than dropping the url into an <img>: an <img>
-           can't be recolored through css, and "svg only, so it can be
-           recolored later" is the whole rule this picker enforces. There is
-           deliberately no <img> fallback - an upload whose markup won't parse
-           as svg (a legacy non-svg row from before the rule was enforced, or
-           a fetch that failed) is refused here rather than placed as a
-           permanently uncolorable element. */
+        /* inline the uploaded file's real svg markup rather than dropping
+           the url into an <img>: an <img> can't be recoloured through css,
+           and "svg only, so it can be recoloured later" is the rule this
+           picker enforces. Deliberately no <img> fallback - an upload whose
+           markup won't parse is refused rather than placed as a permanently
+           uncolourable element. */
         fetchSvgMarkup(ic.url).then(function (svg) {
           if (!svg) {
             msg.textContent = '"' + ic.name + '" isn\'t usable as an icon (SVG only). Remove it and re-upload an .svg.';
@@ -15913,13 +15618,12 @@ function renderCtxMenuIconPicker() {
 }
 
 /**
- * Opens the icon picker (see renderCtxMenuIconPicker()) in "replace" mode,
- * anchored under a theme-toggle's style popover "Change icon" row rather
- * than at a right-click point: picking an icon there calls replaceThemeIcon()
- * on id instead of adding a brand new element. Positioned/clamped the same
- * way showCtxMenu() anchors the right-click menu, just measured off the
- * target element's own box instead of a click point, since there isn't one.
+ * Opens the icon picker in "replace" mode, anchored under a theme toggle's
+ * "Change icon" row rather than at a right-click point: picking an icon there
+ * replaces this toggle's icon instead of adding a new element.
  * @param id the theme-toggle element's id (STYLE_MENU_ID)
+ * @note Positioned and clamped the same way the right-click menu is, just
+ * measured off the target element's own box, since there's no click point.
  */
 function openThemeIconPicker(id) {
   var el = elByAnyId(id);
@@ -15940,22 +15644,16 @@ function openThemeIconPicker(id) {
 }
 
 /**
- * Re-classes a picked icon's root tag(s) to "tic" before it ever lands in a
- * theme toggle: the picker's own markup (ICON_LIBRARY / a ta's uploaded svg)
- * carries class="cic", the fixed 30x30 accent-colored sizing every
- * standalone content icon on the site uses (see ICON_LIBRARY's own comment),
- * which is wrong here on two counts - too big for the 40px-tall toggle
- * button, and "color: var(--accent)" on the svg itself would override the
- * inherited currentColor stroke, permanently locking the icon's color and
- * defeating the toggle's own (or its ".tic-icon" wrapper's) color control.
- * ".tic" (css/style.css) is the toggle's real sizing/coloring class: fills
- * its ".tic-icon" wrapper (20x20 by default, resizable via the visual
- * editor), no color of its own, so it inherits whichever ancestor's color
- * wins exactly like the default sun/moon pair already does. Works on every
- * direct child (not just the first), since the
- * legacy non-svg fallback path hands this a plain <img> instead of an <svg>.
+ * Re-classes a picked icon's root tags to "tic" before it lands in a theme
+ * toggle.
  * @param markup raw icon markup (one or more root <svg>/<img> tags)
  * @return the same markup with every root tag's class forced to "tic"
+ * @note The picker's markup carries the standalone-icon class, wrong here on
+ * two counts: too big for a 40px toggle, and its own accent colour would
+ * override the inherited currentColor stroke, permanently locking the icon's
+ * colour and defeating the toggle's own colour control.
+ * @note Works on every direct child, not just the first, since the legacy
+ * non-svg fallback path hands this a plain <img>.
  */
 function normalizeThemeIconMarkup(markup) {
   var tmp = document.createElement("div");
@@ -15968,15 +15666,13 @@ function normalizeThemeIconMarkup(markup) {
 
 /**
  * Persists a theme-toggle icon override into the preview snapshot, keyed by
- * the toggle's own id (elId(): data-resize-id for a placed "theme" custom
- * element, or "box.themeBtn" for the nav's own static #themeBtn), same
- * plain per-id map shape content.colors/content.text_color already use
- * (saveEditedColor()). A shared map rather than a custom-element-only field
- * (content.custom_elements[].icon) since the real nav toggle isn't a custom
- * element at all and still needs its icon override to survive a reload.
+ * the toggle's own id.
  * @param id the theme-toggle element's id
- * @param svgMarkup the new icon's markup, or "" to clear back to the
- *   default sun/moon swap
+ * @param svgMarkup the new icon's markup, or "" to clear back to the default
+ *   sun/moon swap
+ * @note A shared per-id map rather than a custom-element-only field, since
+ * the real nav toggle isn't a custom element at all and still needs its icon
+ * override to survive a reload.
  */
 function saveThemeIcon(id, svgMarkup) {
   var raw;
@@ -15990,20 +15686,14 @@ function saveThemeIcon(id, svgMarkup) {
 }
 
 /**
- * Applies saved theme-toggle icon overrides (content.theme_icons, see
- * saveThemeIcon()) on top of every toggle's built-in default sun/moon pair
- * (THEME_ICON_DEFAULT_SVG, baked in by buildCustomElement()/already sitting
- * in templates/index.html's static markup). Runs on every load, live site
- * included, same "second pass on top of built defaults" shape every other
- * override map uses (applyColorOverrides() etc.) - covers the nav's real
- * #themeBtn and every placed "theme" custom element in one pass, both
- * selected the same way js/theme.js's updateIcon() already does. Only the
- * ".tic-icon" wrapper's own innerHTML is replaced, never the button's: that
- * wrapper is its own RESIZABLE_SEL element (data-resize-id = id + ".icon"),
- * so its saved size/position/color overrides (applied elsewhere, same
- * generic passes every other tracked element goes through) survive an icon
- * swap untouched.
+ * Applies saved theme-toggle icon overrides on top of every toggle's built-in
+ * default sun/moon pair. Runs on every load, live site included.
  * @param map content.theme_icons, {id: svgMarkup}
+ * @note Covers the nav's real #themeBtn and every placed "theme" element in
+ * one pass, both selected the way js/theme.js already selects them.
+ * @note Only the ".tic-icon" wrapper's innerHTML is replaced, never the
+ * button's: that wrapper is its own tracked element, so its saved size,
+ * position and colour survive an icon swap untouched.
  */
 function applyThemeIconOverrides(map) {
   map = map || {};
@@ -16016,17 +15706,14 @@ function applyThemeIconOverrides(map) {
 }
 
 /**
- * Swaps a theme-toggle's icon (the nav's own static #themeBtn, or a placed
- * "theme" custom element, see buildCustomElement()) for a newly picked one,
- * live in the dom and in content.theme_icons (saveThemeIcon()), so it
- * survives a reload exactly like every other style-popover field. The
- * picked markup is re-classed first (see normalizeThemeIconMarkup()) so it
- * fits and recolors like the toggle's own default icon rather than the
- * standalone-icon picker's fixed look. Only replaces the ".tic-icon"
- * wrapper's own innerHTML (see applyThemeIconOverrides()), so the button's
- * own box and its ".tic-label" text are never touched by an icon swap.
+ * Swaps a theme toggle's icon for a newly picked one, live in the dom and in
+ * content.theme_icons, so it survives a reload like every other field.
  * @param id the theme-toggle element's id
  * @param svgMarkup the new icon's raw <svg>...</svg> (or <img>) markup
+ * @note The markup is re-classed first, so it fits and recolours like the
+ * toggle's own default rather than the standalone-icon picker's fixed look.
+ * @note Only the ".tic-icon" wrapper is replaced, so the button's box and its
+ * label are never touched by an icon swap.
  */
 function replaceThemeIcon(id, svgMarkup) {
   var el = elByAnyId(id);
@@ -16040,12 +15727,11 @@ function replaceThemeIcon(id, svgMarkup) {
 
 /**
  * Fetches a url's contents as raw <svg>...</svg> markup, for inlining a
- * ta-uploaded icon the same way a built-in one already is (see
- * buildCustomElement()'s icon branch). Resolves null instead of rejecting
- * on any failure (network error, non-svg content) so a caller can fall back
- * to a plain <img> rather than breaking the "Add element" flow.
+ * ta-uploaded icon the way a built-in one already is.
  * @param url the uploaded icon's url
  * @return a promise resolving to the svg markup string, or null
+ * @note Resolves null rather than rejecting on any failure, so a caller can
+ * fall back without breaking the "Add element" flow.
  */
 function fetchSvgMarkup(url) {
   return fetch(url)
@@ -16079,12 +15765,11 @@ function renderCtxMenuButtonLink() {
 }
 
 /**
- * Swaps the menu into its "Add image" sub-view: a real file picker (see
- * uploadEditorFile()), same "choose a file, it uploads immediately" pattern
- * as every other upload input on the site (attachments, gallery, home
- * images), not the earlier flat placeholder box. The menu stays open with a
- * status line during the upload so a slow connection doesn't look broken;
- * closes itself and drops the new image on success.
+ * Swaps the menu into its "Add image" sub-view: a real file picker, the same
+ * "choose a file, it uploads immediately" pattern as every other upload input
+ * on the site, rather than the earlier flat placeholder box.
+ * @note The menu stays open with a status line during the upload so a slow
+ * connection doesn't look broken, then closes and drops the image on success.
  */
 function renderCtxMenuImagePicker() {
   CTX_MENU.innerHTML =
@@ -16140,19 +15825,16 @@ function renderCtxMenuVideoPicker() {
 }
 
 /**
- * Swaps the menu into its "Add object" sub-view: two built-in entries (the
- * Light/Dark toggle and the Reel/Vertical reel pair - all three are "for
- * fun" extras rather than everyday building blocks, which is why they sit
- * here instead of cluttering the root list), then every object saved to the
- * shared reusable-objects library (OBJECTS_LIBRARY, fetched fresh on every
- * page load, see fetchContent()/fetchObjectContent()), each rebuilt (see
- * placeObject()) as a group of freshly-idd elements at the point the menu
- * was opened. Built the same page in both the real Visual editor and the
- * object mini editor itself, so an object can be built up out of other,
- * already-saved objects too. A trailing "New object..." button opens a
- * brand new object in its own tab (openNewObjectEditor()); saving it there
- * refreshes OBJECTS_LIBRARY and this picker without a reload, see the
- * "objects_updated" storage listener in wireAddElementMenu().
+ * Swaps the menu into its "Add object" sub-view: two built-in entries, then
+ * every object saved to the shared library, each rebuilt as a group of
+ * freshly-idd elements at the point the menu was opened.
+ * @note The Light/Dark toggle and the reel pair are "for fun" extras rather
+ * than everyday building blocks, which is why they sit here rather than
+ * cluttering the root list.
+ * @note Built the same in both the real Visual editor and the object mini
+ * editor, so an object can be built out of other saved objects.
+ * @note A trailing "New object..." opens one in its own tab; saving it there
+ * refreshes this picker without a reload, via the storage listener.
  */
 function renderCtxMenuObjectPicker() {
   CTX_MENU.innerHTML =
@@ -16261,16 +15943,13 @@ function handleCtxAdd(kind) {
 }
 
 /**
- * Shows the "Add element" menu at (x, y), resetting it back to the root
- * list even if it was left mid sub-view from a previous open. Clamped to
- * stay inside the viewport so a right-click near an edge doesn't render
- * the menu partly off-screen.
+ * Shows the "Add element" menu at (x, y), resetting it to the root list even
+ * if it was left mid sub-view. Clamped to stay inside the viewport, so a
+ * right-click near an edge doesn't render it partly off-screen.
  * @param x left, document px
  * @param y top, document px
- * @param targetId the right-clicked element's id (see CTX_TARGET_ID), or
- *   null if the click landed on empty space
- * @param targetEl the actual right-clicked element (see CTX_TARGET_EL), or
- *   null if the click landed on empty space
+ * @param targetId the right-clicked element's id, or null for empty space
+ * @param targetEl the actual right-clicked element, or null for empty space
  */
 function showCtxMenu(x, y, targetId, targetEl) {
   if (!CTX_MENU) buildCtxMenu();
@@ -16284,12 +15963,11 @@ function showCtxMenu(x, y, targetId, targetEl) {
 }
 
 /**
- * Keeps the menu fully on screen at CTX_POS, its own size measured as it
+ * Keeps the menu fully on screen at CTX_POS, its size measured as it
  * currently stands. Called on every open, and again by any sub-view whose
  * content is a different SIZE than the root list it replaced - the links view
- * (renderCtxMenuLinkList()) is much wider, so a right-click near the right
- * edge would otherwise leave half of it past the window with no way to reach
- * the url fields.
+ * is much wider, so a right-click near the right edge would otherwise leave
+ * half of it past the window with no way to reach the url fields.
  */
 function clampCtxMenu() {
   var w = CTX_MENU.offsetWidth, h = CTX_MENU.offsetHeight;
@@ -16310,12 +15988,11 @@ function hideCtxMenu() {
 }
 
 /**
- * Wires up the right-click "Add element" menu, only called in the ta
- * portal's Visual editor tab alongside wireResizable()/wireClickToEdit().
- * Replaces the browser's own context menu everywhere in the editor. Also
- * owns the outside-click/Escape dismissal for the ring's layer-order popover
- * (see toggleLayerMenu() in wireResizable()), since both are the same kind
- * of floating menu and only ever exist together in this tab.
+ * Wires up the right-click "Add element" menu, only called in the portal's
+ * Visual editor tab. Replaces the browser's own context menu throughout.
+ * @note Also owns the outside-click and Escape dismissal for the ring's
+ * layer-order popover, since both are the same kind of floating menu and only
+ * ever exist together in this tab.
  */
 function wireAddElementMenu() {
   document.addEventListener("contextmenu", function (e) {
@@ -16380,14 +16057,11 @@ function wireAddElementMenu() {
         active.tagName === "TEXTAREA" || active.tagName === "SELECT")) return;
     deselectAll();
   });
-  /* object-editor.js's saveObject() stamps this key after a successful save
-     (a plain value, its content doesn't matter, only the change itself
-     does); the "storage" event only ever fires in OTHER same-origin tabs,
-     never the one that made the write, which is exactly what's wanted here,
-     the object editor tab notifying this one. Re-fetches the library so a
-     freshly-saved object is placeable right away, and re-renders the
-     picker sub-view immediately too if it's what's currently showing,
-     rather than making the ta close and reopen the menu to see it. */
+  /* the object editor stamps this key after a successful save - the value
+     doesn't matter, only the change. "storage" fires only in OTHER same-origin
+     tabs, which is exactly what's wanted: the object editor notifying this
+     one. Re-fetches the library so a freshly-saved object is placeable right
+     away, and re-renders the picker if it's currently showing. */
   window.addEventListener("storage", function (e) {
     if (e.key !== "objects_updated") return;
     fetchObjectsLibrary().then(function (list) {
@@ -16405,22 +16079,15 @@ var JUST_DRAGGED = false;
 
 /**
  * Sets up the visual editor's shared selection ring: clicking any tagged
- * element (text field, image, icon, card, nav, section, footer, button,
- * day row, tile, anything carrying a data-edit-id or data-resize-id)
- * attaches the ring to it, and the ring stays there (sticky selection)
- * until a different tracked element is clicked or empty space clears it,
- * regardless of what the mouse hovers over in between. This matters once
- * an element ends up behind another one (moved there, or just naturally
- * stacked that way): a plain click-drag on its own body can only ever
- * reach whichever element is topmost at that pixel, but the ring's own
- * move handle floats above everything, so a selected-but-covered element
- * can still be dragged by it as long as it hasn't been deselected. Buttons
- * are single tagged elements, so their text box IS the button itself;
- * every other text field is its own box, fully independent of whatever
- * container it sits in. Moving doesn't need the handle: dragging anywhere
- * on the element itself moves it too, with a small threshold so a plain
- * click still clicks (and still opens a text edit). Only called in the ta
- * portal's Visual editor tab alongside wireClickToEdit().
+ * element attaches the ring to it, and it stays there until a different
+ * tracked element is clicked or empty space clears it, whatever the mouse
+ * hovers over in between. Only called in the portal's Visual editor tab.
+ * @note That stickiness matters once an element ends up behind another: a
+ * click-drag on its own body can only reach whichever element is topmost at
+ * that pixel, but the ring's move handle floats above everything, so a
+ * selected-but-covered element can still be dragged by it.
+ * @note Moving doesn't need the handle either - dragging anywhere on the
+ * element moves it, with a small threshold so a plain click still clicks.
  */
 function wireResizable() {
   buildRing();
@@ -16641,15 +16308,12 @@ function wireResizable() {
     toggleSnapping();
   });
 
-  /* Arrow keys nudge whatever the ring is currently on, 1px a press, 10px
-     with shift held, for lining something up more precisely than a mouse
-     drag can manage. Same guards as Delete/Backspace above (a locked
-     element can't be nudged either, same rule a drag already follows, see
-     startMoveDrag()), plus its own one-entry-per-press undo step since
-     each press is already its own discrete action, not a drag gesture.
-     Deliberately NOT snapped: this is the one way to place something a few
-     px off a neighbour's edge without turning snapping off, see the SNAPPING
-     section. */
+  /* Arrow keys nudge whatever the ring is on, 1px a press, 10px with shift,
+     for lining something up more precisely than a drag can manage. Same
+     guards as Delete above, plus its own one-entry-per-press undo step, since
+     each press is already a discrete action rather than a gesture.
+     Deliberately NOT snapped: this is the one way to place something a few px
+     off a neighbour's edge without turning snapping off. */
   var ARROW_DELTAS = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] };
   document.addEventListener("keydown", function (e) {
     var d = ARROW_DELTAS[e.key];
@@ -16686,22 +16350,17 @@ function wireResizable() {
     pushGroupMoveUndo(moves);
   });
 
-  /* Ctrl/Cmd+C copies whatever the ring is currently on (same eligibility
-     rule the right-click menu's Duplicate button already applies, see
-     isDuplicatable() and renderCtxMenuRoot()'s doc comment - a reel tile,
-     an extras/days tile role, a datetime element, and the countdown/
-     logistics tiles all render from structured data a generic clone can't
-     carry over, so none of those are copyable here either); Ctrl/Cmd+V
-     pastes it via pasteEditorClip(), and selects the fresh copy so it can
-     be dragged into place right away. Both are no-ops while a text field is
-     mid-edit or focus is sitting in a real form control, so normal text
-     copy/paste inside those still works untouched.
+  /* Ctrl/Cmd+C copies whatever the ring is on, under the same eligibility
+     rule the Duplicate button applies - a reel tile, a tile role, a datetime
+     element and the countdown tiles all render from structured data a generic
+     clone can't carry over, so none are copyable here either. Ctrl/Cmd+V
+     pastes and selects the fresh copy so it can be dragged straight away.
+     Both are no-ops while a text field is mid-edit or focus sits in a real
+     form control, so normal text copy/paste there still works.
 
-     The copy goes to the editor's own localStorage clipboard rather than a
-     variable in here, so it can be pasted onto a different page of the
-     editor - see the EDITOR CLIPBOARD section. The pointer position handed to
-     pasteEditorClip() below is only the fallback: a paste that has its original
-     (or an earlier paste of it) on screen is placed just off that instead. */
+     The copy goes to the localStorage clipboard rather than a variable here,
+     so it can be pasted onto a different page. The pointer position is only
+     the fallback: a paste with its original on screen is placed just off it. */
   var pointer = null;
   document.addEventListener("mousemove", function (e) {
     pointer = { x: e.pageX, y: e.pageY };
@@ -16733,12 +16392,12 @@ function wireResizable() {
 }
 
 /**
- * Briefly flashes a one-line message at the bottom of the editor. Only used
- * where an action has no visible result of its own to speak for it - copying
- * an element to the clipboard being the case it was written for, since the
- * page looks identical afterward and the whole point is that the copy is
- * still there on the next page.
+ * Briefly flashes a one-line message at the bottom of the editor.
  * @param msg the text to show
+ * @note Only used where an action has no visible result of its own - copying
+ * an element being the case it was written for, since the page looks
+ * identical afterward and the whole point is the copy surviving to the next
+ * page.
  */
 function showEditToast(msg) {
   var t = document.getElementById("editToast");
@@ -16755,14 +16414,12 @@ function showEditToast(msg) {
 }
 
 /**
- * Whether el is eligible for duplication: the same rule
- * renderCtxMenuRoot() applies to show/hide its own "Duplicate" button
- * (kept as a separate check here, rather than refactored to share code,
- * since the two need different combinations of the same flags - Delete
- * there only checks isSpecial, Duplicate checks isSpecial plus the tile-
- * role flags). See renderCtxMenuRoot()'s doc comment for why each of
- * these can't be safely cloned.
+ * Whether el is eligible for duplication - the same rule renderCtxMenuRoot()
+ * applies to show or hide its own "Duplicate" button.
  * @param el a tracked element (data-edit-id/data-resize-id), eg RING_EL
+ * @note Kept as a separate check rather than shared code, since the two need
+ * different combinations of the same flags: Delete there only checks
+ * isSpecial, Duplicate checks isSpecial plus the tile-role flags.
  */
 function isDuplicatable(el) {
   if (!el) return false;
@@ -16804,14 +16461,11 @@ function isDuplicatable(el) {
 var TEXT_TOOLBAR = null;
 var TEXT_TOOLBAR_EL = null;
 
-/* a small curated set rather than every Google Font under the sun: the
-   first three are the site's own fonts, referenced by css variable (see
-   :root in css/style.css) rather than hardcoded names so this list never
-   names a specific typeface that could go stale, whichever fonts those
-   variables actually point to is whatever shows up and gets used here. the
-   rest are common system fonts that need no extra network request and
-   render everywhere, keeping the "one student, one week, no build step"
-   feel instead of turning into a font-picker megabundle. */
+/* a small curated set rather than every Google Font under the sun. The first
+   three are the site's own, referenced by css variable rather than by name so
+   this list never names a typeface that could go stale. The rest are common
+   system fonts needing no extra request, keeping the "one student, one week,
+   no build step" feel rather than a font-picker megabundle. */
 var TEXT_FONTS = [
   { label: "Default", value: "" },
   { label: "Heading", value: "var(--font-head)" },
@@ -16824,12 +16478,12 @@ var TEXT_FONTS = [
 ];
 
 /**
- * The generated css font-family name a ta-uploaded font (see CUSTOM_FONTS)
- * is referenced by, both in the toolbar's select and in a saved
- * content.text_styles[id].fontFamily. Just the asset's own id, so it's
- * always unique and never collides with a built-in TEXT_FONTS value.
+ * The generated css font-family name a ta-uploaded font is referenced by,
+ * both in the toolbar's select and in a saved text style.
  * @param id the custom font asset's id
  * @return the css font-family name
+ * @note Just the asset's own id, so it's always unique and never collides
+ * with a built-in TEXT_FONTS value.
  */
 function customFontFamily(id) {
   return "cf" + id;
@@ -16842,15 +16496,13 @@ var INJECTED_FONTS = {};
 
 /**
  * Declares an @font-face rule for a ta-uploaded font so `font-family: name`
- * actually renders it, injected straight into <head>: unlike an icon/video/
- * image (which just need their url dropped into a src/href), a font needs a
- * page-wide declaration before any element can reference it by name. Runs
- * both in the editor (as soon as a font's picked or uploaded) and on every
- * ordinary page load (applyTextStyleOverrides(), live site included) since
- * a real visitor's browser needs the same declaration to render text a ta
- * styled with it, not just the ta's own portal tab.
+ * actually renders it, injected straight into <head>.
  * @param family the css font-family name (see customFontFamily())
  * @param url the uploaded font file's url
+ * @note Unlike an icon or image, which just need a url in a src, a font needs
+ * a page-wide declaration before anything can reference it by name.
+ * @note Runs both in the editor and on every ordinary page load, since a real
+ * visitor's browser needs the same declaration, not just the portal tab.
  */
 function ensureFontFace(family, url) {
   if (INJECTED_FONTS[family]) return;
@@ -16898,42 +16550,25 @@ var FLIP_ICONS = {
 };
 
 /**
- * Applies a foreColor pick from the floating toolbar's ".tt-color" swatch to
- * the current selection inside fieldEl, then tags whichever span(s) now
- * carry that exact color as belonging to the theme that's active right now
- * (data-light-color / data-dark-color, read back by repaintInlineTextColors()
- * on every load and theme flip - same independent-per-theme-value model as
- * the style popover's Color row, see resolveThemedColor()). There's no
- * separate "edit the other theme's color" toggle here the way the popover
- * has one: a ta gets that by flipping the site's own theme button (already
- * live-visible while editing) and picking a different color for the same
- * selection, which is the exact workflow the popover's own design already
- * settled on for "whatever's showing is whichever mode you're in".
- *
- * Re-tags by color VALUE, not by node identity: execCommand("foreColor") is
- * free to split/merge/replace the spans under the selection however the
- * browser sees fit, so there's no reliable "the node(s) I just touched" to
- * diff against. Walking the whole field afterward and tagging every element
- * whose live style.color now equals the just-picked hex is equivalent and
- * doesn't need that tracking: any span currently showing exactly that color,
- * however it got there, IS that theme's color for that span. A field is
- * always small (a heading, a paragraph), so re-scanning it on every pick is
- * cheap.
- *
- * Runs execCommand unconditionally even when forDark names the theme that
- * ISN'T currently showing (the toolbar's secondary ".tt-color-dark" input,
- * see buildTextToolbar()): that's the only way to get a concrete span to tag
- * for an arbitrary selection (see the note above on why this can't diff
- * against "before"), so the not-currently-active color briefly paints, then
- * repaintInlineTextColors() immediately corrects the visible result back to
- * whatever the CURRENTLY active theme's value resolves to - which is a no-op
- * repaint if that side's value didn't just change, exactly like editing a
- * hidden secondary swatch in the style popover doesn't repaint the element
- * either.
+ * Applies a foreColor pick to the current selection inside fieldEl, then tags
+ * whichever spans now carry that colour as belonging to the theme that's
+ * active right now - the same independent-per-theme model as the style
+ * popover's Color row.
  * @param fieldEl the contenteditable text field being edited
- * @param hex the "#rrggbb" just picked from a color input
- * @param forDark which theme this pick is for; defaults to whichever theme
- *   is actually active right now (the primary ".tt-color" input's case)
+ * @param hex the "#rrggbb" just picked from a colour input
+ * @param forDark which theme this pick is for; defaults to whichever is
+ *   actually active right now
+ * @note There's no separate "edit the other theme" toggle here: a ta gets
+ * that by flipping the site's own theme button and picking again, which is
+ * the workflow the popover's design already settled on.
+ * @note Re-tags by colour VALUE, not node identity: execCommand is free to
+ * split, merge or replace the spans under the selection however it likes, so
+ * there's no reliable "the nodes I just touched" to diff against. Any span
+ * showing exactly that colour, however it got there, IS that theme's colour
+ * for that span - and a field is small enough to re-scan on every pick.
+ * @note Runs execCommand even when tagging the theme that ISN'T showing,
+ * since that's the only way to get a concrete span to tag. The wrong colour
+ * briefly paints and is immediately corrected back by repaintInlineTextColors().
  */
 function applyThemedForeColor(fieldEl, hex, forDark) {
   var dark = forDark === undefined ? isDarkThemeActive() : forDark;
@@ -16948,29 +16583,20 @@ function applyThemedForeColor(fieldEl, hex, forDark) {
 }
 
 /**
- * Finds the data-light-color/data-dark-color span (see
- * applyThemedForeColor()) touching the current selection inside fieldEl, so
- * the toolbar's secondary color input can prefill with that span's explicit
- * other-theme value instead of just a blind autoDarkVariant() guess. Two
- * cases, since a tagged span can sit on either side of the selection's
- * common ancestor:
- *  - selection collapsed/inside the span (typical click-then-pick): walk UP
- *    from the common ancestor, same "closest tagged ancestor" idea as
- *    colorTarget()'s own data-edit-id walk.
- *  - selection wraps the whole span from outside it (typical of this
- *    editor's own click-to-edit, which auto-selects a field's ENTIRE
- *    contents on open, see wireTextField()'s click handler - if that's the
- *    field's one and only colored span, the common ancestor is the field
- *    itself, an ancestor of the tagged span, not the span or a descendant of
- *    it): fall back to checking whether exactly one tagged descendant is
- *    intersected by the range.
- * A selection spanning several differently-tagged spans resolves to
- * whichever one the selection starts in (first case) or null (second case,
- * ambiguous), an approximation fine for priming a swatch, not for
- * correctness (the actual color pick always re-tags whatever's really
- * selected, see applyThemedForeColor()).
+ * Finds the theme-tagged span touching the current selection inside fieldEl,
+ * so the toolbar's secondary colour input can prefill with that span's
+ * explicit other-theme value rather than a blind auto-variant guess.
  * @param fieldEl the contenteditable text field being edited
  * @return the tagged span element, or null if the selection isn't inside one
+ * @note Two cases, since a tagged span can sit on either side of the
+ * selection's common ancestor: a collapsed selection walks UP from that
+ * ancestor, while a selection that wraps the whole span from outside - which
+ * is what this editor's own click-to-edit produces, since it auto-selects the
+ * field's entire contents - falls back to checking whether exactly one tagged
+ * descendant is intersected.
+ * @note A selection spanning several differently-tagged spans resolves to the
+ * one it starts in, or null when ambiguous. Fine for priming a swatch: the
+ * actual pick always re-tags whatever is really selected.
  */
 function selectionColorSpan(fieldEl) {
   var sel = window.getSelection();
@@ -16991,13 +16617,12 @@ function selectionColorSpan(fieldEl) {
 }
 
 /**
- * Builds the floating text toolbar once, lazily, same singleton pattern as
- * the selection ring. Every button's mousedown is swallowed (preventDefault
- * + stopPropagation) before it can steal focus (and the field's selection
- * along with it) away from the field being edited, same trick the old A-/A+
- * pair already used; the font <select> can't have its mousedown prevented
- * without breaking the native dropdown, so its blur is special-cased instead
- * (see wireClickToEdit()'s blur handler).
+ * Builds the floating text toolbar once, lazily, the same singleton pattern
+ * as the selection ring.
+ * @note Every button's mousedown is swallowed before it can steal focus - and
+ * the field's selection with it - from the field being edited. The font
+ * <select> can't have its mousedown prevented without breaking the native
+ * dropdown, so its blur is special-cased instead.
  */
 function buildTextToolbar() {
   TEXT_TOOLBAR = document.createElement("span");
@@ -17043,20 +16668,16 @@ function buildTextToolbar() {
       '<button type="button" class="tt-link-ok" title="Apply">Link</button>' +
       '<button type="button" class="tt-link-rm" title="Remove this link">' + LINK_ICONS.unlink + '</button>' +
     '</span>' +
-    /* the padding editor, same full-width-row-of-its-own arrangement as the
-       link editor above and hidden the same way until its button is pressed.
-       Four sides rather than one number because that's what padding is for
-       here: pushing a button's wording off one particular edge (a theme
-       toggle's right-justified label, say) is the common case, an even inset
-       the other - hence the link toggle, which drives all four at once.
+    /* the padding editor, same full-width row as the link editor above and
+       hidden the same way until its button is pressed. Four sides rather than
+       one number because that's what padding is for here: pushing a button's
+       wording off one particular edge is the common case, an even inset the
+       other - hence the link toggle, which drives all four at once.
 
-       Each box wears its side's letter and lights the edge it belongs to on
-       the real element while it's hovered or focused. Four bare numbers in a
-       row are only readable if you already know the order they're in, and the
-       one person who does is whoever wrote them; the whole point of a padding
-       box is that you can see which edge is about to move. The <label> wrapper
-       is what makes the letter part of the box rather than a caption near it -
-       clicking it focuses the input. */
+       Each box wears its side's letter and lights that edge on the real
+       element while hovered. Four bare numbers in a row are only readable if
+       you already know the order, and the one person who does is whoever
+       wrote them. */
     '<span class="tt-padbar">' +
       '<label class="tt-pad-title">PAD</label>' +
       '<label class="tt-pad-cell" title="Top padding"><span>T</span>' +
@@ -17109,16 +16730,13 @@ function buildTextToolbar() {
      field's own blur handler already treats any focus landing inside
      TEXT_TOOLBAR as "don't end the edit", so no extra plumbing is needed
      to keep the edit alive while the picker's open. */
-  /* both swatches guard against a real <input type=color> footgun: opening
-     the native picker and confirming it (eg clicking its own "OK") fires
-     "input"/"change" even if the user never actually moved off the value it
-     was pre-filled with - which for the secondary swatch is very often just
-     an autoDarkVariant() SUGGESTION, never confirmed by a real ta edit. Left
-     unguarded, a ta merely opening the toggle to see what the other theme
-     would look like (see the toggle button below) and clicking away would
-     silently bake that guess in as a permanent override. dataset.baseline
-     tracks the value as of the last prime (updateTextToolbarState()) or the
-     last real commit, so only an actual change past that point counts. */
+  /* both swatches guard against an <input type=color> footgun: opening the
+     native picker and confirming it fires "input"/"change" even if the user
+     never moved off the pre-filled value - which for the secondary swatch is
+     often just an auto-variant SUGGESTION. Unguarded, a ta merely opening the
+     toggle to see what the other theme looks like would silently bake that
+     guess in. dataset.baseline tracks the value as of the last prime or
+     commit, so only a real change past that point counts. */
   var colorInput = TEXT_TOOLBAR.querySelector(".tt-color");
   colorInput.addEventListener("mousedown", function (e) { e.stopPropagation(); });
   colorInput.addEventListener("input", function () {
@@ -17477,22 +17095,17 @@ function updateFontDeleteButton() {
 }
 
 /**
- * Refreshes the toolbar's pressed/active look to match the current
- * selection and field: bold/italic/underline read from
- * document.queryCommandState() (only meaningful with the field focused),
- * align reads the field's own inline override (not its computed style, so a
- * field that merely inherits center alignment from a parent doesn't show as
- * "active" until a ta actually sets it here). The color swatches follow the
- * same primary/secondary split as the style popover's rows (see
- * primeThemedColorRow()): the primary ".tt-color" always shows whatever's
- * actually painted right now (already correct for either theme since
- * repaintInlineTextColors() keeps the selection's live color resolved), the
- * secondary ".tt-color-dark" shows the other theme's EXPLICIT value if the
- * selection sits inside a tagged span that has one (selectionColorSpan()),
- * else an autoDarkVariant() suggestion, hidden until the toggle button
- * reveals it - a fresh suggestion never counts as "the ta set this",
- * exactly the pollution bug primeThemedColorRow() itself had to be fixed
- * for.
+ * Refreshes the toolbar's pressed look to match the current selection and
+ * field.
+ * @note Bold/italic/underline read from document.queryCommandState(), only
+ * meaningful with the field focused. Align reads the field's own inline
+ * override rather than its computed style, so a field that merely inherits
+ * centre alignment doesn't show as active until a ta sets it here.
+ * @note The colour swatches follow the same primary/secondary split as the
+ * style popover: the primary always shows what's painted now, the secondary
+ * the other theme's EXPLICIT value if the selection sits in a tagged span
+ * that has one, else a suggestion, hidden until the toggle reveals it - a
+ * fresh suggestion never counts as "the ta set this".
  */
 function updateTextToolbarState() {
   if (!TEXT_TOOLBAR || !TEXT_TOOLBAR_EL) return;
@@ -17548,22 +17161,16 @@ function updateTextToolbarState() {
 }
 
 /**
- * Best-effort check for whether a font has real glyphs of its own for a
- * given run of text, rather than the browser silently substituting some
- * other font's letterforms for it - the same "measure against a neutral
- * sentinel" trick font-load detectors (eg FontFaceObserver) already use to
- * notice a webfont has swapped in, aimed here at glyph coverage instead of
- * load state: if a font-family stack (with a plain "monospace" fallback
- * behind it) measures a string at exactly the width plain "monospace" alone
- * measures the SAME string, the family never contributed its own glyphs for
- * it - the fallback did all the work. Every built-in choice in TEXT_FONTS
- * (the site's own three, Georgia/Times/Courier/Arial) is a normal
- * general-purpose typeface that measures differently from the neutral
- * baseline either way, so this only ever has real work to do on a
- * ta-uploaded display font that turns out to be missing a whole case - see
- * updateCapsToggleLock().
+ * Best-effort check for whether a font has real glyphs of its own for a run
+ * of text, rather than the browser silently substituting another font's.
  * @param family a css font-family value, as currently applied to a field
  * @return a Promise resolving {hasUpper, hasLower}
+ * @note The same "measure against a neutral sentinel" trick font-load
+ * detectors use, aimed at glyph coverage instead of load state: if a stack
+ * with a monospace fallback measures a string at exactly the width monospace
+ * alone does, the family never contributed its own glyphs.
+ * @note Every built-in choice measures differently from that baseline either
+ * way, so this only has real work to do on a ta-uploaded display font.
  */
 function fontCaseCoverage(family) {
   var upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -17590,22 +17197,16 @@ function fontCaseCoverage(family) {
 }
 
 /**
- * Locks/unlocks the toolbar's caps toggle for the field currently being
- * edited, off a live glyph-coverage check of whatever font is actually
- * applied to it right now (see fontCaseCoverage()). A font missing an
- * entire case can't honestly render the other state: turning caps off on an
- * uppercase-only display font wouldn't reveal real lowercase letters, it
- * would just show whatever the browser silently substitutes instead - so
- * the toggle disables itself rather than offering a control that can't do
- * anything but show broken text. A font with full coverage (every built-in
- * choice, and most uploaded ones) leaves the toggle exactly as freely
- * clickable as bold/italic/underline already are.
- *
- * Runs async (glyph measurement needs the font to have actually loaded, see
- * fontCaseCoverage()) - by the time it resolves the ta may have blurred the
- * field or picked a different font already, so it re-checks TEXT_TOOLBAR_EL
- * is still this exact field before touching the button.
+ * Locks or unlocks the toolbar's caps toggle for the field being edited, off
+ * a live glyph-coverage check of whatever font is applied to it.
  * @param el the field currently being edited
+ * @note A font missing an entire case can't honestly render the other state:
+ * turning caps off on an uppercase-only display font wouldn't reveal real
+ * lowercase, just whatever the browser substitutes - so the toggle disables
+ * itself rather than offering a control that can only show broken text.
+ * @note Runs async, since glyph measurement needs the font to have loaded. By
+ * the time it resolves the ta may have blurred the field or changed font, so
+ * it re-checks this is still the same field before touching the button.
  */
 function updateCapsToggleLock(el) {
   if (!TEXT_TOOLBAR) return;
@@ -17651,15 +17252,14 @@ function showTextToolbar(el) {
 }
 
 /**
- * Parks the toolbar just above the field it's editing (below it if there's no
- * room), clamped inside the viewport. Split out of showTextToolbar() because
- * the toolbar's height isn't fixed for the life of an edit session: opening
- * the link bar (see buildTextToolbar()) adds a whole row, and a toolbar
- * positioned for its old height would then overlap the very text a ta is
- * trying to link. Every caller re-measures rather than caching, since the
- * toolbar also wraps onto extra rows on its own past a certain width
- * (flex-wrap, see .text-toolbar's max-width) - its real height can only be
- * read off the rendered element.
+ * Parks the toolbar just above the field it's editing (below if there's no
+ * room), clamped inside the viewport.
+ * @note Split out of showTextToolbar() because the toolbar's height isn't
+ * fixed for the life of a session: opening the link bar adds a row, and a
+ * toolbar positioned for its old height would overlap the very text being
+ * linked.
+ * @note Every caller re-measures rather than caching, since the toolbar also
+ * wraps onto extra rows on its own past a certain width.
  */
 function positionTextToolbar() {
   if (!TEXT_TOOLBAR || !TEXT_TOOLBAR_EL) return;
@@ -17856,20 +17456,16 @@ function buildFormulaMenu() {
 }
 
 /**
- * Shows/hides the menu's Of/Expression/Decimals rows and refills the
- * Variable/Of selects for whichever shape is now picked - "value" is the
- * only one that accepts a non-number variable and has no second operand,
- * every other one needs two number-typed variables, and "custom" needs
- * neither because the ta is writing the expression themselves. Also drives
- * the Decimals row's visibility off the currently-picked A variable's type
- * for "value" (a string/boolean/datetime value has no decimal places to
- * speak of), and always hides it for "fraction" (always whole numbers).
- *
- * Both selects are SCOPED to the field being edited (see
- * pickableVariables()): a field inside Day 1's tile offers Day 1's own five
- * locals and no other day's, and a field inside no tile at all offers none
- * of them. Offering every day's at once was offering bindings that, on a
- * template mirrored across every tile, were never the one the ta meant.
+ * Shows or hides the menu's rows and refills its selects for whichever shape
+ * is now picked: "value" is the only one that accepts a non-number variable
+ * and has no second operand, every other needs two numbers, and "custom"
+ * needs neither since the ta writes the expression themselves.
+ * @note The Decimals row's visibility follows the picked variable's type for
+ * "value", and is always hidden for "fraction", which is whole numbers.
+ * @note Both selects are SCOPED to the field being edited: a field inside Day
+ * 1's tile offers Day 1's locals and no other day's. Offering every day's at
+ * once was offering bindings that, on a template mirrored across every tile,
+ * were never the one the ta meant.
  */
 function refreshFormulaMenuRows() {
   var op = FX_MENU.querySelector(".fxm-op").value;
@@ -17905,12 +17501,13 @@ function refreshFormulaMenuRows() {
 }
 
 /**
- * The {...} run of text the caret is currently sitting in, if any - what the
- * menu opens ON rather than beside. Replaces the old "did the ta click an
- * fx-chip" test: mid-edit a reference is text, so the equivalent question is
- * whether the caret is inside one of this text node's tokens.
+ * The {...} run of text the caret is sitting in, if any - what the menu opens
+ * ON rather than beside.
  * @param field the field being edited
  * @return {node, start, end, body}, or null
+ * @note Replaces the old "did the ta click an fx-chip" test: mid-edit a
+ * reference is text, so the equivalent question is whether the caret is
+ * inside one of this text node's tokens.
  */
 function tokenAtSelection(field) {
   var sel = window.getSelection();
@@ -17933,12 +17530,12 @@ function tokenAtSelection(field) {
 
 /**
  * Reads one expression back into the menu's own controls, so a reference
- * built here (or typed by hand in the same shape) can be reopened and
- * adjusted with the pickers rather than only as raw text. Anything the
- * ready-made shapes can't describe falls through to null, which is what puts
- * the menu into its "custom" mode with the expression itself in the box.
+ * built here - or typed by hand in the same shape - can be reopened and
+ * adjusted with the pickers rather than only as raw text.
  * @param expr the expression source
  * @return {op, a, b} with a/b as variable tokens, or null
+ * @note Anything the ready-made shapes can't describe falls through to null,
+ * which puts the menu into "custom" mode with the expression in the box.
  */
 function decomposeExpression(expr) {
   var ast = fxParse(expr);
@@ -17970,12 +17567,12 @@ function selectKeyForToken(token) {
 }
 
 /**
- * Opens the formula menu on the field being edited. If the caret is sitting
- * inside a {...} reference, the menu prefills from it and replaces it on OK;
- * otherwise it inserts a new one at the caret. Only ever called while
- * fieldEl is already mid-edit (isContentEditable), from the toolbar's fx
- * button - there are no chips left to click mid-edit, see chipsToNotation().
+ * Opens the formula menu on the field being edited: if the caret sits inside
+ * a {...} reference the menu prefills from it and replaces it on OK,
+ * otherwise it inserts a new one at the caret.
  * @param fieldEl the data-edit-id field being edited
+ * @note Only ever called while fieldEl is already mid-edit, from the
+ * toolbar's fx button - there are no chips left to click mid-edit.
  */
 function openFormulaMenu(fieldEl) {
   if (!FX_MENU) buildFormulaMenu();
@@ -18033,17 +17630,14 @@ function closeFormulaMenu() {
 }
 
 /**
- * Writes the menu's result into the field as plain text - replacing the
- * token it opened on, or inserting at the caret position captured when it
- * opened (FX_MENU_RANGE).
- *
- * Deliberately does NOT call commitTextFieldChange(): the field is still
- * mid-edit and what's just been written is notation, not a chip. Its blur
- * handler parses the whole field and commits once, so using the menu is one
- * undo step alongside everything else typed in the same session rather than
- * a separate one - and no half-edited notation is ever mirrored onto the
- * other tiles sharing this template.
+ * Writes the menu's result into the field as plain text - replacing the token
+ * it opened on, or inserting at the caret position captured when it opened.
  * @param text the "{...}" notation, or "" to delete the token
+ * @note Deliberately does NOT commit: the field is still mid-edit and what's
+ * been written is notation, not a chip. Its blur handler parses and commits
+ * once, so using the menu is one undo step alongside everything else typed in
+ * the same session, and no half-edited notation is ever mirrored onto the
+ * other tiles sharing this template.
  */
 function writeFormulaMenuToken(text) {
   var field = FX_MENU_FIELD;
@@ -18104,22 +17698,17 @@ function removeFormulaMenuToken() {
 }
 
 /**
- * Whether a field paints a background of its own, and so already has a
- * colour its own text was written to be legible against.
- *
- * Decides whether an open edit gets the flat ".editing-backdrop" surface
- * behind it (see css/style.css). Text with nothing behind it wants that
- * backdrop; a button or a tinted card must keep what it has, since the
- * backdrop would replace a designed pairing with a colour the text was never
- * chosen for - green button, dark label, surface-coloured backdrop, and the
- * wording vanishes into it.
- *
- * Computed style rather than el.style, so a colour off a stylesheet rule or a
- * ta's saved override counts the same as an inline one. A gradient or image
- * counts as painted too - there's no single colour to reason about, but
- * something is definitely there.
+ * Whether a field paints a background of its own, and so already has a colour
+ * its text was written to be legible against.
  * @param el the field about to be edited
  * @return true if the element paints its own background
+ * @note Decides whether an open edit gets the flat editing backdrop behind
+ * it. Text with nothing behind it wants that; a button or tinted card must
+ * keep what it has, since the backdrop would replace a designed pairing with
+ * a colour the text was never chosen for - green button, dark label,
+ * surface-coloured backdrop, and the wording vanishes into it.
+ * @note Computed style rather than el.style, so a stylesheet rule or a saved
+ * override counts the same as an inline one. A gradient counts as painted.
  */
 function hasOwnBackdrop(el) {
   var cs = window.getComputedStyle(el);
@@ -18136,12 +17725,11 @@ function hasOwnBackdrop(el) {
 }
 
 /**
- * Wires up one data-edit-id element as a click-to-edit field: shared by
- * wireClickToEdit()'s initial pass over every template field and
- * addCustomElement() for a text/button field created on the fly through
- * the right-click "Add element" menu, so a brand new field behaves exactly
- * like one that's been there since the template loaded.
+ * Wires up one data-edit-id element as a click-to-edit field.
  * @param el the element to wire up
+ * @note Shared by wireClickToEdit()'s initial pass over every template field
+ * and by addCustomElement() for one created on the fly, so a brand new field
+ * behaves exactly like one that's been there since the template loaded.
  */
 function wireTextField(el) {
   /* undo neuterLink()'s dimming, if any: an editable element should look
@@ -18238,19 +17826,17 @@ function wireTextField(el) {
 }
 
 /**
- * Commits a text field's edit session: pushes an undo step (if anything
- * actually changed), persists, and syncs any duplicate elements sharing the
- * same data-edit-id. Called from wireTextField()'s blur handler for a normal
- * typed edit, and from the right-click menu's own chip-restoring actions
- * (insertDaysChip() and friends, which run on a field that ISN'T being
- * edited) - a chip is just more of the field's own innerHTML, so both paths
- * commit identically and get full undo/redo for free, no separate action
- * type needed. The ƒx menu deliberately doesn't come through here: it writes
- * notation into a field already mid-edit, and that field's own blur commits
- * the lot as one step, see writeFormulaMenuToken().
+ * Commits a text field's edit session: pushes an undo step if anything
+ * changed, persists, and syncs any elements sharing the same data-edit-id.
  * @param el the data-edit-id field
  * @param before its innerHTML at the start of the edit session
  * @param after its innerHTML now
+ * @note Called both from the blur handler for a typed edit and from the
+ * right-click menu's chip-restoring actions, which run on a field that ISN'T
+ * being edited - a chip is just more of the field's innerHTML, so both paths
+ * commit identically and get undo for free with no separate action type.
+ * @note The fx menu deliberately doesn't come through here: it writes into a
+ * field already mid-edit, and that field's own blur commits the lot as one.
  */
 function commitTextFieldChange(el, before, after) {
   if (after !== before) {
@@ -18271,23 +17857,17 @@ var NATIVE_UNDO_INPUT_TYPES = {
 };
 
 /**
- * Whether ctrl+z/ctrl+y belongs to the focused control rather than to the
- * editor's own history. True only where the browser really has something to
- * undo - a field being typed into (eg the "Add element" menu's link input) -
- * because taking the shortcut off it would eat a ta's own keystrokes.
- *
- * The blanket "any INPUT, TEXTAREA or SELECT" this used to be swallowed the
- * shortcut on controls that have no native history at all, and the style
- * popover is built almost entirely out of those: change a background colour
- * and focus stays on the <input type="color"> that just committed the edit, so
- * every ctrl+z after it hit this guard and returned, silently. The edit WAS on
- * the stack (see the colour rows' own "change" handlers), and the portal's
- * Undo button - which calls straight through ClickEditHistory, no guard in the
- * way - would have replayed it; from the keyboard it just looked like colours
- * weren't undoable. Nothing reaches the parent frame's copy of the shortcut
- * either (js/ta.js), since a keydown inside this iframe never leaves it.
+ * Whether ctrl+z belongs to the focused control rather than the editor's own
+ * history. True only where the browser really has something to undo - a field
+ * being typed into - since taking the shortcut off it would eat keystrokes.
  * @param el the focused element (document.activeElement)
  * @return true if the control should keep the shortcut for itself
+ * @note The blanket "any INPUT, TEXTAREA or SELECT" this used to be swallowed
+ * the shortcut on controls with no native history at all, and the style
+ * popover is built almost entirely from those: change a colour and focus
+ * stays on the input that committed it, so every ctrl+z after hit this guard
+ * silently. The edit WAS on the stack and the portal's Undo button would have
+ * replayed it; from the keyboard colours just looked un-undoable.
  */
 function ownsNativeUndo(el) {
   if (!el) return false;
@@ -18297,13 +17877,12 @@ function ownsNativeUndo(el) {
 }
 
 /**
- * Turns every data-edit-id element into a click-to-edit field, only called
- * in the ta portal's Visual editor tab (instructor.html/js/ta.js) with
- * &edit=1 set (see isEditMode()). Edits save straight into localStorage's
- * preview_content snapshot (the same one js/ta.js's
- * tryRestoreFromPreview() already restores unsaved work from), since the
- * iframe is same-origin with the ta portal tab and shares it, so no
- * postMessage plumbing is needed to get the edit back to the portal.
+ * Turns every data-edit-id element into a click-to-edit field, only called in
+ * the portal's Visual editor tab with &edit=1 set.
+ * @note Edits save straight into the preview_content snapshot the portal
+ * already restores unsaved work from: the iframe is same-origin with the
+ * portal tab and shares it, so no postMessage plumbing is needed to get an
+ * edit back out.
  */
 function wireClickToEdit() {
   document.body.classList.add("edit-mode");
@@ -18360,49 +17939,35 @@ function redoEdit() {
 }
 
 /**
- * Replays one undo/redo stack entry. "before"/"after" mean whatever state
- * of the element that side of the action represents (side is "before" for
- * an undo, "after" for a redo), same idea for every type:
+ * Replays one undo/redo stack entry.
+ * @param action the stack entry
+ * @param side "before" or "after", which side of the action to restore
+ * @note "before"/"after" mean whatever state of the element that side
+ * represents - "before" for an undo, "after" for a redo - for every type:
  *  - "text": innerHTML
  *  - "delete": existed (before) vs hidden (after)
  *  - "move": {tx, ty}
- *  - "resize": {w, h, tx, ty} (a resize can also shift position, see
- *    startResizeDrag()). A TILE resize carries an extra action.area,
- *    {id, before, after}, for the container whose own saved height the drag
- *    changed on the way past - see growFlowAreaForTiles()/pushResizeUndo()
+ *  - "resize": {w, h, tx, ty}, since a resize can also shift position. A TILE
+ *    resize carries an extra action.area for the container whose saved height
+ *    the drag changed on the way past
  *  - "fontsize": css font-size, or "" for the template default
- *  - "align"/"letterspacing"/"texttransform": the css value, or "" for the
- *    template default
- *  - "fontfamily": {family, url} (url only set for a ta-uploaded font)
- *  - "add": existed (after) vs hidden (before), same shape as "delete", just
- *    the two sides swapped (see addCustomElement())
- *  - "layer": no before/after value, just replays moveLayer(id, +-dir)
- *  - "layerorder": {before, after} full LAYER_ORDER snapshots (a to-top/
- *    to-bottom jump isn't its own inverse like an adjacent swap is, so the
- *    whole stack is stored on both sides, see moveLayerExtreme())
- *  - "fixed": no before/after value either, toggleFixed(id) is its own
- *    inverse so either side just calls it again
- *  - "datetime": {target, format, strftime} (a placed datetime custom
- *    element's edited target/display format/pattern, see buildStyleMenu()'s
- *    commitDatetimeUndo())
- *  - "darkcolor"/"darktextcolor"/"darkfill": the style popover's "dark mode
- *    color" sub-row for Color/Text color/Fill, a css color string or "" for
- *    the auto-computed variant (see resolveThemedColor()/autoDarkVariant())
- *  - "darkborder": same idea, a css color string or "" (only the color
- *    half of the Border row is theme-dependent, see applyBorderOverrides())
- *  - "flip_h"/"flip_v": no before/after value, its own toggle is self-
- *    inverse, same idea as "shadow"
- *  - "rotate": a whole-number degrees value, or 0 for the template default
- *  - "hovercolor"/"activecolor"/"darkhovercolor"/"darkactivecolor": a
- *    button's Hover color/Click color rows, same idea as "fill"/"darkfill"
- *  - "navstate": "out"/"in"/"both", a placed nav button's "Shown to" switch
- *    (see navStateForDescriptor()) - three states, so unlike the self-inverse
- *    toggles below it stores a real value on each side
- *  - "videoplayback": no before/after value either, one of a video's three
- *    playback switches (action.key, see VIDEO_PLAYBACK_KEYS) - flipping it
- *    again is its own inverse, same as "shadow"
- * @param action the stack entry
- * @param side "before" or "after", which side of the action to restore
+ *  - "align"/"letterspacing"/"texttransform": the css value, or ""
+ *  - "fontfamily": {family, url} (url only for a ta-uploaded font)
+ *  - "add": the same shape as "delete" with the two sides swapped
+ *  - "layer": no value, just replays moveLayer(id, +-dir)
+ *  - "layerorder": full LAYER_ORDER snapshots on both sides, since a to-top
+ *    jump isn't its own inverse the way an adjacent swap is
+ *  - "fixed": no value either - toggleFixed(id) is its own inverse
+ *  - "datetime": {target, format, strftime}
+ *  - "darkcolor"/"darktextcolor"/"darkfill": a css colour, or "" for the
+ *    auto-computed variant
+ *  - "darkborder": same, since only the colour half of Border is themed
+ *  - "flip_h"/"flip_v": no value, self-inverse like "shadow"
+ *  - "rotate": whole-number degrees, or 0 for the default
+ *  - "hovercolor"/"activecolor" and their dark pairs: as "fill"/"darkfill"
+ *  - "navstate": "out"/"in"/"both" - three states, so unlike the toggles it
+ *    stores a real value on each side
+ *  - "videoplayback": no value, one of a video's three switches (action.key)
  */
 function applyHistoryAction(action, side) {
   var val = action[side];
@@ -18965,19 +18530,17 @@ function applyHistoryAction(action, side) {
 }
 
 /**
- * Persists one click-to-edit change into the preview snapshot in
- * localStorage, so it round-trips through the same unsaved-draft mechanism
- * as every other in-progress ta portal edit (see js/ta.js's
- * tryRestoreFromPreview()/openPreview()). Routes logistics tile text
- * (data-edit-id "logistics.<i>.big"/"logistics.<i>.lbl") straight into
- * content.logistics itself, since that array - not the template - is what
- * those tiles render from (see logisticsTile()), so an override keyed by id
- * would be read by nothing. Everything else (hardcoded template copy)
- * keeps using content.text, dropping the key entirely once it's edited back
- * to the page's own default so saved blobs don't carry no-op overrides.
+ * Persists one click-to-edit change into the preview snapshot, so it
+ * round-trips through the same unsaved-draft mechanism as every other
+ * in-progress portal edit.
  * @param id the element's data-edit-id
  * @param html the element's current innerHTML
  * @param defaultHtml the template's original innerHTML for that element
+ * @note Logistics tile text goes straight into content.logistics, since that
+ * array - not the template - is what those tiles render from, so an override
+ * keyed by id would be read by nothing.
+ * @note Everything else keeps using content.text, dropping the key entirely
+ * once edited back to the default, so saved blobs carry no no-op overrides.
  */
 function saveEditedField(id, html, defaultHtml) {
   var raw;
@@ -19007,33 +18570,21 @@ function saveEditedField(id, html, defaultHtml) {
 
 /**
  * Keeps a field's data-overridden flag in step with whether it actually has a
- * saved override right now. applyTextOverrides() stamps that flag once per
- * load; this is the same stamp applied the moment an edit changes the answer,
- * and it's what makes a ta's own wording survive on the two elements that
- * would otherwise rewrite their own text underneath them:
- *
- * - a theme toggle's ".tic-label", rewritten to "Light mode"/"Dark mode" on
- *   every single flip (updateIcon() in js/theme.js)
- * - the navbar's Dashboard/Staff Portal link, rewritten per signed-in role
- *   (applyNavSessionState())
- *
- * Both already ask the flag first and leave an overridden field alone. What
- * they were asking was a flag last computed at page load, so a wording typed
- * DURING this session still read as "no override" - type your own words onto
- * the toggle, flip the theme, and they were gone, replaced by the default,
- * with nothing on screen to say the text you saved was still saved. It came
- * back on the next reload, and vanished again on the next flip.
- *
- * Stale the other way too: clear a field back to the template's own wording
- * and its override is dropped from the snapshot, but the flag stayed at "1"
- * and the label never went back to tracking the theme.
- *
- * Applied to every element sharing the id, not just the edited node, for the
- * same reason mirrorEditedField() syncs their text: a mirrored field is the
- * same field, and the copy in the footer has to answer the question the same
- * way as the copy in the nav.
+ * saved override right now - the same stamp applyTextOverrides() makes once
+ * per load, applied the moment an edit changes the answer.
  * @param id the field's data-edit-id
  * @param on whether a saved override now exists for it
+ * @note It's what makes a ta's wording survive on the two elements that
+ * rewrite their own text underneath them: a theme toggle's label, rewritten
+ * on every flip, and the navbar's Dashboard link, rewritten per role.
+ * @note Both already ask the flag and leave an overridden field alone - but
+ * they were asking a flag last computed at page load, so wording typed DURING
+ * the session read as "no override". Type your own words onto the toggle,
+ * flip the theme, and they were gone until the next reload.
+ * @note Stale the other way too: clear a field back to the template's wording
+ * and the override is dropped, but the flag stayed at "1".
+ * @note Applied to every element sharing the id, for the same reason their
+ * text is mirrored: a mirrored field is the same field.
  */
 function markTextOverridden(id, on) {
   document.querySelectorAll('[data-edit-id="' + id + '"]').forEach(function (el) {
@@ -19059,25 +18610,19 @@ function saveAreaFlow(id, flow) {
 }
 
 /**
- * Persists a resize-handle drag (see startResizeDrag()) into the preview
- * snapshot, the same localStorage draft saveEditedField() uses, so a
- * resized element round-trips through Apply/profiles exactly like an
- * edited caption does.
+ * Persists a resize-handle drag into the preview snapshot, the same draft
+ * saveEditedField() uses, so a resized element round-trips through
+ * Apply/profiles exactly like an edited caption.
  * @param id the element's data-edit-id or data-resize-id
- * @param size the new size ({w, h}), or null to clear back to the
- *   template default
+ * @param size the new size ({w, h}), or null to clear back to the default
  */
 function saveEditedSize(id, size) {
-  /* EDIT_SIZES is the live mirror of content.sizes that applyTileFlow() reads
-     a flow container's locked height and a tile's track size back out of (see
-     applySizeOverrides()), so it has to learn about a resize at the same
-     moment the snapshot does. Leaving it stale is what snapped the dashboard's
-     tile containers back the instant a resize drag was let go: onUp committed
-     the new height here, then re-ran applyTileFlow(), which looked the
-     container up in a map that still held the PREVIOUS height (or, with none
-     saved, re-measured the tiles) and pinned it straight back - while the
-     dragged height sat on in the element's own dataset, ready to reappear as a
-     jump the next time getSize() read it at the start of another drag. */
+  /* EDIT_SIZES is the live mirror of content.sizes applyTileFlow() reads a
+     container's locked height and a tile's track size back out of, so it has
+     to learn about a resize at the same moment the snapshot does. Leaving it
+     stale is what snapped the tile containers back the instant a drag was let
+     go: onUp committed the new height, then re-ran applyTileFlow(), which
+     found the PREVIOUS height still in the map and pinned it straight back. */
   if (size == null) delete EDIT_SIZES[id];
   else EDIT_SIZES[id] = size;
   var raw;
@@ -19107,15 +18652,14 @@ function saveFontSize(id, px) {
 }
 
 /**
- * Persists one whole-field text style property (font family, alignment, or
- * letter spacing, see showTextToolbar()) into the preview snapshot, the same
- * localStorage draft every other override here uses. Grouped per id under
- * one object rather than three separate top-level maps since they're all
- * "how this text field is styled", not a resize/move/font-size, which
- * already have their own dedicated maps.
+ * Persists one whole-field text style property into the preview snapshot, the
+ * same draft every other override uses.
  * @param id the element's data-edit-id
  * @param prop "fontFamily", "align", or "letterSpacing"
- * @param value the new css value, or "" to clear back to the template default
+ * @param value the new css value, or "" to clear back to the default
+ * @note Grouped per id under one object rather than three top-level maps,
+ * since they're all "how this text field is styled" - unlike a resize or font
+ * size, which already have dedicated maps.
  */
 function saveTextStyle(id, prop, value) {
   var raw;
@@ -19131,28 +18675,24 @@ function saveTextStyle(id, prop, value) {
 }
 
 /**
- * Persists one element's padding (the text toolbar's Pad row, see
- * writeTextToolbarPadding()) into the preview snapshot. A map of its own
- * rather than a fourth key under text_styles: padding is box geometry, not
- * typography - it applies to anything with edges, and it belongs with the
- * size/position overrides in spirit even though it's stored the plain way.
+ * Persists one element's padding into the preview snapshot.
  * @param id the element's data-edit-id or data-resize-id
  * @param value a css padding shorthand, or "" to clear back to the default
+ * @note A map of its own rather than a fourth key under text_styles: padding
+ * is box geometry, not typography - it applies to anything with edges.
  */
 function savePadding(id, value) { saveEditedMapValue("padding", id, value); }
 
 /**
- * Persists a font choice (see showTextToolbar()'s font select) into the
- * preview snapshot, the same as saveTextStyle() but carrying the font
- * file's url alongside a ta-uploaded font's family name: a built-in
- * (TEXT_FONTS) has no url and never needs one, but a custom font's
- * @font-face has to be re-declared on every future load (see
- * applyTextStyleOverrides()), including for a real visitor who never opens
- * the ta portal at all, so the url has to travel with the saved style
- * rather than being looked up from the (ta-only) asset list at render time.
+ * Persists a font choice into the preview snapshot - as saveTextStyle(), but
+ * carrying the font file's url alongside a ta-uploaded font's family name.
  * @param id the element's data-edit-id
  * @param family the css font-family name, or "" to clear back to the default
- * @param url the custom font's file url, or "" for a built-in/cleared font
+ * @param url the custom font's file url, or "" for a built-in
+ * @note A built-in never needs a url, but a custom font's @font-face has to
+ * be re-declared on every future load, including for a visitor who never
+ * opens the portal - so the url travels with the saved style rather than
+ * being looked up from the ta-only asset list at render time.
  */
 function saveFontFamily(id, family, url) {
   var raw;
@@ -19219,12 +18759,10 @@ function responsivePosBaseWidth(id) {
 }
 
 /**
- * Persists a delete/restore (see deleteElement()) into the preview snapshot,
- * the same localStorage draft every other override here uses. Stored as a
- * flat list of hidden ids rather than a per-id boolean map so an untouched
- * blob's "hidden" key doesn't need to exist at all.
- * @param id the element's data-edit-id or data-resize-id
+ * Persists a delete or restore into the preview snapshot. * @param id the element's data-edit-id or data-resize-id
  * @param hidden true to hide/delete it, false to restore it
+ * @note Stored as a flat list of hidden ids rather than a per-id boolean map,
+ * so an untouched blob's "hidden" key doesn't need to exist at all.
  */
 function saveEditedVisibility(id, hidden) {
   var raw;
@@ -19256,14 +18794,13 @@ function saveEditedColor(id, value) {
 }
 
 /**
- * Persists a dark-mode color override (the style popover's "dark mode
- * color" toggle under the main Color row, see buildStyleMenu()) into the
- * preview snapshot, same draft as saveEditedColor(). "" clears the
- * override, falling back to the light color's auto-computed variant
- * (autoDarkVariant()) rather than to no color at all - only ever meaningful
- * on an id that already has a light-mode color saved.
+ * Persists a dark-mode colour override into the preview snapshot, the same
+ * draft as saveEditedColor().
  * @param id the element's data-edit-id or data-resize-id
- * @param value a css color string, or "" to clear back to the auto variant
+ * @param value a css colour string, or "" to clear back to the auto variant
+ * @note "" falls back to the light colour's auto-computed variant rather than
+ * to no colour at all, and is only meaningful on an id that already has a
+ * light-mode colour saved.
  */
 function saveEditedDarkColor(id, value) {
   var raw;
@@ -19294,12 +18831,11 @@ function saveEditedOpacity(id, value) {
 }
 
 /**
- * Persists a textbox's background fill from the style popover's Fill
- * control into the preview snapshot, the same draft everything else here
- * uses. Separate map from content.colors since a text field's "Color" row
- * already means its font color (see colorTarget()); fill is its surface.
+ * Persists a textbox's background fill into the preview snapshot.
  * @param id the element's data-edit-id
- * @param value a css color string, or "" to clear back to no fill
+ * @param value a css colour string, or "" to clear back to no fill
+ * @note A separate map from content.colors, since a text field's "Color" row
+ * already means its font colour; fill is its surface.
  */
 function saveEditedFill(id, value) {
   var raw;
@@ -19332,14 +18868,13 @@ function saveEditedDarkFill(id, value) {
 
 /**
  * Persists a value into one flat, id-keyed map of the preview snapshot,
- * deleting the key entirely when cleared - the shared body every
- * saveEdited*() function above hand-wrote per map; factored here only for
- * the four new progress-color maps (saveEditedProgressFill() etc. just
- * below) rather than retrofitted onto the older ones, to keep this change
- * from touching code it doesn't need to.
+ * deleting the key entirely when cleared.
  * @param mapKey the snapshot's top-level key, eg "progress_fill"
  * @param id the element's data-resize-id
  * @param value any truthy value to store, or "" to delete the key
+ * @note The shared body every saveEdited*() above hand-wrote per map,
+ * factored out only for the newer progress-colour maps rather than
+ * retrofitted onto the older ones.
  */
 function saveEditedMapValue(mapKey, id, value) {
   var raw;
@@ -19387,13 +18922,12 @@ function saveEditedProgressTrack(id, value) { saveEditedMapValue("progress_track
 function saveEditedDarkProgressTrack(id, value) { saveEditedMapValue("dark_progress_track", id, value); }
 
 /**
- * Persists a button's Hover color/Click color pick from the style popover
- * into the preview snapshot, buttons only, same draft everything else here
- * uses. See applyStateColorOverrides()'s doc comment for why these
- * paint as css custom properties rather than a plain inline style.
+ * Persists a Hover colour or Click colour pick into the preview snapshot.
  * @param id the button's data-edit-id
- * @param value a css color string, or "" to clear back to the default
+ * @param value a css colour string, or "" to clear back to the default
  *   shared hover/press darken effect
+ * @note See applyStateColorOverrides() for why these paint as css custom
+ * properties rather than a plain inline style.
  */
 function saveEditedHoverColor(id, value) { saveEditedMapValue("hover_color", id, value); }
 
@@ -19423,12 +18957,11 @@ function saveEditedActiveColor(id, value) { saveEditedMapValue("active_color", i
 function saveEditedDarkActiveColor(id, value) { saveEditedMapValue("dark_active_color", id, value); }
 
 /**
- * Persists a button's text-color change from the style popover's Text
- * color control into the preview snapshot, the same draft everything else
- * here uses. Separate map from content.colors since a button's "Color" row
- * already means its background (see colorTarget()); this is its label.
+ * Persists a button's text-colour change into the preview snapshot.
  * @param id the button's data-edit-id
- * @param value a css color string, or "" to clear back to the default
+ * @param value a css colour string, or "" to clear back to the default
+ * @note A separate map from content.colors, since a button's "Color" row
+ * already means its background; this is its label.
  */
 function saveEditedTextColor(id, value) {
   var raw;
@@ -19529,13 +19062,12 @@ function saveEditedBorder(id, w, color) {
 }
 
 /**
- * Persists a dark-mode border-color override (the style popover's "dark
- * mode color" toggle under Border) into content.dark_border, same draft as
- * saveEditedBorder(). Only ever stores {color}: border width isn't
- * theme-dependent, the light side's own w always wins (see
- * applyBorderOverrides()).
+ * Persists a dark-mode border-colour override into content.dark_border, the
+ * same draft as saveEditedBorder().
  * @param id the element's data-edit-id or data-resize-id
- * @param color a css color string, or "" to clear back to the auto variant
+ * @param color a css colour string, or "" to clear back to the auto variant
+ * @note Only ever stores {color}: border width isn't theme-dependent, so the
+ * light side's own w always wins.
  */
 function saveEditedDarkBorder(id, color) {
   var raw;
@@ -19646,27 +19178,20 @@ function saveEditedRotate(id, deg) {
    THE LANDING PAGE'S TWO NAVBARS
 
    templates/index.html ships two complete <nav> elements, one for a signed-out
-   visitor (an "Access portal" button, and "Apply Now" among the links) and one
-   for someone already signed in (a Dashboard button and a Log out button, and
-   no invitation to sign up again). Exactly one of them is in the document at a
-   time, so on the live site this is invisible - it's just what the nav looks
-   like to whoever is reading it.
+   visitor and one for someone already signed in, and exactly one is in the
+   document at a time - so on the live site this is invisible.
 
    It used to be one nav that rewrote itself: the same button changed its own
-   text and href on load, and a hidden Log out button was un-hidden next to it.
-   That worked for a visitor and was unreachable for a ta - the visual editor
-   previews the page as a stranger sees it, so the signed-in nav could never be
-   looked at, let alone styled, and the self-rewriting button needed a special
-   case in applyTextOverrides() to stop a saved override for one state being
-   applied while the page was in the other.
+   text and href on load, and a hidden Log out button was un-hidden beside it.
+   That worked for a visitor and was unreachable for a ta - the editor previews
+   the page as a stranger sees it, so the signed-in nav could never be looked
+   at, let alone styled - and the self-rewriting button needed a special case
+   to stop one state's saved override being applied in the other.
 
    Two real navbars with no shared ids fixes both: each state is an ordinary
-   page a ta edits with the ordinary tools, and the Navbar switch in the
-   portal's editor chrome (js/ta.js's syncNavStateSwitch()) is the only new
-   concept. The cost, deliberately
-   accepted, is that they are genuinely separate - a wording or colour change
-   made to one navbar is a change to that state alone and has to be made in the
-   other state too.
+   page edited with the ordinary tools, and the portal's Navbar switch is the
+   only new concept. The cost, deliberately accepted, is that they really are
+   separate - a wording change to one has to be made in the other too.
    --------------------------------------------------------------------------- */
 
 /* which navbar is currently in the document flow: "out" (signed out) or "in"
@@ -19682,19 +19207,16 @@ function navStateIsIn() { return NAV_STATE === "in"; }
 
 /**
  * Shows the navbar for one state and takes the other out of the document,
- * along with any element a ta has placed that belongs to a specific state (a
- * placed Log out button is meaningless on a signed-out page, so it's tagged
- * data-nav-state="in" by buildCustomElementNode() and follows its navbar).
- *
- * Toggles a class rather than writing an inline display, so it can't fight -
- * or be silently undone by - the inline display a deleted element already
- * carries (see setHiddenVisual()): an element that's both deleted and in the
- * inactive state stays deleted when the state comes back.
- *
- * Also called from the portal across the iframe boundary, on every editor frame
- * load, to put back the navbar its switch was left on (js/ta.js's
- * pushNavStateToFrame()) - a reload here always starts signed out.
+ * along with any placed element belonging to a specific state - a placed Log
+ * out button is meaningless on a signed-out page, so it follows its navbar.
  * @param state "out" or "in"
+ * @note Toggles a class rather than writing an inline display, so it can't
+ * fight the inline display a deleted element already carries: an element
+ * that's both deleted and in the inactive state stays deleted when the state
+ * comes back.
+ * @note Also called from the portal across the iframe boundary on every
+ * editor frame load, to put back the navbar its switch was left on, since a
+ * reload here always starts signed out.
  */
 function applyNavState(state) {
   NAV_STATE = state === "in" ? "in" : "out";
@@ -19704,22 +19226,17 @@ function applyNavState(state) {
 }
 
 /**
- * Which session state(s) a placed Access portal / Dashboard / Log out button
- * is shown in: "out", "in", or "both".
- *
- * The kind supplies the default, and for a button that stays in the navbar
- * that default is the whole answer - a Log out button in the signed-in navbar
- * IS a signed-in thing. What the default couldn't express is the case this was
- * written for: an Access portal button dropped in the middle of the landing
- * page, hundreds of pixels from any navbar, as a call to action. Read as a
- * navbar button it's signed-out-only and every logged-in visitor loses it;
- * read as page furniture it should just be there. Only the ta knows which they
- * meant, so d.navState records it and the kind decides only where it starts.
- *
- * Absent (every element placed before this existed) means the kind's default,
- * so nothing that was already on a page moves.
+ * Which session state(s) a placed nav button is shown in.
  * @param d the element's custom_elements entry
  * @return "out", "in" or "both"
+ * @note The kind supplies the default, and for a button that stays in the
+ * navbar that's the whole answer. What it couldn't express is the case this
+ * was written for: an Access portal button dropped mid-page as a call to
+ * action. Read as a navbar button it's signed-out-only and every logged-in
+ * visitor loses it; read as page furniture it should just be there. Only the
+ * ta knows which they meant, so d.navState records it.
+ * @note Absent - every element placed before this existed - means the kind's
+ * default, so nothing already on a page moves.
  */
 function navStateForDescriptor(d) {
   if (!d) return "both";
@@ -19728,10 +19245,9 @@ function navStateForDescriptor(d) {
 }
 
 /**
- * Writes a placed nav button's "Shown to" choice: onto the descriptor (so it
- * survives Apply/reload), onto the live element, and then through
- * applyNavState() so the editor immediately shows what the switch it's
- * currently sitting on would show.
+ * Writes a placed nav button's "Shown to" choice: onto the descriptor so it
+ * survives Apply, onto the live element, and then through applyNavState() so
+ * the editor immediately shows what the current switch would show.
  * @param id the element's id
  * @param state "out", "in" or "both"
  */
@@ -19776,16 +19292,14 @@ function cycleCustomElementNavState(id) {
 /**
  * Takes one half of a two-state page out of the document, or puts it back -
  * the one primitive behind applyNavState() and applyDashView().
- *
- * Follows the element out of flow if a ta has moved or resized it: once
- * detached it's the .free-wrap around it that holds its place in the document
- * (see detachFromFlow()), so hiding the element alone would leave that wrap
- * behind as an empty gap the exact size of whatever just left. The class comes
- * off both either way before anything is added back, so the pair can't end up
- * half-hidden when a detach happens between two of these passes.
  * @param el the element carrying the state marker
  * @param cls the state's own "off" class (see STATE_VIEW_OFF_CLASSES)
  * @param off true to take it out of the document, false to put it back
+ * @note Follows the element out of flow if a ta has moved it: once detached
+ * it's the .free-wrap that holds its place, so hiding the element alone would
+ * leave that wrap behind as an empty gap the size of what just left. The
+ * class comes off both before anything is added back, so the pair can't end
+ * up half-hidden when a detach happens between two passes.
  */
 function setStateViewOff(el, cls, off) {
   var parent = el.parentNode;
@@ -19808,23 +19322,18 @@ var ANCHOR_PASS_PENDING = false;
 
 /**
  * Runs fn with BOTH sides of every two-state page in the document, then puts
- * the inactive ones back. The whole override pipeline measures elements as it
- * applies saved geometry (detachFromFlow() sizes an element's wrap from its
- * live rect), and an element inside a display:none navbar - or inside the
- * dashboard half that isn't on show - measures zero, so a size or position a
- * ta saved in one state would come back as a 0x0 box on any load that starts
- * in the other one. Laying both out for the duration is the fix, and it costs
- * nothing visually: this is one synchronous block, so the browser never paints
- * the intermediate both-at-once state.
- *
- * What it does cost is that the extra half is REAL flow while it's in there,
- * pushing everything below it down - by a navbar's height on the landing page,
- * by most of a screen on the dashboard, whose locked-out page is a full card.
- * Every measurement the pipeline takes is a width or a height, which that
- * shift doesn't touch; the one pass that reads document COORDINATES is
- * applyElementAnchors(), so it sits out this window and runs once at the end
- * instead, against the layout a visitor actually gets.
+ * the inactive ones back.
  * @param fn the work to run
+ * @note The override pipeline measures elements as it applies saved geometry,
+ * and an element inside a display:none navbar measures zero - so a size saved
+ * in one state would come back as a 0x0 box on any load starting in the
+ * other. Laying both out costs nothing visually: this is one synchronous
+ * block, so the browser never paints the both-at-once state.
+ * @note What it does cost is that the extra half is REAL flow while it's in
+ * there, pushing everything below it down. Every measurement the pipeline
+ * takes is a width or a height, which that shift doesn't touch; the one pass
+ * that reads document COORDINATES is applyElementAnchors(), so it sits out
+ * this window and runs once at the end against the real layout.
  */
 function withStateViewsLaidOut(fn) {
   var off = [];
@@ -19906,20 +19415,17 @@ function applyNavSessionState() {
 /* ---------------------------------------------------------------------------
    THE STUDENT DASHBOARD'S TWO PAGES
 
-   templates/dashboard.html carries two pages, exactly one of which is ever in
-   the document: the dashboard itself (#dashApp) and the locked-out page a
-   visitor with no session gets (#dashGate, "You need to log in"). On a real
-   visit js/dashboard.js's gateCheck() picks; in the visual editor the ta
-   always has a session, so the gate could never be looked at, let alone
-   styled - same dead end the landing page's signed-in navbar used to be in,
-   and fixed the same way: a switch beside the portal's page tabs (js/ta.js's
-   syncDashViewSwitch()) says which half the editor is showing.
+   templates/dashboard.html carries two pages, exactly one ever in the
+   document: the dashboard itself and the locked-out page a visitor with no
+   session gets. On a real visit gateCheck() picks; in the editor the ta always
+   has a session, so the gate could never be looked at, let alone styled - the
+   same dead end the signed-in navbar was in, fixed the same way, with a switch
+   beside the portal's page tabs.
 
-   Both halves are ordinary tagged markup, so the gate's badge, heading, blurb
-   and button are click-to-edit and resizable like anything else. Placed
-   elements are split too, by the half that was on show when they were placed
-   (see buildCustomElement()/addCustomElement()) - they have to be, since the
-   dashboard's own progress bar and two tile areas ARE placed elements and
+   Both halves are ordinary tagged markup, so the gate's badge, heading and
+   button are click-to-edit like anything else. Placed elements are split too,
+   by the half that was on show when they were placed - they have to be, since
+   the dashboard's own progress bar and tile areas ARE placed elements and
    would otherwise float over the locked-out page.
    --------------------------------------------------------------------------- */
 
@@ -19931,15 +19437,14 @@ var DASH_VIEW = "app";
 
 /**
  * Shows one half of the dashboard page and takes the other out of the
- * document. Toggles a class rather than writing an inline display for the
- * same reason applyNavState() does: it can't then fight - or be silently
- * undone by - the inline display a deleted element already carries (see
- * setHiddenVisual()).
- *
- * Also called from the portal across the iframe boundary on every editor
- * frame load, to put back the view its switch was left on (js/ta.js's
- * pushDashViewToFrame()) - a reload here always starts on the dashboard.
+ * document.
  * @param view "app" or "gate"
+ * @note Toggles a class rather than an inline display, for the same reason
+ * applyNavState() does: it can't then be silently undone by the inline
+ * display a deleted element already carries.
+ * @note Also called from the portal across the iframe boundary on every
+ * editor frame load, to put back the view its switch was left on - a reload
+ * here always starts on the dashboard.
  */
 function applyDashView(view) {
   DASH_VIEW = view === "gate" ? "gate" : "app";
@@ -19954,12 +19459,11 @@ function dashView() { return DASH_VIEW; }
 /**
  * Picks the half of the dashboard this visit should see - the session's job
  * on a real visit, the editor's switch in the portal - exactly as
- * applyNavSessionState() picks the navbar, and called from the same two
- * places for the same reasons: once from js/dashboard.js's gateCheck() on
- * DOMContentLoaded, so the right half is up before the content fetch
- * resolves, and again after every override pass, since a placed element only
- * carries its data-dash-view marker once renderCustomElements() has rebuilt
- * it. A no-op on every page that isn't the dashboard.
+ * applyNavSessionState() picks the navbar. A no-op on every other page.
+ * @note Called from the same two places for the same reasons: once on
+ * DOMContentLoaded so the right half is up before the fetch resolves, and
+ * again after every override pass, since a placed element only carries its
+ * data-dash-view marker once renderCustomElements() has rebuilt it.
  */
 function applyDashSessionState() {
   if (!document.querySelector("[data-dash-view]")) return;
@@ -19976,12 +19480,11 @@ function applyDashSessionState() {
 }
 
 /**
- * Flips which half of the dashboard the visual editor is showing (and
- * therefore editing), driven from the Page switch beside the portal's page
- * tabs (js/ta.js's toggleEditorDashView()). The dashboard tab's exact
- * counterpart to toggleNavState(), down to the selection and re-anchor
- * handling - the two halves are wildly different heights, so anything pinned
- * to an in-flow spacer has to re-pin here or it lands on top of the gate.
+ * Flips which half of the dashboard the editor is showing, driven from the
+ * Page switch beside the portal's tabs - the dashboard's exact counterpart to
+ * toggleNavState(), down to the selection and re-anchor handling.
+ * @note The two halves are wildly different heights, so anything pinned to an
+ * in-flow spacer has to re-pin here or it lands on top of the gate.
  */
 function toggleDashView() {
   applyDashView(DASH_VIEW === "gate" ? "app" : "gate");
@@ -19994,30 +19497,100 @@ function toggleDashView() {
   applyElementAnchors();
 }
 
+/* ---------------------------------------------------------------------------
+   THE LOGIN PAGE'S TIMED-OUT VIEW
+
+   The login page has two states a visitor can arrive in: the ordinary one, and
+   the one they get bounced to when idle.js signs them out mid-session
+   (?expired=1, see refreshLoginPage() in js/login.js). The only difference
+   between them is which of the failure line's two strings is showing - the
+   line carries both as separately editable fields rather than one js/login.js
+   rewrites at runtime, so a ta who reworded the failure doesn't find their
+   wording silently replaced on an expired bounce.
+
+   That second string was the one piece of the page nobody could look at
+   properly: it's shown by a state the editor never enters, so reaching it
+   meant knowing about a right-click entry on one specific element. Now it's a
+   switch beside the portal's page tabs, next to the two that solve the same
+   problem for the landing page's signed-in navbar and the dashboard's
+   locked-out half - the third instance of "one page, two states, only one of
+   them reachable while editing".
+
+   Page-wide rather than per element, which is what the old right-click entry
+   was: the switch says which state the ta is looking at, so every failure line
+   on the page answers to it, and the "Add element" menu names what it would
+   place accordingly. View state, never saved - what a real visitor sees is
+   decided by what actually happened to them.
+   --------------------------------------------------------------------------- */
+
+/* which state the login page is being looked at in: "normal" or "expired" */
+var LOGIN_VIEW = "normal";
+
+/** @return true while the timed-out wording is the one on show */
+function loginViewIsExpired() { return LOGIN_VIEW === "expired"; }
+
 /**
- * Wires the three nav buttons' actual behaviour. Delegated off document and
- * keyed on data-nav-el rather than on an id or an href, so a button a ta
- * places from the right-click menu ten minutes into a session works the
- * instant it lands, with no re-wiring - the same convention js/login.js
- * follows for the login form.
- *
- * Only Log out needs a handler at all: Access portal and Dashboard are real
- * links with real hrefs (applyNavSessionState() points Dashboard at the right
- * one for the role), which is what makes ctrl-click and the status bar work.
+ * Shows one of the failure line's two strings on every failure line on the
+ * page.
+ * @param view "normal" or "expired"
+ * @note A class rather than an inline display, for the reason applyNavState()
+ * gives: it can't then be undone by the inline display a hidden element
+ * already carries. Its whole effect lives under body.edit-mode (see
+ * css/style.css), so this is inert on a real visit - which is why it can be
+ * re-asserted unconditionally after every override pass.
+ * @note Also called from the portal across the iframe boundary on every editor
+ * frame load, to put back the state its switch was left on: a reload here
+ * always starts in the ordinary one.
  */
-/* An inline text edit isn't committed until the field blurs (see the "blur"
-   handler on el in the click-to-edit wiring above, which is what packs the
-   chips back up and writes the snapshot) - so a ta timed out mid-sentence
-   used to lose that sentence, even though every finished edit around it was
-   already safe in the snapshot. Blurring here runs that handler normally,
-   the same as clicking away would have. Registered on every page carrying
-   this file, live or framed: js/idle.js's flushAutosaves() reaches into the
-   editor's iframe, and this is the work that lives in there. */
+function applyLoginView(view) {
+  LOGIN_VIEW = view === "expired" ? "expired" : "normal";
+  document.querySelectorAll('[data-login-el="error"]').forEach(function (el) {
+    el.classList.toggle("edit-show-expired", LOGIN_VIEW === "expired");
+  });
+}
+
+/**
+ * Flips which of the two states the editor is showing, driven from the State
+ * switch beside the portal's tabs or from the failure line's own right-click
+ * entry - the login page's counterpart to toggleNavState()/toggleDashView().
+ * @note The two strings are different lengths, so the line can wrap to a
+ * different height and anything anchored below it has to re-pin - the same
+ * reason its siblings re-anchor, at a much smaller scale.
+ */
+function toggleLoginView() {
+  applyLoginView(loginViewIsExpired() ? "normal" : "expired");
+  positionRing();
+  applyElementAnchors();
+  /* the portal's State switch is this same control by another route, and
+     nothing else tells it a flip happened in here - same reason setSnapping()
+     calls back out to syncSnapSwitch() */
+  try {
+    if (window.parent !== window && window.parent.noteEditorLoginView) {
+      window.parent.noteEditorLoginView(LOGIN_VIEW);
+    }
+  } catch (e) {}
+}
+
+/* an inline edit isn't committed until the field blurs (the "blur" handler in
+   the click-to-edit wiring above, which packs the chips back up and writes the
+   snapshot) - so a ta timed out mid-sentence used to lose that sentence, even
+   though every finished edit around it was already safe. Blurring here runs
+   that handler normally, exactly as clicking away would. Registered on every
+   page carrying this file: idle.js's flushAutosaves() reaches into the
+   editor's iframe, and this is the work living in there. */
 (window.IdleSaveHooks = window.IdleSaveHooks || []).push(function () {
   var el = document.activeElement;
   if (el && el.isContentEditable && el.blur) el.blur();
 });
 
+/**
+ * Wires the three nav buttons' actual behaviour, delegated off document and
+ * keyed on data-nav-el rather than an id or href - so a button placed from
+ * the right-click menu works the instant it lands, with no re-wiring.
+ * @note Only Log out needs a handler at all: Access portal and Dashboard are
+ * real links with real hrefs, which is what makes ctrl-click and the status
+ * bar work.
+ */
 function wireNavButtons() {
   document.addEventListener("click", function (e) {
     var el = e.target.closest && e.target.closest("[data-nav-el]");
@@ -20037,19 +19610,16 @@ function wireNavButtons() {
 wireNavButtons();
 
 /**
- * The shared tail of a real page's (as opposed to the object mini editor's
- * blank canvas, see initObjectCanvas()) content load: every generic
- * apply*Overrides() pass plus the edit-mode-gated wiring, factored out so
- * templates/index.html and templates/dashboard.html's DOMContentLoaded
- * handlers (see initDashboardPage()) run the exact same pipeline instead of
- * two copies that could quietly drift apart. Landing-page-only concerns
- * (hero countdown/logistics/video, home images, join url/tooltip) stay in
- * each page's own handler, called before this.
+ * The shared tail of a real page's content load: every generic apply pass
+ * plus the edit-mode-gated wiring, factored out so each page's
+ * DOMContentLoaded handler runs the same pipeline rather than copies that
+ * could quietly drift apart.
  * @param data the fetched content dict
  * @param textMap click-to-edit overrides to apply, defaults to data.text -
- *   index.html passes its own merged copy (see the footer.contact fallback
- *   in its DOMContentLoaded handler below), dashboard has no such fallback
- *   to merge so it just lets this default
+ *   index.html passes its own merged copy, and the others just let this
+ *   default
+ * @note Landing-page-only concerns (hero countdown, logistics, home images,
+ * join url) stay in that page's own handler, called before this.
  */
 function applySharedEditorOverrides(data, textMap) {
   /* every pass below that applies saved geometry measures the element it's
@@ -20060,6 +19630,10 @@ function applySharedEditorOverrides(data, textMap) {
   withStateViewsLaidOut(function () { applySharedOverridePasses(data, textMap); });
   applyNavSessionState();
   applyDashSessionState();
+  /* and the third two-state page, whose failure lines were just rebuilt by
+     renderCustomElements() and came back showing the ordinary wording no
+     matter which state the portal's State switch is on */
+  applyLoginView(LOGIN_VIEW);
   if (isPreviewMode() && isEditMode()) {
     wireResizable();
     wireClickToEdit();
@@ -20084,17 +19658,14 @@ function applySharedOverridePasses(data, textMap) {
   repaintInlineTextColors();
   applyThemeIconOverrides(data.theme_icons);
   if (window.refreshThemeToggles) window.refreshThemeToggles();
-  /* a first anchor pass BEFORE the size/position sweeps, as well as the real
-     one at the end. Those two sweeps are what detach elements from flow, and
+  /* a first anchor pass BEFORE the size/position sweeps as well as the real
+     one at the end. Those sweeps are what detach elements from flow, and
      detachFromFlow() freezes an element at the width it measures right then -
-     while an anchored element is still sitting at the hand-measured seed width
-     from app/db.py, because widening it to the column it anchors into is
-     exactly what this pass does. That's how the login page's password box came
-     out 300px wide (the seeded _LOGIN_PASS_ENTRY figure) inside a 350px field:
-     the box has a saved position, applyPositionOverrides() detached it, and the
-     frozen 300px was then its width for good - on the live page as much as in
-     the editor. Idempotent and cheap (it re-reads each anchor's live rect), and
-     the closing pass still has the last word once every sweep has run. */
+     while an anchored element is still at its hand-measured seed width, since
+     widening it to the column it anchors into is exactly what this pass does.
+     That's how the login page's password box came out 300px wide inside a
+     350px field, on the live page as much as in the editor. Idempotent and
+     cheap, and the closing pass still has the last word. */
   applyElementAnchors();
   applySizeOverrides(data.sizes);
   applyFontSizeOverrides(data.font_sizes);
@@ -20147,16 +19718,13 @@ function applySharedOverridePasses(data, textMap) {
      is on, and what the two page variables therefore read - and only this pass
      knows when those elements actually exist in the dom */
   if (window.renderGallery) window.renderGallery();
-  /* the day/extras/gallery tiles only exist once the hooks above have run, so
-     the applyLayerOrder() a few lines up swept a dom that didn't contain a
-     single one of them and every piece of every tile came out of this pass
-     carrying no rank at all - just the stylesheet's own no-js defaults (the
-     rect at z-index 0, everything else above it, see .day-tile-rect/
-     .extras-tile-rect in css/style.css). Sending a tile's lock icon or title
-     behind its rect therefore held only until the next override pass rebuilt
-     the tiles and threw the js-assigned z-index away with them, which on the
-     ta portal is the very next edit. Re-run over the finished dom: it's
-     idempotent, and the order it applies is the one already reconciled above. */
+  /* the tiles only exist once the hooks above have run, so the earlier
+     applyLayerOrder() swept a dom containing none of them and every piece of
+     every tile came out with no rank - just the stylesheet's no-js defaults.
+     Sending a tile's lock icon behind its rect therefore held only until the
+     next pass rebuilt the tiles and threw the assigned z-index away with
+     them, which in the portal is the very next edit. Re-run over the finished
+     dom: it's idempotent, and the order is the one already reconciled. */
   applyLayerOrder(LAYER_ORDER);
   applyFixedHighlight();
   /* same cross-script hook, for the login page's own four placed elements
@@ -20182,31 +19750,23 @@ function applySharedOverridePasses(data, textMap) {
 }
 
 /**
- * Boots the shared visual-editor engine on the student dashboard
- * (templates/dashboard.html, identified by its #dashProgressAnchor spacer -
- * see applySharedEditorOverrides()/applyElementAnchors()). Unlike the
- * landing page there's no hardcoded countdown/logistics/hero markup to
- * hydrate here - the days/extras lists stay js/dashboard.js's own separate,
- * hand-rolled rendering, entirely untouched by this file - this only wires
- * up the generic override pipeline every custom-placed element (the
- * migrated progress bar, plus the nav/footer chrome it shares with
- * index.html - brand, theme toggle, "footer.org"/"footer.contact") needs,
- * gated into edit affordances the exact same isPreviewMode() && isEditMode()
- * way index.html's own pipeline is, so a real student loading this page
- * directly never sees drag handles or a right-click menu, only the
- * rendered result.
+ * Boots the shared visual-editor engine on the student dashboard, identified
+ * by its #dashProgressAnchor spacer.
+ * @note Unlike the landing page there's no hardcoded countdown or hero markup
+ * to hydrate: the days and extras lists stay js/dashboard.js's own separate
+ * rendering, untouched by this file. This only wires the generic override
+ * pipeline every placed element needs - the progress bar, plus the nav and
+ * footer chrome it shares with index.html.
+ * @note Gated into edit affordances the same isPreviewMode() && isEditMode()
+ * way every page is, so a real student never sees drag handles.
  */
 function initDashboardPage() {
-  /* the page ships with BOTH of its halves out of the document (see
-     applyDashView()) and dashboard.js's own DOMContentLoaded handler is what
-     normally puts one back (gateCheck()), but it isn't guaranteed to run
-     before this function's fetchContent() resolves - so pick a half here too,
-     or applySharedEditorOverrides()'s applyElementAnchors() call below
-     measures the anchor spacers with nothing laid out at all (every rect comes
-     back zero, pinning the progress/extras/days areas to 0,0 with nothing to
-     re-run the pass afterward). Safe to call twice - gateCheck() is
-     idempotent, and applySharedEditorOverrides() ends up calling the same
-     decision again itself. */
+  /* the page ships with BOTH halves out of the document and dashboard.js's
+     own handler normally puts one back, but it isn't guaranteed to run before
+     this fetch resolves - so pick a half here too, or applyElementAnchors()
+     measures the spacers with nothing laid out at all and pins the progress
+     and tile areas to 0,0 with nothing to re-run the pass. Safe to call
+     twice: gateCheck() is idempotent. */
   if (window.gateCheck) window.gateCheck();
   fetchContent()
     .then(function (data) {
@@ -20226,20 +19786,15 @@ function initDashboardPage() {
 }
 
 /**
- * Boots the shared visual-editor engine on the login page
- * (templates/login.html, identified by its #loginCard auth card - see
- * currentPageKey()). Nothing to hydrate here beyond the generic override
- * pipeline: the form itself is four ordinary placed custom elements (see
- * app/db.py's _LOGIN_ENTRIES) which renderCustomElements() builds like any
- * other, and everything around them (nav, card heading/subtitle, the note
- * and legal lines) is plain click-to-edit template markup. js/login.js
- * wires the real behaviour on top, off the same window.refreshLoginPage
- * hook applySharedEditorOverrides() calls.
- *
- * Gated into edit affordances the same isPreviewMode() && isEditMode() way
- * every other page is, so a real visitor logging in never sees a drag
- * handle - and js/login.js refuses to post credentials at all inside the
- * ta portal's preview iframe, see its doc comment.
+ * Boots the shared visual-editor engine on the login page, identified by its
+ * #loginCard auth card.
+ * @note Nothing to hydrate beyond the generic pipeline: the form is four
+ * ordinary placed elements which renderCustomElements() builds like any
+ * other, and everything around them is plain click-to-edit template markup.
+ * js/login.js wires the real behaviour on top, off the same hook.
+ * @note Gated into edit affordances the same way every page is, so a real
+ * visitor never sees a drag handle - and js/login.js refuses to post
+ * credentials at all inside the portal's preview iframe.
  */
 function initLoginPage() {
   fetchContent()
@@ -20256,18 +19811,14 @@ function initLoginPage() {
 }
 
 /**
- * Boots the shared visual-editor engine on the gallery page
- * (templates/gallery.html, identified by its #galleryDirsAnchor spacer - see
- * currentPageKey()). Nothing to hydrate here beyond the generic override
- * pipeline: the viewer itself is five ordinary placed custom elements (see
- * app/db.py's _GALLERY_ENTRIES) which renderCustomElements() builds like any
- * other, and everything around them (nav, heading, hint line, footer) is plain
- * click-to-edit template markup. js/gallery.js wires the real behaviour on top,
- * off the same window.renderGallery hook applySharedOverridePasses() calls.
- *
- * Gated into edit affordances the same isPreviewMode() && isEditMode() way
- * every other page is, so a real visitor flipping through photos never sees a
- * drag handle.
+ * Boots the shared visual-editor engine on the gallery page, identified by
+ * its #galleryDirsAnchor spacer.
+ * @note Nothing to hydrate beyond the generic pipeline: the viewer is five
+ * ordinary placed elements, and everything around them is plain
+ * click-to-edit template markup. js/gallery.js wires the real behaviour on
+ * top, off the same window.renderGallery hook.
+ * @note Gated into edit affordances the same way every page is, so a real
+ * visitor flipping through photos never sees a drag handle.
  */
 function initGalleryPage() {
   fetchContent()
@@ -20282,16 +19833,36 @@ function initGalleryPage() {
 }
 
 /**
- * Boots the reusable-object mini editor's blank canvas
- * (templates/object-editor.html, ?object=1&edit=1): no landing-page markup
- * to render (no countdown/logistics/hero video/nav), so this skips straight
- * to the same generic apply*Overrides()/wire*() pass fetchContent()'s
- * success handler runs below for index.html, just against the object
- * canvas's own "object_content" scene (see fetchObjectContent()/
- * snapshotKey()) instead of the real page's content. Always wired up as if
- * &edit=1 were set, unlike index.html's own gate on isPreviewMode() &&
- * isEditMode(): an object canvas only ever exists to be edited, there's no
- * "look-only" mode for it the way a page preview has.
+ * Boots the shared visual-editor engine on the not-found page, identified by
+ * its #notFoundAnchor spacer.
+ * @note Nothing to hydrate beyond the generic pipeline: the whole page is
+ * plain click-to-edit template markup plus whatever a ta has placed on it.
+ * @note Gated into edit affordances the same way every page is, so a visitor
+ * who mistyped a url gets the page and no drag handles. Worth having at all
+ * because this is the one page nobody arrives at on purpose: whatever it says
+ * is the site's answer to someone already lost, and a ta should write it.
+ */
+function initNotFoundPage() {
+  fetchContent()
+    .then(function (data) { applySharedEditorOverrides(data); })
+    .catch(function () {
+      /* the content api being unreachable must not take this page down too -
+         it's the page most likely to be reached WHILE something is broken.
+         The template's own copy is already on screen and says the right
+         thing, so there's nothing to rebuild, unlike the login page's form
+         or the gallery's viewer: just leave it standing. */
+      applyTextOverrides({});
+    });
+}
+
+/**
+ * Boots the reusable-object mini editor's blank canvas.
+ * @note No landing-page markup to render, so this skips straight to the same
+ * generic apply and wire pass index.html runs, just against the object
+ * canvas's own scene rather than the real page's content.
+ * @note Always wired as if &edit=1 were set, unlike index.html's own gate: an
+ * object canvas only ever exists to be edited, with no "look-only" mode the
+ * way a page preview has.
  */
 function initObjectCanvas() {
   /* the canvas scene and the site's own variables come from two different
@@ -20365,14 +19936,11 @@ document.addEventListener("DOMContentLoaded", function () {
      put its pip toggle up over one */
   wireNativeVideoMenu();
 
-  /* the object mini editor (templates/object-editor.html, js/object-editor.js)
-     first has to resolve which saved object (if any) this session is
-     editing and stash its data into localStorage's "object_content" key
-     before the canvas can render it; that's an async server round trip
-     (GET /api/objects), so initObjectCanvas() isn't safe to call yet, it'd
-     race that fetch. object-editor.js calls it itself (a plain top-level
-     function declaration, already reachable as window.initObjectCanvas)
-     once that's settled, instead of this file auto-running it here. */
+  /* the object mini editor first has to resolve which saved object this
+     session is editing and stash its data into localStorage before the canvas
+     can render it - an async server round trip, so initObjectCanvas() isn't
+     safe to call yet and would race that fetch. object-editor.js calls it
+     itself once that's settled. */
   if (isObjectMode()) return;
 
   /* before the content fetch resolves, so the right navbar is up on the first
@@ -20383,14 +19951,19 @@ document.addEventListener("DOMContentLoaded", function () {
   var slot = document.getElementById("heroCountdown");
   var grid = document.getElementById("logisticsGrid");
   if (!slot) {
-    /* not the landing page - the other three this file's shared editor engine
-       is wired onto are the student dashboard (its #dashProgressAnchor
-       spacer, see initDashboardPage()), the login page (its #loginCard, see
-       initLoginPage()) and the gallery (its #galleryDirsAnchor spacer, see
-       initGalleryPage()) */
+    /* not the landing page - the other four this engine is wired onto are the
+       dashboard, the login page, the gallery and the not-found page, each
+       recognised by its own marker below.
+
+       Every page this file can edit needs a line here: one whose marker isn't
+       listed still renders, since its markup and theme.js don't depend on any
+       of this, but it never gets a content fetch - so no saved text, no placed
+       elements, and no editor at all inside the portal's iframe. That's
+       exactly what 404.html did until this line was added. */
     if (document.getElementById("dashProgressAnchor")) initDashboardPage();
     else if (document.getElementById("loginCard")) initLoginPage();
     else if (document.getElementById("galleryDirsAnchor")) initGalleryPage();
+    else if (document.getElementById("notFoundAnchor")) initNotFoundPage();
     return;
   }
 

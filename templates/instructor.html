@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Staff Portal · ECE Workshops</title>
-  <link rel="icon" href="/assets/logo.png" />
+  <link rel="icon" href="/assets/favicon.png" />
 
   <script>
     (function () {
@@ -18,7 +18,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/style.css?v=40" />
+  <link rel="stylesheet" href="css/style.css?v=41" />
 </head>
 <body class="mono">
 
@@ -85,7 +85,19 @@
       <div class="ta-actions">
         <button class="btn btn-ghost" id="taPreview" type="button">Preview</button>
         <button class="btn btn-primary" id="taApply" type="button">Apply changes</button>
-        <button class="btn btn-ghost" id="taSave" type="button">Save to profile</button>
+        <!-- two separate saves, never one button meaning two things: "Save
+             profile" only ever writes back to the profile that's open (so it's
+             off in live content, on the original theme and on Most recently
+             applied - none of those are a profile of yours to write to), and
+             "Save to new profile" always makes a fresh one. That second one is
+             what makes the greyed-out cases recoverable: open the original
+             theme, change what you like, keep it as your own profile. Both
+             behave identically from the Content manager and the Visual editor
+             (see saveToProfile()/saveToNewProfile() in js/ta.js) - the row is
+             shared by both tabs and each function pulls the editor frame's own
+             work in first. -->
+        <button class="btn btn-ghost" id="taSave" type="button">Save profile</button>
+        <button class="btn btn-ghost" id="taSaveNew" type="button">Save to new profile</button>
         <button class="btn btn-ghost" id="taReset" type="button">Reset</button>
       </div>
       <p class="form-msg" id="taMsg"></p>
@@ -301,6 +313,19 @@
                   <span class="ed-switch-text" id="edDashViewText">Dashboard</span>
                 </button>
               </div>
+              <!-- which state of the login page the editor is showing: the
+                   ordinary one, or the one someone gets after being signed out
+                   for sitting idle. Login tab only, same as the two above -
+                   ta.js hides this row elsewhere. The two states differ only
+                   in what the failure line says, so this switch is how the
+                   timed-out wording gets looked at and edited at all. -->
+              <div class="ed-switch-row" id="edLoginViewRow" hidden>
+                <span class="ed-switch-cap">State</span>
+                <button class="ed-switch" id="edLoginView" type="button" role="switch" aria-checked="false">
+                  <span class="ed-switch-track"><span class="ed-switch-knob"></span></span>
+                  <span class="ed-switch-text" id="edLoginViewText">Normal</span>
+                </button>
+              </div>
               <!-- whether drags in the editor line themselves up with the
                    elements around them. Every page, so never hidden - unlike
                    the two above it, this is about how editing behaves rather
@@ -430,6 +455,6 @@
 
   <script src="js/theme.js?v=4"></script>
   <script src="js/idle.js?v=5"></script>
-  <script src="js/ta.js?v=23"></script>
+  <script src="js/ta.js?v=25"></script>
 </body>
 </html>

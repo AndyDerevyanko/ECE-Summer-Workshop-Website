@@ -2875,6 +2875,69 @@ function isFixedInstance(el) {
 }
 
 /**
+ * The rank of the outermost fixed container - the navbar applyLayerOrder()
+ * stamps clear of the whole page.
+ * @param rank id -> rank, from layerRanks()
+ * @return its rank, or -1 on a page with no fixed container (most of them)
+ */
+function fixedBarRank(rank) {
+  var out = -1;
+  document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
+    if (!isFixedInstance(el) || !hasTrackedDescendants(el) || fixedTrackedAncestor(el)) return;
+    var r = rank[elId(el)];
+    if (r !== undefined && (out === -1 || r < out)) out = r;
+  });
+  return out;
+}
+
+/**
+ * Whether el is one of the few things allowed past the fixed navbar's stamp.
+ * @param el the element
+ * @param rank id -> rank, from layerRanks()
+ * @param barRank fixedBarRank(rank)
+ * @return true if el's z should be lifted clear of the bar
+ * @note `top` is deliberately one past every rank on the page, which makes the
+ * bar unbeatable - right for the content it SCROLLS over, the thing the stamp
+ * exists for, and wrong for the one kind of element that is neither in the bar
+ * nor in the flow beneath it: one a ta has pinned to an absolute spot on the
+ * body itself. Dragging a button out of the bar makes exactly that (see
+ * unseatFromBox()), and no rank could lift it back into view, so it vanished
+ * behind the bar's own backdrop however far forward the layer menu was told to
+ * put it. Anything the order puts BELOW the bar, and every element still in
+ * flow, is untouched.
+ * @note Anchored elements are excluded even though they are body-free-placed
+ * on paper: the dashboard's progress bar, the gallery's five controls and the
+ * login card's four are pinned to in-flow spacers (applyElementAnchors()), so
+ * they scroll with the page like the flow they track, and lifting them is the
+ * plain bug of a progress bar sliding over the navbar. What is left is what a
+ * ta placed or dragged there by hand, which is the set this is for.
+ * @note One knock-on worth naming: a placed element far down the page clears
+ * the bar too, so scrolling slides it over rather than under. That is the same
+ * answer the layer order already gives for every other pair of elements on the
+ * page, and the ta can send it behind.
+ */
+function liftsOverFixedBar(el, rank, barRank) {
+  if (barRank === -1 || !isBodyFreePlaced(el) || isAnchoredEl(el)) return false;
+  var r = rank[elId(el)];
+  return r !== undefined && r > barRank;
+}
+
+/**
+ * True for an element pinned to an absolute spot on the body itself, rather
+ * than sitting in some container's flow.
+ * @param el the element
+ * @return true if its wrap is a .free-wrap parented straight to <body>
+ * @note The one shape of element that is page-level content without being
+ * page FLOW, which is what makes it the exception to the fixed bar's stamp -
+ * see applyLayerOrder().
+ */
+function isBodyFreePlaced(el) {
+  var wrap = el && el.parentElement;
+  return !!(wrap && wrap.classList && wrap.classList.contains("free-wrap") &&
+            wrap.parentElement === document.body);
+}
+
+/**
  * The nearest tracked ancestor of el that is itself a fixed instance - the
  * navbar el has been promoted into.
  * @param el the element
@@ -3666,6 +3729,8 @@ function applyLayerOrder(layers) {
   members.sort(byLayerRank(rank));
   var top = members.length + 1;
 
+  var barRank = fixedBarRank(rank);
+
   /* everything ranked below one of its own containers' surfaces. Those go
      BELOW zero, and are the only things that do: -1 is the surface layer
      itself, and css paints a negative-z descendant right after the background
@@ -3711,7 +3776,9 @@ function applyLayerOrder(layers) {
     }
     if (getComputedStyle(m.el).position === "static") m.el.style.position = "relative";
     if (m.behindZ !== undefined) { m.el.style.zIndex = String(m.behindZ); return; }
-    m.el.style.zIndex = String(z);
+    /* see liftsOverFixedBar() for what this band is and why it exists */
+    var zi = liftsOverFixedBar(m.el, rank, barRank) ? top + z : z;
+    m.el.style.zIndex = String(zi);
     /* a tint overlay is a plain untracked sibling div after its image in the
        same free-wrap: without its own z-index it stays at auto, and any
        element here with an explicit one (including its own image) paints
@@ -3721,10 +3788,10 @@ function applyLayerOrder(layers) {
     if (m.el.parentNode && m.el.parentNode.classList &&
         m.el.parentNode.classList.contains("free-wrap")) {
       var tintOv = m.el.parentNode.querySelector(".tint-ov");
-      if (tintOv) tintOv.style.zIndex = String(z);
+      if (tintOv) tintOv.style.zIndex = String(zi);
       /* same reasoning, same fix, for a shade overlay (setElementShade()) */
       var shadeOv = m.el.parentNode.querySelector(".shade-ov");
-      if (shadeOv) shadeOv.style.zIndex = String(z);
+      if (shadeOv) shadeOv.style.zIndex = String(zi);
     }
     z++;
   });
@@ -9216,6 +9283,24 @@ function unseatFromBox(el, left, top) {
 }
 
 /**
+ * Lifts a just-dropped element clear of the fixed navbar's stamp, if the same
+ * rule the full stacking pass uses says it belongs there.
+ * @param el the element that was dropped onto the open page
+ * @note Adds the same `top` offset applyLayerOrder() would, on top of the rank
+ * z it is already carrying from the last full pass - so the number this leaves
+ * behind is the number that pass would work out, and re-running it changes
+ * nothing. `top` is one past every rank, which is the member count plus one.
+ */
+function liftDroppedOverFixedBar(el) {
+  var rank = layerRanks();
+  if (!liftsOverFixedBar(el, rank, fixedBarRank(rank))) return;
+  var z = parseFloat(el.style.zIndex);
+  if (!isFinite(z)) return;
+  var top = document.querySelectorAll(RESIZABLE_SEL).length + 1;
+  if (z <= top) el.style.zIndex = String(top + z);
+}
+
+/**
  * Re-reads the seating straight off the dom into BOX_MEMBERS and persists it.
  * @note Read back rather than maintained incrementally: the dom is the truth
  * the moment anything reorders, and one query is cheaper than keeping a
@@ -9525,6 +9610,16 @@ function finishBoxDrop(el, before) {
        drag start unseated it, see startBoxDrag()), so the only thing left is
        the history entry */
     if (before.box) {
+      /* the drop has just turned el into a body-free-placed element, which
+         changes which side of the navbar's stamp it belongs on - so its z has
+         to be brought up to date. Only its own, rather than re-running
+         applyLayerOrder() over the page: a full pass here also rebuilds every
+         container's surface layer, and a box holding elements that rank below
+         it - which is any box created after the things later seated into it -
+         sends them behind that surface and out of sight. That is its own bug
+         and not this one's to trip over mid-drag; the next full pass, on the
+         next load, resolves this element identically anyway. */
+      liftDroppedOverFixedBar(el);
       EDIT_UNDO.push({ type: "seat", id: elId(el), before: before, after: captureSeat(el) });
       EDIT_REDO.length = 0;
       return true;
@@ -12101,6 +12196,28 @@ function isAnchoredEl(el) {
 }
 
 /**
+ * True for an element whose free-placed pixel offset was actually AUTHORED -
+ * committed by a ta at a container width we recorded, or stored on a placed
+ * element - as opposed to one produced by the live layout a moment ago.
+ * @param el the element
+ * @return true if its offset came from a stored number
+ * @note The distinction matters only to responsiveFallbackFor(), which turns
+ * a frozen pixel back into a proportion by dividing it by the width it was
+ * frozen at. A committed drag records that width in `bw`
+ * (saveEditedPosition()), and a placed element carries its own left/top; an
+ * element freezeDescendants() pinned a moment ago carries neither, because
+ * its offset is not frozen at any width - it is simply where the browser had
+ * just laid it out, at whatever width the ta's window happens to be.
+ */
+function hasAuthoredOffset(el) {
+  var id = el && elId(el);
+  if (!id) return false;
+  if (EDIT_POSITIONS[id]) return true;
+  var d = customElementById(id);
+  return !!(d && (d.left !== undefined || d.top !== undefined));
+}
+
+/**
  * Re-pins any custom element carrying a stored `d.anchor` selector to that
  * in-flow anchor's real, current position, instead of trusting the element's
  * stored left/top verbatim.
@@ -12663,8 +12780,22 @@ function responsiveFallbackFor(el, axisW) {
   var anchored = isAnchoredEl(el);
   /* isFinite guards a container measured mid-rebuild; a ratio of exactly 1 is
      the authoring width itself, where this whole layer must be a no-op */
+  /* and the same exemption, for the same reason, for a free-placed element
+     whose offset nothing ever authored. `base` above is a guess - the blob's
+     authoring width - taken on the understanding that SOME ta once froze this
+     pixel at SOME width. detachFromFlow() and freezeDescendants() break that
+     understanding: grabbing a container's resize handle pins every tracked
+     element inside it at the spot the browser had just laid it out, at the
+     ta's current window width, and those pins are not authored at 1440 or at
+     anything else. Scaling them by hostW/1440 is arithmetic on a number that
+     was never a measurement: it is what threw the navbar apart the instant a
+     handle was touched, sliding the brand and the theme button right by
+     hostW/1440 of their offsets while the six nav links - measured against
+     their own 547px row - collapsed left into a pile on top of each other,
+     each by 62% of how far along the row it sat. An authored offset still
+     scales exactly as before, so a ta's own drag is untouched. */
   if (isFinite(ratio) && ratio !== 1 && !anchored) {
-    if (freePlaced && hostRect) {
+    if (freePlaced && hostRect && hasAuthoredOffset(el)) {
       var prev = parseFloat(el.dataset.rsDx) || 0;
       var authoredLeft = el.getBoundingClientRect().left - hostRect.left - prev;
       out.dx = authoredLeft * (ratio - 1);

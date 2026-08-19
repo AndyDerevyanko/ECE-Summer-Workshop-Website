@@ -1278,7 +1278,16 @@ body.edit-mode #loginErrorAnchor { min-height: 50px; }
   background-clip: text;
   -webkit-text-fill-color: currentColor;
   transition: background-color 0s 100000s, color 0s 100000s;
+  /* and the fill has to announce itself. Chrome hands javascript no event at
+     all when it fills a field on load - no input, no change - so nothing told
+     js/login.js's syncPlaceholder() to hide the greyed string laid over the
+     input, and it sat on top of the filled username in plain sight. An
+     animation on this pseudo-class is the one notice chrome does give: it
+     paints nothing and animates nothing, it exists purely so animationstart
+     fires the moment the fill lands, which login.js listens for. */
+  animation-name: login-autofilled;
 }
+@keyframes login-autofilled { from {} to {} }
 /* the greyed placeholder as a real editable text field laid over the input
    rather than the input's own placeholder attribute - the only way it could
    be reworded, recoloured, resized and moved like any other text on the site.
@@ -1825,8 +1834,14 @@ body.edit-mode .login-field-ph { pointer-events: auto; }
 }
 /* a seated child sizes itself, and never stretches to fill the line: the ta
    dragged it to a width, and growing a lone trailing element across the whole
-   row is the same surprise .tile-flex avoids just above */
-.box-flow > * { flex: 0 0 auto; max-width: 100%; }
+   row is the same surprise .tile-flex avoids just above.
+   No max-width here either. Capping a child at the box's own width re-wrapped
+   whatever was dropped in: a 734px paragraph turned into a 145px ribbon of text
+   the instant it landed in a default 160px box, and a 1076px eyebrow into a
+   two-line stub - not the element the ta dragged. A child bigger than its box
+   overruns it and the box scrolls, which is exactly what the overflow above
+   already promises. seatInBox() pins the width it arrived with. */
+.box-flow > * { flex: 0 0 auto; }
 /* whatever the editor pins onto a free element has to lose to the box, since
    the box is now what decides where this sits */
 .box-flow > .free-wrap { position: static; }
@@ -2821,6 +2836,26 @@ body.edit-mode .apply-bob { animation: none; }
 .sel-ring .sth svg { width: 12px; height: 12px; }
 .sel-ring .sth:hover { background: var(--accent); color: #fff; }
 .sel-ring .sth:active { background: var(--accent-2, var(--accent)); }
+
+/* On something small, every one of the handles above is inset INTO an element
+   barely bigger than they are, and between them they cover the whole middle of
+   it: a press meant for the element lands on a handle's svg instead, no drag
+   starts, and the element looks like it has simply stopped responding. That is
+   the "it reorders once and then never again" a ta hits, since the first drag
+   is what selects it and puts the ring there. Below a size where an inset row
+   still leaves something to grab, the handles step outside the ring - above it
+   and below it - leaving the element itself clear. */
+.sel-ring.ring-tiny .mvh,
+.sel-ring.ring-tiny .parh,
+.sel-ring.ring-tiny .delh {
+  top: auto;
+  bottom: calc(100% + 5px);
+}
+.sel-ring.ring-tiny .lyh,
+.sel-ring.ring-tiny .sth {
+  bottom: auto;
+  top: calc(100% + 5px);
+}
 
 /* style popover: reuses .ctx-menu's look, laid out as two rows (color
    picker + reset, opacity slider + readout) instead of buttons */

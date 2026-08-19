@@ -7772,6 +7772,13 @@ function positionRing() {
     RING_EL.hasAttribute("data-extras-fixed") || RING_EL.hasAttribute("data-days-fixed"));
   /* a tile resizes but never moves, see isMoveLockedTileRole() */
   RING.classList.toggle("tile-box", isTileBoxEl(RING_EL));
+  /* on an element barely bigger than the handles themselves, the inset row of
+     them covers the whole middle of it and every later press lands on a handle
+     rather than on the element - which is what made a second drag on a small
+     seated element do nothing at all. The css moves them outside the ring at
+     this size; the thresholds are the handle row's own footprint (a 17px button
+     inset by 3, top and bottom) with a few px left over to actually grab. */
+  RING.classList.toggle("ring-tiny", !page && (r.height < 56 || r.width < 72));
   /* strips the ring down to a plain outline in responsive mode: every handle
      on it edits something the mode has suspended, and a handle that silently
      refuses to drag is worse than no handle */
@@ -9061,6 +9068,9 @@ function seatInBox(el, box, beforeEl) {
   if (!el || !box || el === box || el.contains(box)) return false;
   var id = elId(el), boxId = elId(box);
   if (!id || !boxId) return false;
+  /* measured while it is still laid out where the ta could see it, and applied
+     again at the bottom of this function - see seatedWidthFor() */
+  var wasWidth = seatedWidthFor(el);
   unwrapFreeElement(el);
   clearFreePlacement(el);
   /* the surface layer has to stay the box's first child - it is the box's own
@@ -9074,9 +9084,108 @@ function seatInBox(el, box, beforeEl) {
      otherwise the next load's applyPositionOverrides() would paint it straight
      back on and shove the element out of the row it now belongs to */
   saveEditedPosition(id, null, null);
+  freezeSeatedSize(el, wasWidth);
   recordBoxMembers();
   applyBoxFlow();
+  growBoxToFit(box);
   return true;
+}
+
+/**
+ * Grows a box until everything seated in it fits inside it. Never shrinks one.
+ * @param box the box
+ * @note A box is 160x100 when it's drawn (see buildCustomElementNode()), which
+ * is smaller than most things a ta drops into it. Left alone the contents just
+ * overrun and the box scrolls - and a scrolled box is a bad place to arrange
+ * anything, since half its children sit outside it and the gap the pointer is
+ * over stops matching the gap it's pointing at (see boxDropIndexAt()).
+ * @note Width first, then height: a wider box re-wraps its rows, so the height
+ * it needs can only be measured once the width is settled.
+ * @note Capped at the room left to the right of the box, so one very wide
+ * child - a heading laid out at its max-content width - can't push the box off
+ * the side of the page. Past that it overflows and scrolls, as before.
+ * @note The new size is saved the same way a resize drag's is, so it survives
+ * the reload; it is deliberately NOT a separate undo entry, since undoing the
+ * drop that caused it and finding the box still open at that size is far less
+ * confusing than a Ctrl+Z that only puts a box back to a smaller size.
+ */
+function growBoxToFit(box) {
+  var id = box && elId(box);
+  if (!id || !box.isConnected) return;
+  /* only a box the ta placed. The template's own containers are boxes too (the
+     navbar's link rows, see boxDropIndexAt()'s note), and those are sized by
+     the stylesheet for every viewport - writing a px width and height onto one
+     because something was dropped in it would pin the navbar at whatever width
+     the window happened to be. */
+  if (!customElementById(id)) return;
+  var r = box.getBoundingClientRect();
+  var room = Math.max(160, document.documentElement.clientWidth - Math.round(r.left) - 8);
+  var w = Math.round(r.width), h = Math.round(r.height), grew = false;
+  var overW = box.scrollWidth - box.clientWidth;
+  if (overW > 0 && w < room) {
+    w = Math.min(w + overW, room);
+    box.style.width = w + "px";
+    grew = true;
+  }
+  /* re-read after the width above has been applied */
+  var overH = box.scrollHeight - box.clientHeight;
+  if (overH > 0) {
+    h = h + overH;
+    box.style.height = h + "px";
+    grew = true;
+  }
+  if (!grew) return;
+  box.dataset.natW = w;
+  box.dataset.natH = h;
+  var d = customElementById(id);
+  if (d) { d.w = w; d.h = h; }
+  saveEditedSize(id, { w: w, h: h });
+}
+
+/**
+ * The width a seated element should be pinned at, measured while it is still
+ * where it was.
+ * @param el the element about to be seated
+ * @return a width in px, or 0 for "let it size itself"
+ * @note A flex child with no width of its own is laid out at its MAX-CONTENT
+ * size, so a paragraph that wrapped over three lines on the page lands in a box
+ * as one very long line. Pinning the width it arrived with is what stops that -
+ * along with .box-flow > * in css/style.css, which for the same reason no
+ * longer caps a child at the box's width either.
+ * @note But only where the width is doing something. An element is pinned only
+ * if its content is currently being WRAPPED by it: that is the case a free
+ * layout would visibly rearrange. An element merely sized by the container it
+ * used to sit in - a tag filling a grid track, a nav link in the navbar's row -
+ * is left to size itself, because that old width was never its own and holding
+ * it to one measured under someone else's type and padding is what wrapped a
+ * one-word link onto two lines.
+ * @note Width only. The height then follows from the same wrapping it always
+ * had, and pinning one as well would stop a box growing when a ta types another
+ * line into what they just seated.
+ */
+function seatedWidthFor(el) {
+  if (!el || el.style.width) return 0;
+  var r = el.getBoundingClientRect();
+  if (!r.width) return 0;
+  /* what it would be if nothing constrained it, read and put straight back
+     within the one frame, so nothing is ever painted at this size */
+  el.style.width = "max-content";
+  var natural = el.getBoundingClientRect().width;
+  el.style.width = "";
+  return natural > r.width + 2 ? r.width : 0;
+}
+
+/**
+ * Pins a newly seated element at the width seatedWidthFor() measured for it.
+ * @param el the element, already in its box
+ * @param w the width, or 0 to leave it alone
+ * @note Never overwrites a width that is already there: anything dragged has
+ * been through detachFromFlow() and carries the ta's own, which wins.
+ */
+function freezeSeatedSize(el, w) {
+  if (!el || !w) return;
+  if (!el.dataset.natW) el.dataset.natW = w;
+  if (!el.style.width) el.style.width = w + "px";
 }
 
 /**
@@ -9096,6 +9205,11 @@ function unseatFromBox(el, left, top) {
     top = Math.round(r.top + window.scrollY);
   }
   placeFreeElement(el, left, top);
+  /* the wrap that just went round it has no size of its own, and things that
+     measure a free element measure the WRAP (captureSeat(), the snap guides).
+     Left at 0x0 it reports a lifted element as a point at the top-left corner
+     of where it really is. */
+  freezeFreeElement(el);
   recordBoxMembers();
   applyBoxFlow();
   return true;
@@ -9162,9 +9276,14 @@ function applyBoxMembers(map) {
     (BOX_MEMBERS[boxId] || []).forEach(function (childId) {
       var child = elByAnyId(childId);
       if (!child || child === box || child.contains(box)) return;
+      /* the same width freeze a live drop does, for the same reason: without it
+         a wrapped paragraph comes back from every reload as one long line, at
+         its max-content width. See seatedWidthFor(). */
+      var wasWidth = seatedWidthFor(child);
       unwrapFreeElement(child);
       clearFreePlacement(child);
       box.appendChild(child);
+      freezeSeatedSize(child, wasWidth);
     });
   });
   applyBoxFlow();
@@ -11965,6 +12084,23 @@ function renderCustomElements(list) {
 }
 
 /**
+ * True for a placed element whose position is not a frozen pixel at all: one
+ * carrying a stored `d.anchor`, whose left and top applyElementAnchors() below
+ * re-reads off a live in-flow spacer on every layout pass.
+ * @param el the element
+ * @return true if an anchor selector pins it
+ * @note The whole seeded set is anchored - the four login controls, the
+ * dashboard's progress bar and its two tile areas, the landing page's reel and
+ * the gallery's five - so this covers every page but says nothing about an
+ * element a ta placed themselves, which is frozen exactly as before.
+ */
+function isAnchoredEl(el) {
+  var id = el && elId(el);
+  var d = id ? customElementById(id) : null;
+  return !!(d && d.anchor);
+}
+
+/**
  * Re-pins any custom element carrying a stored `d.anchor` selector to that
  * in-flow anchor's real, current position, instead of trusting the element's
  * stored left/top verbatim.
@@ -12512,9 +12648,22 @@ function responsiveFallbackFor(el, axisW) {
   var base = (saved && saved.bw > 0) ? saved.bw : AUTHORED_WIDTH;
   var ratio = hostW / base;
   var freePlaced = !!(el.parentElement && el.parentElement.classList.contains("free-wrap"));
+  /* an anchored element is the one free-placed thing whose offset is NOT a
+     frozen pixel measured at one width: applyElementAnchors() re-reads it off
+     a live spacer every pass, so it already tracks the card or column it
+     belongs to exactly, at every width, before this layer runs at all.
+     Scaling it proportionally on top of that applies the same correction
+     twice, and the second one is pure error - which is what put all four
+     login controls 273px off the right of their card on a 1920 window, the
+     dashboard's progress bar and both tile areas 147px off their column, and
+     the gallery's next arrow 429px off its stage. Narrower than the authoring
+     width it goes the other way and they drift left instead. Note this is the
+     automatic layer only: a band that authors an anchor of its own is an
+     explicit choice and still lands, see paintResponsive(). */
+  var anchored = isAnchoredEl(el);
   /* isFinite guards a container measured mid-rebuild; a ratio of exactly 1 is
      the authoring width itself, where this whole layer must be a no-op */
-  if (isFinite(ratio) && ratio !== 1) {
+  if (isFinite(ratio) && ratio !== 1 && !anchored) {
     if (freePlaced && hostRect) {
       var prev = parseFloat(el.dataset.rsDx) || 0;
       var authoredLeft = el.getBoundingClientRect().left - hostRect.left - prev;
@@ -12561,7 +12710,12 @@ function responsiveFallbackFor(el, axisW) {
      (That is exactly what happened when this clamp was briefly applied to
      everything: the landing page's About heading was pulled 320px out of its
      section and the page got wider, not narrower.) */
-  if (freePlaced || (saved && saved.tx)) {
+  /* and anchored elements sit out the clamp too: a spacer is by definition
+     inside the layout, so an element pinned to one cannot overhang unless a
+     ta gave it a width wider than the column - which is the width cap's job
+     just above, not a position's. Sliding one here would only re-introduce
+     the drift the exemption above exists to remove. */
+  if (!anchored && (freePlaced || (saved && saved.tx))) {
     var prevDx = parseFloat(el.dataset.rsDx) || 0;
     var r = el.getBoundingClientRect();
     var effW = out.maxW ? Math.min(r.width, out.maxW) : r.width;

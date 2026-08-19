@@ -157,9 +157,35 @@
     submitLogin();
   });
 
-  document.addEventListener("input", function (e) {
+  /* `change` alongside `input` because the two do not overlap as much as they
+     look: picking an entry out of the browser's own credential dropdown commits
+     a value with a change and no input at all. */
+  ["input", "change"].forEach(function (evt) {
+    document.addEventListener(evt, function (e) {
+      var input = e.target;
+      if (input && input.hasAttribute && input.hasAttribute("data-login-input")) syncPlaceholder(input);
+    });
+  });
+
+  /* the two ways a value arrives that fire NEITHER of those, both of which
+     left the greyed placeholder sitting on top of a filled box:
+
+     the browser autofilling on load - silent by design, and reachable only
+     through the animation css/style.css hangs on :-webkit-autofill for exactly
+     this purpose;
+
+     and the browser restoring what was typed before across a navigation - a
+     reload, the back button, or the redirect to ?expired=1 that this page's own
+     idle timeout performs, which is how a visitor actually meets it. Restoration
+     finishes before pageshow, so one re-sync there covers all of them, and it
+     costs a class toggle on two inputs. */
+  document.addEventListener("animationstart", function (e) {
+    if (e.animationName !== "login-autofilled") return;
     var input = e.target;
     if (input && input.hasAttribute && input.hasAttribute("data-login-input")) syncPlaceholder(input);
+  }, true);
+  window.addEventListener("pageshow", function () {
+    document.querySelectorAll("[data-login-input]").forEach(syncPlaceholder);
   });
 
   window.refreshLoginPage = refreshLoginPage;

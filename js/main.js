@@ -2057,6 +2057,10 @@ function paintPos(el) {
   /* a css transition on transform (eg. .card's) would make el lag behind
      the cursor for its duration, and the ring reads el's rect synchronously */
   if (xf) el.style.transition = "none";
+  /* a tint/shade overlay is a sibling, not a child, so it doesn't inherit
+     any of the above - it has to be handed the same box and transform or it
+     stays behind at the element's old footprint, see syncElementOverlays() */
+  syncElementOverlays(el);
 }
 
 /**
@@ -2077,6 +2081,10 @@ function setOwnPos(el, tx, ty) {
   }
   paintPos(el);
   el.querySelectorAll(RESIZABLE_SEL).forEach(paintPos);
+  /* live during the drag, so an element crossing a section boundary stays
+     whole under the cursor rather than only after the mouse comes up -
+     applyLayerOrder()'s closing applyClipEscapes() is the full reconcile */
+  releaseClipFor(el);
 }
 
 /**
@@ -2095,6 +2103,10 @@ function setBox(el, w, h) {
   el.dataset.ovH = h;
   el.style.width = w + "px";
   el.style.height = h + "px";
+  /* a resize can push an edge past a clipping ancestor just as a move can,
+     see setOwnPos()'s own call */
+  releaseClipFor(el);
+  syncElementOverlays(el);
 }
 
 /**
@@ -2108,6 +2120,7 @@ function resetBox(el) {
   delete el.dataset.ovH;
   el.style.width = parseFloat(el.dataset.natW) + "px";
   el.style.height = parseFloat(el.dataset.natH) + "px";
+  syncElementOverlays(el);
 }
 
 /**
@@ -3660,6 +3673,88 @@ function reconcileLayerOrder(layers) {
   return order;
 }
 
+/* marks an ancestor whose overflow applyClipEscapes() has released, holding
+   whatever inline overflow it had before so the release can be handed back
+   exactly. An attribute rather than a class so it survives the same
+   rebuild-from-scratch passes LAYER_ISOLATE_ATTR does. */
+var CLIP_RELEASE_ATTR = "data-clip-release";
+
+/* marks the element that escaped, rather than the ancestor that let it: it
+   is now painting over a section it isn't part of, which applyLayerOrder()
+   reads to rank it over that section's contents. */
+var CLIP_ESCAPED_ATTR = "data-clip-escaped";
+
+/** Whether a ta's own drag or resize is what put el where it is. */
+function hasGeometryOverride(el) {
+  var d = el.dataset || {};
+  return d.ovTx !== undefined || d.ovTy !== undefined ||
+    d.ovW !== undefined || d.ovH !== undefined;
+}
+
+/**
+ * Lifts the clip off any ancestor of el that a ta has just dragged el out
+ * past, so the element stays visible instead of being cut off at the
+ * container's edge.
+ * @param el the element that just moved or resized
+ * @note Cheap enough for a drag: it walks el's OWN ancestor chain, nothing
+ * page-wide. applyClipEscapes() does the full reconcile on commit and load.
+ * @note Only `hidden`/`clip` is released, never `auto`/`scroll`: a scroll
+ * container overflows on purpose and unclipping one would take its
+ * scrollbar - the editor's own reel strip is exactly that (see
+ * .reel--editor-scroll).
+ */
+function releaseClipFor(el) {
+  if (!el || !hasGeometryOverride(el)) return;
+  var r = el.getBoundingClientRect();
+  if (!r.width && !r.height) return;
+  var p = el.parentElement;
+  while (p && p !== document.body) {
+    if (!p.hasAttribute(CLIP_RELEASE_ATTR)) {
+      var ov = getComputedStyle(p).overflow;
+      if (ov === "hidden" || ov === "clip") {
+        var pr = p.getBoundingClientRect();
+        if (r.top < pr.top - 1 || r.bottom > pr.bottom + 1 ||
+            r.left < pr.left - 1 || r.right > pr.right + 1) {
+          p.setAttribute(CLIP_RELEASE_ATTR, p.style.overflow || "");
+          p.style.overflow = "visible";
+          el.setAttribute(CLIP_ESCAPED_ATTR, "1");
+        }
+      }
+    }
+    p = p.parentElement;
+  }
+}
+
+/**
+ * Page-wide reconcile of releaseClipFor(): puts every released clip back,
+ * then re-releases only the ones something still hangs out of.
+ * @note Rebuilt from scratch each pass rather than diffed, same reasoning as
+ * clearLayerIsolation(): whether an ancestor clips changes what the next
+ * element's measurement sees, so a stale release would feed into it.
+ * @note This is what a ta reads as a LAYER bug - drag a line of hero text
+ * down into the section below and it disappears "under" that section - but
+ * nothing was ever painted over it. `.hero` (and most sections here) carry
+ * `overflow: hidden`, so the part of the element past the section's edge was
+ * simply cut away: elementFromPoint() over it came back null, not the section.
+ * No z-index can fix that, which is why this is geometry rather than ranking.
+ * @note Gated on a ta's own move/resize (hasGeometryOverride()), never on
+ * mere overhang: plenty of template elements are deliberately clipped by a
+ * container - the About section's watermark is the standing example - and
+ * unclipping those on sight would let them bleed into the page.
+ * @note Runs on the live site too, not just in the editor: an element a ta
+ * dragged across a section boundary has to stay whole for students as well.
+ */
+function applyClipEscapes() {
+  document.querySelectorAll("[" + CLIP_RELEASE_ATTR + "]").forEach(function (p) {
+    p.style.overflow = p.getAttribute(CLIP_RELEASE_ATTR);
+    p.removeAttribute(CLIP_RELEASE_ATTR);
+  });
+  document.querySelectorAll("[" + CLIP_ESCAPED_ATTR + "]").forEach(function (el) {
+    el.removeAttribute(CLIP_ESCAPED_ATTR);
+  });
+  document.querySelectorAll(RESIZABLE_SEL).forEach(releaseClipFor);
+}
+
 /**
  * Applies an explicit stacking order to every tracked element and to the
  * page's backdrops: z-index is just an id's rank (bottom = 1), so the layer
@@ -3717,6 +3812,9 @@ function applyLayerOrder(layers) {
      surface layers, since which boxes need one depends on which are contexts */
   clearLayerIsolation();
   reconcileLayerOrder(layers);
+  /* before any z-index is worked out, since which elements have escaped
+     their section is part of the answer - see the members reorder below */
+  applyClipEscapes();
   var rank = layerRanks();
 
   /* one flat pass over every actual DOM element: a container (has tracked
@@ -3727,6 +3825,25 @@ function applyLayerOrder(layers) {
     m.assignZ = !hasTrackedDescendants(m.el) || ranksAsBlock(m.el);
   });
   members.sort(byLayerRank(rank));
+  /* an element a ta has dragged clear of its own section goes to the top of
+     the ordinary band, keeping its order against anything else that has also
+     escaped. The flat page-wide order is seeded in dom order, so a hero
+     element carries a hero-sized rank wherever it is dragged to - which put
+     it under every single thing in the section it had just been dropped onto,
+     the other half of "it appears under the next section's layer". Dropping
+     something on top of something else leaving it on top is what the gesture
+     means in every other editor.
+     Deliberately the top of the ORDINARY band rather than the lifted one
+     liftsOverFixedBar() uses: clearing the section it landed on is the point,
+     and clearing the sticky navbar as well would only trade this for a
+     dragged element sliding over the bar as the page scrolls. Still a
+     starting rank, not a lock - the layer menu moves it from here like any
+     other. */
+  var escaped = [], settled = [];
+  members.forEach(function (m) {
+    (m.el.hasAttribute(CLIP_ESCAPED_ATTR) ? escaped : settled).push(m);
+  });
+  members = settled.concat(escaped);
   var top = members.length + 1;
 
   var barRank = fixedBarRank(rank);
@@ -4674,39 +4791,114 @@ function stateColorTargets(node) {
  * @return the new set, to be stored back
  */
 function setStateColorClass(cls, held, els) {
-  held.forEach(function (el) { el.classList.remove(cls); });
+  /* whatever the style popover is holding open for the Hover/Click rows is
+     not this pass's to take back off - a ta dragging a swatch has the cursor
+     on the popover, so every mousemove there would otherwise strip the very
+     preview they are watching, see previewElementState() */
+  held.forEach(function (el) { if (el !== STATE_PREVIEW_EL) el.classList.remove(cls); });
   els.forEach(function (el) { el.classList.add(cls); });
   return els;
+}
+
+function hasPickedStateColor(el) {
+  var id = elId(el);
+  if (!id) return false;
+  return !!(THEMED_OVERRIDE_MAPS.hoverColor[id] || THEMED_OVERRIDE_MAPS.darkHoverColor[id] ||
+    THEMED_OVERRIDE_MAPS.activeColor[id] || THEMED_OVERRIDE_MAPS.darkActiveColor[id]);
 }
 
 /**
  * Wires the hover/press states once per page, delegated off the document so
  * elements that come and go are covered with no re-wiring.
- * @note Deliberately inert inside the visual editor: there the cursor is a
- * tool, not a visitor's, so lighting elements up would fight the ring and the
- * drag handles - and, more importantly, the style popover primes its swatches
- * from an element's live computed colour, which would then read back a hover
- * colour every time the popover was opened by clicking its element. The
- * page's own stylesheet hover rules are held off in the editor for the same
- * reason.
+ * @note Narrowed inside the visual editor rather than switched off: only an
+ * element a ta has actually picked a hover or click colour for lights up
+ * there (hasPickedStateColor()). Everything else stays inert, since the
+ * cursor is a tool there and not a visitor's, and lighting the whole page up
+ * under it would fight the ring and the drag handles - the same reason the
+ * page's own stylesheet hover rules are held off in the editor.
+ * @note This used to be inert in the editor outright, because the style
+ * popover primes its swatches from an element's live computed colour and so
+ * read back a hover colour every time it was opened by clicking its element.
+ * primeStyleMenuThemedRows() now takes the state classes off for the length
+ * of those reads, which closes that off and leaves no reason to hide the one
+ * piece of feedback that tells a ta their pick worked.
  */
 function wireStateColorHover() {
-  if (STATE_HOVER_WIRED || (isPreviewMode() && isEditMode())) return;
+  if (STATE_HOVER_WIRED) return;
   STATE_HOVER_WIRED = true;
+  var editing = isPreviewMode() && isEditMode();
+  /* in the editor, only elements a ta has actually picked one of these two
+     colours FOR light up. Everything else keeps the editor's "the cursor is
+     a tool, not a visitor's" behaviour, which is what the page's own hover
+     rules are held off for (see body.edit-mode's overrides in
+     css/style.css) - a ta reaching for something to select or drag doesn't
+     want the whole page reacting.
+     The picked ones do light up, because otherwise the setting has no
+     observable effect anywhere in the editor at all: it saved and applied
+     correctly on the live page the whole time, but in the tool where it is
+     chosen, hovering the element did nothing and the only feedback was the
+     style popover pinning the colour on at rest - which reads as "it set the
+     background, not the hover colour". That is the "hover colour setting is
+     broken" report.
+     What made this unsafe before was the popover priming its swatches off a
+     hovered element's computed colour; primeStyleMenuThemedRows() now takes
+     the state classes off while it reads, so that route is closed. */
+  var targetsFor = function (node) {
+    var els = stateColorTargets(node);
+    return editing ? els.filter(hasPickedStateColor) : els;
+  };
   document.addEventListener("mouseover", function (e) {
-    STATE_HOVERED = setStateColorClass("el-hovered", STATE_HOVERED, stateColorTargets(e.target));
+    STATE_HOVERED = setStateColorClass("el-hovered", STATE_HOVERED, targetsFor(e.target));
   });
   document.addEventListener("mouseleave", function () {
     STATE_HOVERED = setStateColorClass("el-hovered", STATE_HOVERED, []);
     STATE_PRESSED = setStateColorClass("el-pressed", STATE_PRESSED, []);
   });
   document.addEventListener("mousedown", function (e) {
-    STATE_PRESSED = setStateColorClass("el-pressed", STATE_PRESSED, stateColorTargets(e.target));
+    STATE_PRESSED = setStateColorClass("el-pressed", STATE_PRESSED, targetsFor(e.target));
   });
   /* on the window, not the document: a press that ends outside the page (or
      over the browser's own chrome) still has to let go of the pressed look */
   window.addEventListener("mouseup", function () {
     STATE_PRESSED = setStateColorClass("el-pressed", STATE_PRESSED, []);
+  });
+}
+
+/**
+ * Snaps an image/video's tint and shade overlays onto the element's CURRENT
+ * box, so they follow it wherever a ta has since moved, resized, rotated or
+ * flipped it.
+ * @param el the image/video element
+ * @note Both overlays are siblings of el inside its `.free-wrap`, and the
+ * wrap is the element's frozen ORIGINAL slot (see detachFromFlow()) - the
+ * element itself is absolutely positioned inside it and moved by a transform.
+ * Sizing the overlays to the wrap (`inset: 0`, which is all the stylesheet
+ * can express) therefore pinned them to where the image USED to be: drag a
+ * shaded photo and the grey rectangle stayed behind, and adjusting the shade
+ * on an already-transformed clip painted it over the old footprint. That is
+ * the "shade does not follow the actual image, rather its original position"
+ * report, and the transformed-GIF version of it.
+ * @note The transform is copied rather than recomputed, so an overlay
+ * rotates and flips with its element rather than staying an axis-aligned box
+ * around it. Border radius comes along too, so a rounded photo isn't shaded
+ * square at the corners.
+ * @note Safe to call on an element with no overlays - the common case - and
+ * on one not in a free-wrap at all, where there is nothing to sync.
+ */
+function syncElementOverlays(el) {
+  var wrap = el.parentNode;
+  if (!wrap || !wrap.classList || !wrap.classList.contains("free-wrap")) return;
+  var ovs = wrap.querySelectorAll(".tint-ov, .shade-ov");
+  if (!ovs.length) return;
+  var cs = getComputedStyle(el);
+  ovs.forEach(function (ov) {
+    ov.style.left = el.style.left || "0px";
+    ov.style.top = el.style.top || "0px";
+    ov.style.width = el.style.width || (el.offsetWidth + "px");
+    ov.style.height = el.style.height || (el.offsetHeight + "px");
+    ov.style.transform = el.style.transform || "";
+    ov.style.transformOrigin = cs.transformOrigin;
+    ov.style.borderRadius = cs.borderRadius;
   });
 }
 
@@ -4737,6 +4929,7 @@ function setElementTint(el, hex) {
      this a freshly-picked tint would stay invisible, behind el, until the
      next time applyLayerOrder() happens to run */
   ov.style.zIndex = getComputedStyle(el).zIndex;
+  syncElementOverlays(el);
 }
 
 /**
@@ -4780,6 +4973,7 @@ function setElementShade(el, alpha) {
      setElementTint()'s own copy of this: without it a freshly-picked shade
      would stay invisible, behind el, until the next applyLayerOrder() run */
   ov.style.zIndex = getComputedStyle(el).zIndex;
+  syncElementOverlays(el);
 }
 
 /**
@@ -6182,6 +6376,7 @@ function buildStyleMenu() {
     THEMED_OVERRIDE_MAPS.colors[STYLE_MENU_ID] = colorInput.value;
     setElementColor(el, resolveThemedColor(colorInput.value, THEMED_OVERRIDE_MAPS.darkColors[STYLE_MENU_ID]));
     saveEditedColor(STYLE_MENU_ID, colorInput.value);
+    pinShownThemeColor(colorInput, colorDarkInput, "colors", "darkColors", saveEditedColor, saveEditedDarkColor);
   });
   colorInput.addEventListener("change", function () {
     if (!STYLE_MENU_ID) return;
@@ -6221,6 +6416,7 @@ function buildStyleMenu() {
     THEMED_OVERRIDE_MAPS.darkColors[STYLE_MENU_ID] = colorDarkInput.value;
     setElementColor(el, resolveThemedColor(colorInput.value, colorDarkInput.value));
     saveEditedDarkColor(STYLE_MENU_ID, colorDarkInput.value);
+    pinShownThemeColor(colorInput, colorDarkInput, "colors", "darkColors", saveEditedColor, saveEditedDarkColor);
   });
   colorDarkInput.addEventListener("change", function () {
     if (!STYLE_MENU_ID) return;
@@ -6255,6 +6451,8 @@ function buildStyleMenu() {
     THEMED_OVERRIDE_MAPS.textColor[STYLE_MENU_ID] = textColorInput.value;
     el.style.color = resolveThemedColor(textColorInput.value, THEMED_OVERRIDE_MAPS.darkTextColor[STYLE_MENU_ID]);
     saveEditedTextColor(STYLE_MENU_ID, textColorInput.value);
+    pinShownThemeColor(textColorInput, textColorDarkInput, "textColor", "darkTextColor",
+      saveEditedTextColor, saveEditedDarkTextColor);
   });
   textColorInput.addEventListener("change", function () {
     if (!STYLE_MENU_ID) return;
@@ -6290,6 +6488,8 @@ function buildStyleMenu() {
     THEMED_OVERRIDE_MAPS.darkTextColor[STYLE_MENU_ID] = textColorDarkInput.value;
     el.style.color = resolveThemedColor(textColorInput.value, textColorDarkInput.value);
     saveEditedDarkTextColor(STYLE_MENU_ID, textColorDarkInput.value);
+    pinShownThemeColor(textColorInput, textColorDarkInput, "textColor", "darkTextColor",
+      saveEditedTextColor, saveEditedDarkTextColor);
   });
   textColorDarkInput.addEventListener("change", function () {
     if (!STYLE_MENU_ID) return;
@@ -6357,6 +6557,7 @@ function buildStyleMenu() {
       THEMED_OVERRIDE_MAPS[mapKey][STYLE_MENU_ID] = lightInput.value;
       apply(el);
       saveFn(STYLE_MENU_ID, lightInput.value);
+      pinShownThemeColor(lightInput, darkInput, mapKey, darkMapKey, saveFn, darkSaveFn);
     });
     lightInput.addEventListener("change", function () {
       if (!STYLE_MENU_ID) return;
@@ -6391,6 +6592,7 @@ function buildStyleMenu() {
       THEMED_OVERRIDE_MAPS[darkMapKey][STYLE_MENU_ID] = darkInput.value;
       apply(el);
       darkSaveFn(STYLE_MENU_ID, darkInput.value);
+      pinShownThemeColor(lightInput, darkInput, mapKey, darkMapKey, saveFn, darkSaveFn);
     });
     darkInput.addEventListener("change", function () {
       if (!STYLE_MENU_ID) return;
@@ -6436,6 +6638,7 @@ function buildStyleMenu() {
     THEMED_OVERRIDE_MAPS.fill[STYLE_MENU_ID] = fillInput.value;
     el.style.backgroundColor = resolveThemedColor(fillInput.value, THEMED_OVERRIDE_MAPS.darkFill[STYLE_MENU_ID]);
     saveEditedFill(STYLE_MENU_ID, fillInput.value);
+    pinShownThemeColor(fillInput, fillDarkInput, "fill", "darkFill", saveEditedFill, saveEditedDarkFill);
   });
   fillInput.addEventListener("change", function () {
     if (!STYLE_MENU_ID) return;
@@ -6471,6 +6674,7 @@ function buildStyleMenu() {
     THEMED_OVERRIDE_MAPS.darkFill[STYLE_MENU_ID] = fillDarkInput.value;
     el.style.backgroundColor = resolveThemedColor(fillInput.value, fillDarkInput.value);
     saveEditedDarkFill(STYLE_MENU_ID, fillDarkInput.value);
+    pinShownThemeColor(fillInput, fillDarkInput, "fill", "darkFill", saveEditedFill, saveEditedDarkFill);
   });
   fillDarkInput.addEventListener("change", function () {
     if (!STYLE_MENU_ID) return;
@@ -6523,6 +6727,7 @@ function buildStyleMenu() {
       THEMED_OVERRIDE_MAPS[mapKey][STYLE_MENU_ID] = lightInput.value;
       paintProgressElement(el, customElementById(STYLE_MENU_ID) || {});
       saveFn(STYLE_MENU_ID, lightInput.value);
+      pinShownThemeColor(lightInput, darkInput, mapKey, darkMapKey, saveFn, saveDarkFn);
     });
     lightInput.addEventListener("change", function () {
       if (!STYLE_MENU_ID) return;
@@ -6557,6 +6762,7 @@ function buildStyleMenu() {
       THEMED_OVERRIDE_MAPS[darkMapKey][STYLE_MENU_ID] = darkInput.value;
       paintProgressElement(el, customElementById(STYLE_MENU_ID) || {});
       saveDarkFn(STYLE_MENU_ID, darkInput.value);
+      pinShownThemeColor(lightInput, darkInput, mapKey, darkMapKey, saveFn, saveDarkFn);
     });
     darkInput.addEventListener("change", function () {
       if (!STYLE_MENU_ID) return;
@@ -6750,8 +6956,31 @@ function buildStyleMenu() {
     var cached = THEMED_OVERRIDE_MAPS.border[STYLE_MENU_ID];
     return (cached && cached.color) || borderColor.value;
   }
+  /* pinShownThemeColor()'s equivalent for this row, written out by hand
+     because border's maps hold {w, color} objects rather than plain colour
+     strings. Same reason it exists: once one theme's border colour is
+     explicit, leaving the other to autoDarkVariant() paints all but the same
+     colour in both. */
+  function pinShownBorderColor() {
+    if (!STYLE_MENU_ID) return;
+    var w = parseInt(borderW.value, 10);
+    if (isDarkThemeActive()) {
+      var dv = THEMED_OVERRIDE_MAPS.darkBorder[STYLE_MENU_ID];
+      if (dv && dv.color) return;
+      THEMED_OVERRIDE_MAPS.darkBorder[STYLE_MENU_ID] = { color: borderColorDark.value };
+      saveEditedDarkBorder(STYLE_MENU_ID, borderColorDark.value);
+      return;
+    }
+    var lv = THEMED_OVERRIDE_MAPS.border[STYLE_MENU_ID];
+    if (lv && lv.color) return;
+    THEMED_OVERRIDE_MAPS.border[STYLE_MENU_ID] = { w: w, color: borderColor.value };
+    saveEditedBorder(STYLE_MENU_ID, w, borderColor.value);
+  }
   borderW.addEventListener("input", function () { commitBorder(confirmedLightBorderColor()); });
-  borderColor.addEventListener("input", function () { commitBorder(borderColor.value); });
+  borderColor.addEventListener("input", function () {
+    commitBorder(borderColor.value);
+    pinShownBorderColor();
+  });
   borderW.addEventListener("change", function () {
     if (!STYLE_MENU_ID) return;
     var after = { w: parseInt(borderW.value, 10), color: confirmedLightBorderColor() };
@@ -6779,6 +7008,7 @@ function buildStyleMenu() {
     var w = parseInt(borderW.value, 10);
     if (w > 0) el.style.border = w + "px solid " + resolveThemedColor(borderColor.value, borderColorDark.value);
     saveEditedDarkBorder(STYLE_MENU_ID, borderColorDark.value);
+    pinShownBorderColor();
   });
   borderColorDark.addEventListener("change", function () {
     if (!STYLE_MENU_ID) return;
@@ -7131,6 +7361,41 @@ function resolveThemedColor(lightVal, darkVal) {
 }
 
 /**
+ * Pins the ON-SCREEN theme's value for one style-popover colour row, the
+ * moment a ta edits the theme that isn't on screen.
+ * @param lightInput/darkInput the row's two <input type=color>s
+ * @param lightMapKey/darkMapKey THEMED_OVERRIDE_MAPS keys for this row
+ * @param saveLight/saveDark the row's two persistence functions
+ * @note Call this at the END of BOTH of a row's input handlers. Editing the
+ * shown side has already written that side's map entry by then, so this is a
+ * no-op there; editing the hidden side is the case it exists for.
+ * @note primeThemedColorRow() deliberately does NOT write the primary
+ * swatch's live value into its map ("that would fabricate a fake explicit
+ * override out of a plain live read"), which is right while nothing has been
+ * edited. But once the OTHER theme gets a real value, the unwritten side
+ * stops meaning "untouched" and starts meaning "auto-variant of the pick you
+ * just made" - and autoDarkVariant() flips lightness around 50%, so for any
+ * mid-lightness colour it hands back all but the same colour. Pick an orange
+ * for dark mode from light mode and light mode went orange too, while the
+ * swatch still showed the colour it used to be: the "does not save, sets the
+ * same colour across both modes" report. Pinning what is already on screen
+ * costs nothing visually and makes the two sides independent for real.
+ * @note The inline text-colour toolbar has the same split and the same fix,
+ * see applyThemedForeColor().
+ */
+function pinShownThemeColor(lightInput, darkInput, lightMapKey, darkMapKey, saveLight, saveDark) {
+  var id = STYLE_MENU_ID;
+  if (!id) return;
+  var dark = isDarkThemeActive();
+  var shownMap = THEMED_OVERRIDE_MAPS[dark ? darkMapKey : lightMapKey];
+  if (!shownMap || shownMap[id]) return;
+  var shown = (dark ? darkInput : lightInput).value;
+  if (!shown) return;
+  shownMap[id] = shown;
+  (dark ? saveDark : saveLight)(id, shown);
+}
+
+/**
  * Reads an element's current background fill - a textbox's own surface
  * colour, separate from its font colour - as a hex string, "#ffffff" if
  * transparent or unset.
@@ -7315,6 +7580,19 @@ function primeThemedColorRow(liveValue, lightInput, darkInput, lightRow, darkRow
  * element, so that gating is just recomputed here rather than threaded in.
  */
 function primeStyleMenuThemedRows(el) {
+  /* every live read below (currentColorValue(), currentFillValue(),
+     currentBorderValue(), ...) goes through getComputedStyle, and the two
+     state classes paint over exactly those properties - so an element being
+     shown in its hover or press look while the popover primes would report
+     that colour back as its resting one, and the next edit to any of those
+     rows would save it. Held off for the duration and put straight back.
+     This is what used to make hover/press feedback impossible to show in the
+     editor at all (see wireStateColorHover()); with the reads fenced off,
+     the feedback can stay on and the setting is finally verifiable there. */
+  var wasHovered = el.classList.contains("el-hovered");
+  var wasPressed = el.classList.contains("el-pressed");
+  el.classList.remove("el-hovered", "el-pressed");
+
   var kind = elKind(el);
   var isImg = kind === "img";
   var isIcon = kind === "icon";
@@ -7446,6 +7724,9 @@ function primeStyleMenuThemedRows(el) {
     borderDarkToggle.textContent = darkActive ? "☀️" : "🌙";
     borderDarkToggle.title = darkActive ? "Edit light mode border" : "Edit dark mode border";
   }
+
+  if (wasHovered) el.classList.add("el-hovered");
+  if (wasPressed) el.classList.add("el-pressed");
 }
 
 /**
@@ -12778,6 +13059,20 @@ function responsiveFallbackFor(el, axisW) {
      automatic layer only: a band that authors an anchor of its own is an
      explicit choice and still lands, see paintResponsive(). */
   var anchored = isAnchoredEl(el);
+  /* a reel tile's contents sit at fixed offsets inside their OWN tile, and
+     that tile lives in a track which deliberately runs wider than the mask
+     over it and scrolls (see initReel()/.reel--editor-scroll). "Overhanging
+     the container" is the resting state of every tile past the first
+     screenful, not a fault to correct - so both halves of this layer sit out
+     here, exactly as they do for an anchored element and for the same
+     reason: something else already owns where this sits.
+     Without the exemption the clamp below slid every off-screen tile's
+     title, body and icon back to the mask's own right edge, stacking the
+     contents of tiles 4, 5 and 6 on top of one another in one unreadable
+     pile - the "entries at the edge of this scrolling gallery are
+     overlapped" report. It fired on a plain page load, before any editing,
+     since the seeded tile children are free-placed to begin with. */
+  var inReelTrack = !!(el.closest && el.closest(".reel-track"));
   /* isFinite guards a container measured mid-rebuild; a ratio of exactly 1 is
      the authoring width itself, where this whole layer must be a no-op */
   /* and the same exemption, for the same reason, for a free-placed element
@@ -12794,7 +13089,7 @@ function responsiveFallbackFor(el, axisW) {
      their own 547px row - collapsed left into a pile on top of each other,
      each by 62% of how far along the row it sat. An authored offset still
      scales exactly as before, so a ta's own drag is untouched. */
-  if (isFinite(ratio) && ratio !== 1 && !anchored) {
+  if (isFinite(ratio) && ratio !== 1 && !anchored && !inReelTrack) {
     if (freePlaced && hostRect && hasAuthoredOffset(el)) {
       var prev = parseFloat(el.dataset.rsDx) || 0;
       var authoredLeft = el.getBoundingClientRect().left - hostRect.left - prev;
@@ -12846,7 +13141,7 @@ function responsiveFallbackFor(el, axisW) {
      ta gave it a width wider than the column - which is the width cap's job
      just above, not a position's. Sliding one here would only re-introduce
      the drift the exemption above exists to remove. */
-  if (!anchored && (freePlaced || (saved && saved.tx))) {
+  if (!anchored && !inReelTrack && (freePlaced || (saved && saved.tx))) {
     var prevDx = parseFloat(el.dataset.rsDx) || 0;
     var r = el.getBoundingClientRect();
     var effW = out.maxW ? Math.min(r.width, out.maxW) : r.width;
@@ -16856,13 +17151,38 @@ var FLIP_ICONS = {
  * briefly paints and is immediately corrected back by repaintInlineTextColors().
  */
 function applyThemedForeColor(fieldEl, hex, forDark) {
-  var dark = forDark === undefined ? isDarkThemeActive() : forDark;
+  var active = isDarkThemeActive();
+  var dark = forDark === undefined ? active : forDark;
+  /* what the selection is painted RIGHT NOW, read before execCommand
+     repaints it, and only when the pick is for the theme that ISN'T on
+     screen - that's the one case the pin below has anything to do. */
+  var shown = "";
+  if (dark !== active) {
+    try { shown = rgbToHex(document.queryCommandValue("foreColor")); } catch (e) {}
+  }
   document.execCommand("styleWithCSS", false, true);
   document.execCommand("foreColor", false, hex);
   fieldEl.querySelectorAll("[style*='color']").forEach(function (span) {
     if (rgbToHex(span.style.color) !== hex.toLowerCase()) return;
     if (dark) span.dataset.darkColor = hex;
     else span.dataset.lightColor = hex;
+    /* a span tagged for one theme only leaves the other side to
+       resolveThemedColor()'s auto-variant, which is the right default for a
+       ta who has only ever edited in one theme - but NOT for one who just
+       went out of their way to open the other theme's swatch and pick a
+       colour there. That gesture says the two are being set apart on
+       purpose, so the theme still on screen stops being a guess and keeps
+       exactly what it is showing.
+       Without this, picking a dark colour from light mode retagged the span
+       for dark only and left light rendering autoDarkVariant() of the new
+       pick - which for any mid-lightness colour (lightness flips around 50%)
+       comes back all but identical, so the pick appeared to apply to BOTH
+       themes at once and the light-mode colour the ta never touched was
+       silently gone. That is the "does not persist, and sets the same colour
+       across both modes" report. */
+    if (dark === active || !shown) return;
+    var shownKey = active ? "darkColor" : "lightColor";
+    if (!span.dataset[shownKey]) span.dataset[shownKey] = shown;
   });
   repaintInlineTextColors();
 }

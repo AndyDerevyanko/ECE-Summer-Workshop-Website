@@ -4075,6 +4075,37 @@ var EDIT_UNDO = [];
 var EDIT_REDO = [];
 
 /**
+ * Hands the wrap the properties that decide WHICH slot of its parent's layout
+ * the element was occupying, so the wrap takes that same slot.
+ * @param wrap the brand-new .free-wrap
+ * @param cs the detaching element's already-read computed style
+ * @note Only these four: they are the ones a flex or grid parent reads off an
+ * ITEM to place it, so they belong to the slot rather than to the element, and
+ * a wrap that freezes the slot without them freezes the wrong one. Everything
+ * about the element's own box (its size, its margins) is already copied over
+ * by detachFromFlow() itself.
+ * @note `order` is the one that actually bit. `.day-row` is a grid of
+ * `auto 90px 1fr` and its icon is pulled to the front with `order: -1`; the
+ * wrap, matching no stylesheet rule, defaults to 0 and so sorted to the END of
+ * the row. Every remaining child then slid one track along - the day tag went
+ * from 90px to 35px and the title/count column from 880px to 90px, which is
+ * what "moving an element out of its container resets the width of all the
+ * others" was. Nothing had touched their widths at all; they were in different
+ * columns.
+ * @note Harmless wherever the parent lays out no items: all four properties
+ * apply to flex and grid children only, and are ignored on a block child.
+ */
+function carryFlowSlot(wrap, cs) {
+  wrap.style.order = cs.order;
+  wrap.style.alignSelf = cs.alignSelf;
+  wrap.style.justifySelf = cs.justifySelf;
+  /* explicit grid placement, for a parent that names tracks rather than
+     letting auto-placement walk them. gridArea is the shorthand for all four
+     of row/column start/end, so one read covers the lot. */
+  wrap.style.gridArea = cs.gridArea;
+}
+
+/**
  * Takes el out of normal document flow so its real width/height can change
  * without touching anything else on the page.
  * @param el the element to detach from flow
@@ -4174,6 +4205,7 @@ function detachFromFlow(el, knownRect) {
      which shifts unrelated siblings. Aligning to the line's top removes the
      wrap from that calculation entirely. */
   if (isInlineLevel) wrap.style.verticalAlign = "top";
+  carryFlowSlot(wrap, cs);
   el.parentNode.insertBefore(wrap, el);
   wrap.appendChild(el);
 
@@ -8149,6 +8181,41 @@ function positionRing() {
 }
 
 /**
+ * Keeps the ring on its element for as long as that element is still moving,
+ * for a drop that ends in a css transition rather than instantly.
+ * @param el the element whose rect is still settling
+ * @note `.reel-tile` carries `transition: transform .32s` (css/style.css), and
+ * a reorder drag ends by clearing the inline translate that had been tracking
+ * the cursor - so the tile EASES into its new slot over the next third of a
+ * second. positionRing() read the rect it had on the frame the drag ended,
+ * which is the rect from BEFORE any of that: the ring was left behind a whole
+ * slot away from the tile it belongs to, and stayed there until the next
+ * click moved it.
+ * @note Watches the rect rather than listening for transitionend: the tile is
+ * not the only thing that settles - the track relays out around it and the
+ * editor's own scroll can shift - and a drop back into the slot it came from
+ * transitions nothing at all, so there would be no event to end on. The
+ * deadline is what ends it either way.
+ * @note Repositions only on a frame where the rect actually changed, so a
+ * settled element costs one rect read per frame and nothing else.
+ */
+function trackRingUntilSettled(el) {
+  if (!el) return;
+  var deadline = Date.now() + 600;
+  var last = "";
+  (function step() {
+    /* the ring may have moved on to something else entirely mid-flight (the
+       drop is over, so nothing stops the ta clicking elsewhere), and a tile
+       can be deleted or re-rendered out from under this */
+    if (!RING_EL || !el.isConnected || (RING_EL !== el && !el.contains(RING_EL))) return;
+    var r = RING_EL.getBoundingClientRect();
+    var now = r.left + "," + r.top + "," + r.width + "," + r.height;
+    if (now !== last) { positionRing(); last = now; }
+    if (Date.now() < deadline) requestAnimationFrame(step);
+  })();
+}
+
+/**
  * The tracked element enclosing el - the one the ring's "select the container
  * around this" handle jumps to.
  * @param el the currently selected element
@@ -8885,6 +8952,10 @@ function startReelTileDrag(e, tile) {
     tile.classList.remove("reel-dragging");
     tile.style.transform = "";
     positionRing();
+    /* taking .reel-dragging back off restores the tile's transform
+       transition, so clearing the translate above starts a .32s ease into its
+       new slot rather than putting it there - the ring has to follow it in */
+    trackRingUntilSettled(tile);
     var after = reelTileOrder(panel);
     if (after.join(",") === before.join(",")) return;
     saveReelOrder(panel, after);
@@ -9406,6 +9477,51 @@ function clearFreePlacement(el) {
 }
 
 /**
+ * Re-seeds a just-seated element's place in the layer order so it sits above
+ * the box it has been put into, the way every container is seeded ahead of
+ * its own children.
+ * @param el the element that has just been seated
+ * @param box the box it is now a child of
+ * @note This is what stops a drop DISAPPEARING. The flat page-wide order is
+ * seeded in document order, so a box drawn after the text it is later given
+ * ranks above that text - and surfaceRankedOver() reads "ranked below a
+ * container that paints a surface" as the ta having deliberately sent it
+ * behind the panel. It is the only signal there is for that gesture, and it
+ * cannot tell the two apart: the next full stacking pass handed the text a
+ * negative z-index and put it under the box's own background, out of sight.
+ * @note Restoring the invariant at the moment the parentage changes is what
+ * keeps the "sent behind" reading honest everywhere else - afterwards, the
+ * only way to rank below your own container really is to have asked for it.
+ * @note Moves the element's whole layer block (see layerSubtreeIds()), so
+ * seating a card carries its contents up with it in the order they were in
+ * rather than stranding them under the box.
+ * @note A no-op when the block already outranks the box, so seating something
+ * that was drawn later than its box leaves the order completely untouched.
+ */
+function seedSeatedLayerRank(el, box) {
+  var id = elId(el), boxId = elId(box);
+  if (!id || !boxId) return;
+  /* both ids certain to be IN the order before either is looked up, same
+     reason moveLayer() reconciles first */
+  reconcileLayerOrder(LAYER_ORDER);
+  var boxAt = LAYER_ORDER.indexOf(boxId);
+  if (boxAt === -1) return;
+  var block = layerSubtreeIds(el);
+  if (!block.length) block = [id];
+  var lowest = Infinity, inBlock = {};
+  block.forEach(function (b) {
+    inBlock[b] = true;
+    var i = LAYER_ORDER.indexOf(b);
+    if (i !== -1) lowest = Math.min(lowest, i);
+  });
+  if (lowest > boxAt) return;
+  var rest = LAYER_ORDER.filter(function (x) { return !inBlock[x]; });
+  var at = rest.indexOf(boxId) + 1;
+  LAYER_ORDER = rest.slice(0, at).concat(block, rest.slice(at));
+  saveLayerOrder(LAYER_ORDER);
+}
+
+/**
  * Seats an element inside a box: the whole point of this section.
  * @param el the element to seat
  * @param box the box to seat it in
@@ -9432,6 +9548,9 @@ function seatInBox(el, box, beforeEl) {
      otherwise the next load's applyPositionOverrides() would paint it straight
      back on and shove the element out of the row it now belongs to */
   saveEditedPosition(id, null, null);
+  /* before anything else reads the stacking order: el has just gained a
+     container, and a container is always seeded ahead of what it holds */
+  seedSeatedLayerRank(el, box);
   freezeSeatedSize(el, wasWidth);
   recordBoxMembers();
   applyBoxFlow();
@@ -9894,12 +10013,12 @@ function finishBoxDrop(el, before) {
       /* the drop has just turned el into a body-free-placed element, which
          changes which side of the navbar's stamp it belongs on - so its z has
          to be brought up to date. Only its own, rather than re-running
-         applyLayerOrder() over the page: a full pass here also rebuilds every
-         container's surface layer, and a box holding elements that rank below
-         it - which is any box created after the things later seated into it -
-         sends them behind that surface and out of sight. That is its own bug
-         and not this one's to trip over mid-drag; the next full pass, on the
-         next load, resolves this element identically anyway. */
+         applyLayerOrder() over the page: one element's band is the only thing
+         this drop changed, and the next full pass resolves it identically
+         anyway. (It used to be load-bearing for a second reason - a full pass
+         sent everything seated in a box that outranked it behind that box's
+         surface and out of sight - but that is prevented at its source now,
+         see seedSeatedLayerRank().) */
       liftDroppedOverFixedBar(el);
       EDIT_UNDO.push({ type: "seat", id: elId(el), before: before, after: captureSeat(el) });
       EDIT_REDO.length = 0;
@@ -14167,6 +14286,33 @@ var BOUND_TILE_SELECTORS = ['[data-reel-tile="1"]', '[data-extras-tile="1"]', '[
   '[data-gallery-tile="1"]'];
 
 /**
+ * Finds the box a new element being placed at document (x, y) should be
+ * seated in, instead of landing as an independent page element floating over
+ * it.
+ * @param x drop point left, document px
+ * @param y drop point top, document px
+ * @return the box under the point, or null
+ * @note The box counterpart of findBoundTileHit() just below, and there for
+ * the same reason: "add an element inside this container" is what a ta means
+ * by right-clicking inside one, and answering it with a free element pinned
+ * on top instead is what made a new box look like it had deleted the text
+ * already in the container. It hadn't - a box is an opaque panel and lands at
+ * the top of the stacking order, so it was simply covering it.
+ * @note No Alt here, unlike a DRAG into a box (see trackBoxDrop()'s ALT-DROP
+ * note). The key guards a drag because seating throws away a free position
+ * the ta had already arranged by hand; a brand-new element has no such
+ * position to lose, which is exactly why adding over a TILE has always bound
+ * to it with no key either.
+ * @note The point only, never the new element's hitbox: a box that merely
+ * overlaps a corner of what is being placed hasn't been pointed at, and
+ * swallowing an element on that basis is the surprise the Alt rule exists to
+ * avoid.
+ */
+function findBoxDropHit(x, y) {
+  return boxDropTargetAt(x - window.scrollX, y - window.scrollY, null);
+}
+
+/**
  * Finds the tile a new element being placed at document (x, y) should bind
  * into, instead of landing as an independent page element.
  * @param x drop point left, document px
@@ -14383,6 +14529,15 @@ function addCustomElement(kind, x, y, extra) {
   CUSTOM_ELEMENTS.push(d);
   saveCustomElements(CUSTOM_ELEMENTS);
   LAYER_ORDER.push(d.id);
+  /* dropped inside a box: join it, exactly as an Alt-drag into one would, so
+     the box lays the new element out beside what it already holds instead of
+     leaving it floating over the top. AFTER the push above, so the id that
+     seatInBox() reconciles against is already in the order and can't be
+     appended to it a second time. */
+  var boxHit = findBoxDropHit(x, y);
+  if (boxHit) {
+    seatInBox(el, boxHit, boxDropIndexAt(boxHit, x - window.scrollX, y - window.scrollY, el));
+  }
   applyLayerOrder(LAYER_ORDER);
   saveLayerOrder(LAYER_ORDER);
   finishAddedElement(el, d, kind, extra);

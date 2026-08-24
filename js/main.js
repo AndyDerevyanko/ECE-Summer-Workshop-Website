@@ -2887,68 +2887,26 @@ function isFixedInstance(el) {
   return !!el && isFixed(elId(el)) && !!(el.closest && el.closest("nav"));
 }
 
-/**
- * The rank of the outermost fixed container - the navbar applyLayerOrder()
- * stamps clear of the whole page.
- * @param rank id -> rank, from layerRanks()
- * @return its rank, or -1 on a page with no fixed container (most of them)
- */
-function fixedBarRank(rank) {
-  var out = -1;
-  document.querySelectorAll(RESIZABLE_SEL).forEach(function (el) {
-    if (!isFixedInstance(el) || !hasTrackedDescendants(el) || fixedTrackedAncestor(el)) return;
-    var r = rank[elId(el)];
-    if (r !== undefined && (out === -1 || r < out)) out = r;
-  });
-  return out;
-}
+/* THE FIXED BAR BEATS EVERYTHING
+   -----------------------------------------------------------------------
+   applyLayerOrder() stamps the outermost fixed container - the navbar - one
+   past every rank on the page, and nothing on the page gets past it. Every
+   element INSIDE the bar therefore paints above every element outside it,
+   whatever the layer order says, because the bar's z-index makes it a
+   stacking context and its contents resolve inside that. The layer order goes
+   on deciding the bar's own contents against each other, which is the only
+   comparison left to make.
 
-/**
- * Whether el is one of the few things allowed past the fixed navbar's stamp.
- * @param el the element
- * @param rank id -> rank, from layerRanks()
- * @param barRank fixedBarRank(rank)
- * @return true if el's z should be lifted clear of the bar
- * @note `top` is deliberately one past every rank on the page, which makes the
- * bar unbeatable - right for the content it SCROLLS over, the thing the stamp
- * exists for, and wrong for the one kind of element that is neither in the bar
- * nor in the flow beneath it: one a ta has pinned to an absolute spot on the
- * body itself. Dragging a button out of the bar makes exactly that (see
- * unseatFromBox()), and no rank could lift it back into view, so it vanished
- * behind the bar's own backdrop however far forward the layer menu was told to
- * put it. Anything the order puts BELOW the bar, and every element still in
- * flow, is untouched.
- * @note Anchored elements are excluded even though they are body-free-placed
- * on paper: the dashboard's progress bar, the gallery's five controls and the
- * login card's four are pinned to in-flow spacers (applyElementAnchors()), so
- * they scroll with the page like the flow they track, and lifting them is the
- * plain bug of a progress bar sliding over the navbar. What is left is what a
- * ta placed or dragged there by hand, which is the set this is for.
- * @note One knock-on worth naming: a placed element far down the page clears
- * the bar too, so scrolling slides it over rather than under. That is the same
- * answer the layer order already gives for every other pair of elements on the
- * page, and the ta can send it behind.
- */
-function liftsOverFixedBar(el, rank, barRank) {
-  if (barRank === -1 || !isBodyFreePlaced(el) || isAnchoredEl(el)) return false;
-  var r = rank[elId(el)];
-  return r !== undefined && r > barRank;
-}
-
-/**
- * True for an element pinned to an absolute spot on the body itself, rather
- * than sitting in some container's flow.
- * @param el the element
- * @return true if its wrap is a .free-wrap parented straight to <body>
- * @note The one shape of element that is page-level content without being
- * page FLOW, which is what makes it the exception to the fixed bar's stamp -
- * see applyLayerOrder().
- */
-function isBodyFreePlaced(el) {
-  var wrap = el && el.parentElement;
-  return !!(wrap && wrap.classList && wrap.classList.contains("free-wrap") &&
-            wrap.parentElement === document.body);
-}
+   There used to be an exception, and this is the note it left behind. An
+   element a ta had dragged OUT of the bar and pinned to the body was lifted
+   back over the bar (`top + z`), so that one dropped on the bar's own strip
+   stayed visible instead of disappearing behind its backdrop. The cost was
+   that the same element then slid OVER the navbar for the rest of the page as
+   it scrolled - the bar stopped being the thing that covers the page, which is
+   the one behaviour a navbar has. An element dropped on the strip is behind
+   the bar now, like any other page content there; the way to put something in
+   the bar is to promote it into the bar (see toggleFixed()), which is what
+   that menu item is for. */
 
 /**
  * The nearest tracked ancestor of el that is itself a fixed instance - the
@@ -3756,6 +3714,28 @@ function applyClipEscapes() {
 }
 
 /**
+ * Writes one element's z-index, and mirrors it onto its wrap when the wrap is
+ * the thing holding the element's sticky positioning.
+ * @param el the element
+ * @param z the z-index to set, as a string ("" to clear)
+ * @note `position: sticky` makes an element a stacking context whatever its
+ * z-index is - unlike `relative`, which only does so once it has one. So the
+ * moment carryStickyPosition() hands a .free-wrap the stickiness, that wrap
+ * seals its element's z-index inside itself and takes the element's place in
+ * the page's stacking order at its own level, which is plain document order.
+ * For the navbar that is the very top of <body>, ie under everything - the
+ * bar's whole stamp would be thrown away the first time a ta moved it. Giving
+ * the wrap the same number puts the pair back where the one element was.
+ * @note Every z-index applyLayerOrder() assigns goes through here, so there is
+ * no path that sets one and forgets the wrap.
+ */
+function setLayerZ(el, z) {
+  el.style.zIndex = z;
+  var wrap = el.parentElement;
+  if (wrap && wrap.hasAttribute && wrap.hasAttribute(STICKY_WRAP_ATTR)) wrap.style.zIndex = z;
+}
+
+/**
  * Applies an explicit stacking order to every tracked element and to the
  * page's backdrops: z-index is just an id's rank (bottom = 1), so the layer
  * menu is the only thing that ever reorders anything and a resize no longer
@@ -3804,7 +3784,8 @@ function applyClipEscapes() {
  * @note A fixed CONTAINER - nav itself - is stamped one past every rank on
  * the page even though ordinary containers get nothing, which keeps a sticky
  * bar over scrolling content however many leaves the page grows.
- * `.nav`'s hardcoded z-index: 50 stays as the no-js default.
+ * `.nav`'s hardcoded z-index: 50 stays as the no-js default. Nothing on the
+ * page gets past that stamp - see THE FIXED BAR BEATS EVERYTHING above.
  */
 function applyLayerOrder(layers) {
   /* back to a clean slate before anything is worked out - see the note on
@@ -3833,20 +3814,16 @@ function applyLayerOrder(layers) {
      the other half of "it appears under the next section's layer". Dropping
      something on top of something else leaving it on top is what the gesture
      means in every other editor.
-     Deliberately the top of the ORDINARY band rather than the lifted one
-     liftsOverFixedBar() uses: clearing the section it landed on is the point,
-     and clearing the sticky navbar as well would only trade this for a
-     dragged element sliding over the bar as the page scrolls. Still a
-     starting rank, not a lock - the layer menu moves it from here like any
-     other. */
+     The top of the ordinary band and no further: clearing the section it
+     landed on is the point, and the fixed navbar is above the whole band
+     regardless. Still a starting rank, not a lock - the layer menu moves it
+     from here like any other. */
   var escaped = [], settled = [];
   members.forEach(function (m) {
     (m.el.hasAttribute(CLIP_ESCAPED_ATTR) ? escaped : settled).push(m);
   });
   members = settled.concat(escaped);
   var top = members.length + 1;
-
-  var barRank = fixedBarRank(rank);
 
   /* everything ranked below one of its own containers' surfaces. Those go
      BELOW zero, and are the only things that do: -1 is the surface layer
@@ -3888,14 +3865,13 @@ function applyLayerOrder(layers) {
        `.nav-inner` - sealing the wordmark and logo in above the bar's own
        surface, so "send to back" on either changed nothing on screen. */
     if (hasTrackedDescendants(m.el)) {
-      if (m.fixed && !fixedTrackedAncestor(m.el)) { m.el.style.zIndex = String(top); return; }
-      if (!m.assignZ) { m.el.style.zIndex = ""; return; }
+      if (m.fixed && !fixedTrackedAncestor(m.el)) { setLayerZ(m.el, String(top)); return; }
+      if (!m.assignZ) { setLayerZ(m.el, ""); return; }
     }
     if (getComputedStyle(m.el).position === "static") m.el.style.position = "relative";
-    if (m.behindZ !== undefined) { m.el.style.zIndex = String(m.behindZ); return; }
-    /* see liftsOverFixedBar() for what this band is and why it exists */
-    var zi = liftsOverFixedBar(m.el, rank, barRank) ? top + z : z;
-    m.el.style.zIndex = String(zi);
+    if (m.behindZ !== undefined) { setLayerZ(m.el, String(m.behindZ)); return; }
+    var zi = z;
+    setLayerZ(m.el, String(zi));
     /* a tint overlay is a plain untracked sibling div after its image in the
        same free-wrap: without its own z-index it stays at auto, and any
        element here with an explicit one (including its own image) paints
@@ -4105,6 +4081,43 @@ function carryFlowSlot(wrap, cs) {
   wrap.style.gridArea = cs.gridArea;
 }
 
+/* marks a .free-wrap that has taken over its element's own sticky positioning
+   (see carryStickyPosition()), so applyLayerOrder() knows to mirror the
+   element's z-index onto it. */
+var STICKY_WRAP_ATTR = "data-sticky-wrap";
+
+/**
+ * Moves a sticky element's stickiness onto its wrap, so detaching it from flow
+ * doesn't quietly turn it into a plain element parked at the top of the page.
+ * @param wrap the brand-new .free-wrap
+ * @param cs the detaching element's already-read computed style
+ * @note detachFromFlow() makes every element it touches `position: absolute`
+ * inside its wrap - that is the whole mechanism, and it is what lets a resize
+ * change the element's real box without moving anything around it. On a
+ * `position: sticky` element it also silently deletes the sticking: the navbar
+ * is `sticky; top: 0`, so the first time a ta moved or resized it the bar
+ * stopped following the page down and just sat at the top of the document,
+ * scrolling away like any other block. The editor was then showing a navbar
+ * that behaved like no navbar the site has ever shipped.
+ * @note The wrap is the right place for it, not the element. The wrap is the
+ * element's frozen slot: it is the thing still IN flow, so it is the only
+ * thing that can sit at the scrollport's edge and stay there. The element goes
+ * on being absolute at (0,0) inside it and rides along, which leaves
+ * paintPos()/setBox() and every other bit of the editor's machinery untouched.
+ * @note Copies the inset the element was actually sticking against rather than
+ * assuming top: 0, and only the ones that are set - `auto` on all four is a
+ * sticky element that never sticks to anything, and writing zeros in would
+ * invent behaviour the page never had.
+ */
+function carryStickyPosition(wrap, cs) {
+  if (cs.position !== "sticky") return;
+  wrap.style.position = "sticky";
+  ["top", "right", "bottom", "left"].forEach(function (side) {
+    if (cs[side] !== "auto") wrap.style[side] = cs[side];
+  });
+  wrap.setAttribute(STICKY_WRAP_ATTR, "1");
+}
+
 /**
  * Takes el out of normal document flow so its real width/height can change
  * without touching anything else on the page.
@@ -4206,6 +4219,7 @@ function detachFromFlow(el, knownRect) {
      wrap from that calculation entirely. */
   if (isInlineLevel) wrap.style.verticalAlign = "top";
   carryFlowSlot(wrap, cs);
+  carryStickyPosition(wrap, cs);
   el.parentNode.insertBefore(wrap, el);
   wrap.appendChild(el);
 
@@ -9683,24 +9697,6 @@ function unseatFromBox(el, left, top) {
 }
 
 /**
- * Lifts a just-dropped element clear of the fixed navbar's stamp, if the same
- * rule the full stacking pass uses says it belongs there.
- * @param el the element that was dropped onto the open page
- * @note Adds the same `top` offset applyLayerOrder() would, on top of the rank
- * z it is already carrying from the last full pass - so the number this leaves
- * behind is the number that pass would work out, and re-running it changes
- * nothing. `top` is one past every rank, which is the member count plus one.
- */
-function liftDroppedOverFixedBar(el) {
-  var rank = layerRanks();
-  if (!liftsOverFixedBar(el, rank, fixedBarRank(rank))) return;
-  var z = parseFloat(el.style.zIndex);
-  if (!isFinite(z)) return;
-  var top = document.querySelectorAll(RESIZABLE_SEL).length + 1;
-  if (z <= top) el.style.zIndex = String(top + z);
-}
-
-/**
  * Re-reads the seating straight off the dom into BOX_MEMBERS and persists it.
  * @note Read back rather than maintained incrementally: the dom is the truth
  * the moment anything reorders, and one query is cheaper than keeping a
@@ -10010,16 +10006,13 @@ function finishBoxDrop(el, before) {
        drag start unseated it, see startBoxDrag()), so the only thing left is
        the history entry */
     if (before.box) {
-      /* the drop has just turned el into a body-free-placed element, which
-         changes which side of the navbar's stamp it belongs on - so its z has
-         to be brought up to date. Only its own, rather than re-running
-         applyLayerOrder() over the page: one element's band is the only thing
-         this drop changed, and the next full pass resolves it identically
-         anyway. (It used to be load-bearing for a second reason - a full pass
-         sent everything seated in a box that outranked it behind that box's
-         surface and out of sight - but that is prevented at its source now,
-         see seedSeatedLayerRank().) */
-      liftDroppedOverFixedBar(el);
+      /* nothing to repaint: the drop changed which container el belongs to,
+         and with the navbar's stamp unconditional (see THE FIXED BAR BEATS
+         EVERYTHING) that no longer changes which z band it is in. It used to
+         be load-bearing twice over - once for the band, once because a full
+         pass sent everything seated in a box that outranked it behind that
+         box's surface and out of sight - and both are settled at their source
+         now, the second by seedSeatedLayerRank(). */
       EDIT_UNDO.push({ type: "seat", id: elId(el), before: before, after: captureSeat(el) });
       EDIT_REDO.length = 0;
       return true;

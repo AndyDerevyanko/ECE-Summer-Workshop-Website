@@ -888,32 +888,66 @@ body.edit-mode .reel-tile { cursor: grab; }
 .stat .lbl { color: var(--muted); font-size: .9rem; }
 
 /* ---------- prizes banner ---------- */
-/* text left, certificate right */
+/* one panel, three rows down: heading, certificate, and the closing line with
+   the Apply button beside it. Everything shares the panel's left edge, the
+   certificate included - a centred image above left-aligned text is what made
+   it read as dropped into the box rather than laid out in it.
+
+   Full wrap width, the same edges the stats row above it and every other
+   section on the page sit on. It was briefly fit-content, on the theory that
+   a panel hugging the height-capped certificate wastes no surface - true in
+   isolation, but it made this the one band on the page narrower than its
+   neighbours, and a panel that doesn't line up with the one above it reads
+   as more wrong than a little room beside the image does. */
 .banner {
+  width: 100%;
   border-radius: var(--radius);
-  padding: 40px;
+  padding: 28px;
   border: 1px solid var(--border);
   background: var(--surface);
   display: flex;
   flex-direction: column;
-  gap: 32px;
+  gap: 18px;
 }
 .banner-left { max-width: 680px; }
+/* the heading's own .5em bottom margin would stack on top of the flex gap and
+   open twice the intended space under it - the gap is the only separation the
+   rows need, and the 21px this frees goes to the certificate */
+.banner h2 { margin-bottom: 0; }
+/* the closing line and its button on one row rather than stacked: it is how
+   the sentence and its call to action read, and it hands the certificate the
+   other 70-odd px. Wraps on a narrow window, where they genuinely don't fit
+   side by side. */
+.banner-cta {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  /* .banner-left's 680px cap is for a paragraph on its own; this row is that
+     paragraph AND the button, and 680 is narrow enough to wrap them apart on
+     a window where they fit side by side comfortably. The .sub keeps its own
+     620px measure, so the text still doesn't run long. */
+  max-width: none;
+}
+.banner-cta .sub { margin: 0; }
 /* the certificate takes whatever --fit-avail has left, same budget shape as
-   .vid-row's clips above. 346px is everything else in the banner - its own
-   80px of padding, the heading 54, the "everyone leaves..." line and the
-   Apply button 117, the two 32px flex gaps - plus the same 8px of slack.
-   That's what makes the whole panel one screenful.
+   .vid-row's clips above. 198px is everything else in the banner - its own
+   56px of padding, the heading 54, the closing line and Apply button sharing
+   one 44px row, the two 18px flex gaps - plus the same 8px of slack. That's
+   what makes the whole panel one screenful, and every number in it that came
+   down (the padding, the gaps, the stacked line and button) came down so this
+   one could go up: the image is 148px taller here than it was.
    width:auto rather than 100% so the cap scales the image down whole (a
    replaced element honours both max-* proportionally) instead of letterboxing
-   it inside a full-width box; align-self keeps it centred once it's narrower
-   than the banner. On a tall window max-width:100% still governs and it
-   renders exactly as it did before. */
+   it inside a full-width box, which is the whole reason it can be this big.
+   align-self puts it on the same left edge as the heading and the closing
+   line; the panel is wider than the image on a short window, and the room
+   that leaves goes to the right of it rather than being split either side. */
 .cert-img {
   width: auto;
   max-width: 100%;
-  max-height: calc(var(--fit-avail, 100vh) - 346px);
-  align-self: center;
+  max-height: calc(var(--fit-avail, 100vh) - 198px);
+  align-self: start;
   border-radius: 12px;
 }
 
@@ -2432,7 +2466,6 @@ body.edit-mode [data-edit-id] {
   cursor: pointer;
   outline: 1px dashed var(--accent);
   outline-offset: 3px;
-  border-radius: 3px;
   transition: outline-style .15s;
 }
 body.edit-mode [data-edit-id]:hover { outline-style: solid; }
@@ -2456,10 +2489,22 @@ body.edit-mode [data-edit-id].editing-backdrop { background: var(--surface); }
 /* images/icons get the same always-visible dashed outline as text fields,
    so it's obvious at a glance they're resizable too (see data-resize-id in
    templates/index.html, wireResizable() in js/main.js) */
+/* NB neither rule here sets a border-radius, and neither should. Both used to
+   set 3px, to soften the dashed rectangle's corners - but border-radius is the
+   ELEMENT's own shape, not the outline's, and setting it here overwrote
+   whatever shape the site had given every tagged element on the page. An
+   outline already follows the element's real radius by itself, so the 3px
+   bought nothing on a rounded element and quietly reshaped it: the theme
+   toggle is a 20px pill and the Access portal button a 10px rounded rect, and
+   both rendered as near-square boxes in the editor and nowhere else. A ta
+   reading the editor for what a visitor will see was being shown the wrong
+   shape, which is the one thing this view has to get right. Elements the site
+   gives no radius now draw a sharp-cornered hitbox, which is what their shape
+   actually is. A radius a ta sets themselves is an inline style and was never
+   affected either way. */
 body.edit-mode [data-resize-id] {
   outline: 1px dashed var(--accent);
   outline-offset: 3px;
-  border-radius: 3px;
 }
 body.edit-mode [data-resize-id]:hover { outline-style: solid; }
 
@@ -3790,7 +3835,7 @@ body.mono .day-card .daytag { color: var(--accent); }
    stop working assumes the editor has broken, not that a switch is on. */
 body.rs-armed { outline: 2px solid var(--accent-2); outline-offset: -2px; }
 body.rs-armed::after {
-  content: "Responsive mode - drawing behaviour, not editing";
+  content: "Responsive mode: no editing";
   position: fixed;
   left: 50%;
   bottom: 12px;

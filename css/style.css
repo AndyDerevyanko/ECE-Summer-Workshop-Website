@@ -888,17 +888,23 @@ body.edit-mode .reel-tile { cursor: grab; }
 .stat .lbl { color: var(--muted); font-size: .9rem; }
 
 /* ---------- prizes banner ---------- */
-/* one panel, three rows down: heading, certificate, and the closing line with
-   the Apply button beside it. Everything shares the panel's left edge, the
-   certificate included - a centred image above left-aligned text is what made
-   it read as dropped into the box rather than laid out in it.
+/* one panel, three rows down the middle of it: heading, certificate, and the
+   closing line with the Apply button beside it.
 
    Full wrap width, the same edges the stats row above it and every other
    section on the page sit on. It was briefly fit-content, on the theory that
    a panel hugging the height-capped certificate wastes no surface - true in
    isolation, but it made this the one band on the page narrower than its
    neighbours, and a panel that doesn't line up with the one above it reads
-   as more wrong than a little room beside the image does. */
+   as more wrong than a little room beside the image does.
+
+   Centred, where it used to sit on the panel's left edge. The certificate is
+   capped by HEIGHT (see .cert-img), so on any window that isn't tall it comes
+   out a few hundred px narrower than the panel it's in, and left-aligning the
+   rows piled every bit of that slack into one empty column down the right
+   side - the panel read as a two-column layout with nothing in the second
+   column, which is a worse thing to look at than an image that isn't flush
+   left. Centred, the same slack is margin either side. */
 .banner {
   width: 100%;
   border-radius: var(--radius);
@@ -907,6 +913,8 @@ body.edit-mode .reel-tile { cursor: grab; }
   background: var(--surface);
   display: flex;
   flex-direction: column;
+  align-items: center;
+  text-align: center;
   gap: 18px;
 }
 .banner-left { max-width: 680px; }
@@ -917,10 +925,12 @@ body.edit-mode .reel-tile { cursor: grab; }
 /* the closing line and its button on one row rather than stacked: it is how
    the sentence and its call to action read, and it hands the certificate the
    other 70-odd px. Wraps on a narrow window, where they genuinely don't fit
-   side by side. */
+   side by side, and justify-content keeps them centred under the image once
+   they're on two lines. */
 .banner-cta {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 16px;
   flex-wrap: wrap;
   /* .banner-left's 680px cap is for a paragraph on its own; this row is that
@@ -940,14 +950,13 @@ body.edit-mode .reel-tile { cursor: grab; }
    width:auto rather than 100% so the cap scales the image down whole (a
    replaced element honours both max-* proportionally) instead of letterboxing
    it inside a full-width box, which is the whole reason it can be this big.
-   align-self puts it on the same left edge as the heading and the closing
-   line; the panel is wider than the image on a short window, and the room
-   that leaves goes to the right of it rather than being split either side. */
+   No align-self, so it centres with the rest of the panel's rows - the height
+   cap makes it narrower than the panel on a short window and that leftover
+   wants to be split either side of it, not left in a heap on the right. */
 .cert-img {
   width: auto;
   max-width: 100%;
   max-height: calc(var(--fit-avail, 100vh) - 198px);
-  align-self: start;
   border-radius: 12px;
 }
 

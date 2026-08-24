@@ -2635,6 +2635,20 @@ function isClipRoot(el) {
 }
 
 /**
+ * Whether el is the root of a copy the ta made - a paste or a duplicate.
+ * @param el the element
+ * @return true if el is a copy's root
+ * @note The two are marked separately (data-clip-root by the clip build,
+ * data-dup-root by insertDuplicateClone()) but they answer the same question
+ * here: the whole element is something that was added, so it comes and goes
+ * as one piece.
+ */
+function isCopyRoot(el) {
+  return isClipRoot(el) ||
+    !!(el && el.hasAttribute && el.hasAttribute("data-dup-root"));
+}
+
+/**
  * Whether a CONTAINER holds a rank of its own, instead of only the leaves
  * inside it holding one.
  * @param el the element
@@ -2695,6 +2709,17 @@ function ranksAsBlock(el) {
  * than forced visible, so deleting a wrapper never resurrects it.
  */
 function setHiddenVisual(el, hide) {
+  /* a pasted or duplicated copy is one thing the ta added, not a wrapper the
+     page needs kept around, so it hides outright and takes what's inside it
+     with it. Undoing a paste of the nav links used to leave all six links in
+     the bar: the wrapper path below only makes the container invisible, then
+     stamps visibility:visible back onto every tracked child. No
+     detachFromFlow() either - the row a copy was pasted into should close
+     back up when the copy goes. */
+  if (isCopyRoot(el)) {
+    el.style.display = hide ? "none" : "";
+    return;
+  }
   if (hasTrackedDescendants(el)) {
     el.classList.toggle("el-deleted", hide);
     el.style.visibility = hide ? "hidden" : "";
@@ -13916,6 +13941,10 @@ function remapTrackedIds(root, suffix) {
  * original and nudged +24px so the copy doesn't land exactly on top of it.
  */
 function insertDuplicateClone(sourceEl, built) {
+  /* marks the copy's own root for isCopyRoot(), the same job data-clip-root
+     does for a paste. Stamped here rather than baked into the clone so a
+     reload's renderDuplicates() gets it too. */
+  if (built.rootEl) built.rootEl.setAttribute("data-dup-root", "1");
   if (built.wrap) {
     built.wrap.parentNode.insertBefore(built.clone, built.wrap.nextSibling);
     var base = getPos(built.rootEl);
@@ -13967,6 +13996,16 @@ function copyDuplicateOverrides(pairs, skipMaps) {
         snap[m].push(p.new);
       }
     });
+    /* the always-on-top group (the right-click "Promote to navbar", see
+       FIXED_SET) - without it a copy of a navbar element came out as a plain
+       element that just happened to be sitting in the bar. Live set as well
+       as the snapshot, since nothing re-reads fixed_elements before the next
+       load. LOCKED_SET is deliberately not carried over: a paste is selected
+       for dragging straight away, and a locked copy couldn't be moved. */
+    if (FIXED_SET[p.old]) {
+      FIXED_SET[p.new] = true;
+      snap.fixed_elements = Object.keys(FIXED_SET);
+    }
   });
   try { localStorage.setItem(snapshotKey(), JSON.stringify(snap)); } catch (e) {}
 }

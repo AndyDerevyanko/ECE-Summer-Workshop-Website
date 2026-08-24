@@ -9375,15 +9375,49 @@ function isBoxAreaEl(el) {
 }
 
 /**
+ * The node that actually sits in a box: an element, or the .free-wrap around
+ * it when one has been put there in place.
+ * @param el the element
+ * @return el, or the wrap standing in for it
+ * @note detachFromFlow() wraps where it finds an element, so resizing
+ * something already seated leaves the WRAP as the box's child and the element
+ * a level further down (`.box-flow > .free-wrap` in css/style.css is what
+ * keeps that laid out by the box). Anything asking "where does this sit in its
+ * box" has to ask about the wrap in that case, or it is looking for a node the
+ * box does not have.
+ */
+function seatNodeOf(el) {
+  var p = el && el.parentElement;
+  return p && p.classList && p.classList.contains("free-wrap") ? p : el;
+}
+
+/**
  * The box one element is SEATED IN, if any.
  * @param el any element
  * @return the box, or null - never el itself, even when el is a box
- * @note Walks from el's parent, so a box nested in another box reports the
- * outer one rather than itself.
+ * @note A box is only ever the element's own PARENT (through its .free-wrap,
+ * if it has one), never just some box-area ancestor. This used to ask
+ * .closest() for the nearest one, which answered for elements that are not in
+ * the box at all but merely inside something that is - the theme toggle's sun
+ * icon, which lives in the toggle button, which lives in the navbar's
+ * .nav-right box. Everything downstream of this assumes a direct child and
+ * none of it survived the mismatch: captureSeat() looked the grandchild up in
+ * box.children and got -1, openBoxGhost() THREW trying to put the drag spacer
+ * before a sibling that is not the box's child, and the drop seated the icon
+ * one level UP, out of the button it belongs to, with no way back. A ta who
+ * dragged the sun icon was left with it loose on the page and an empty pill
+ * where the theme toggle had been.
+ * @note An element like that now simply has no box, so dragging it takes the
+ * ordinary free-element path: detachFromFlow() wraps it where it stands and it
+ * moves INSIDE its button, which is the only place it means anything.
+ * @note recordBoxMembers() has always read box.children, so a direct child is
+ * what the saved seating map has always meant too - this makes the question
+ * and the answer agree.
  */
 function boxOf(el) {
-  var p = el && el.parentElement;
-  return p && p.closest ? p.closest("[data-box-area]") : null;
+  var node = el && seatNodeOf(el);
+  var p = node && node.parentElement;
+  return isBoxAreaEl(p) ? p : null;
 }
 
 /**
@@ -9536,6 +9570,32 @@ function seedSeatedLayerRank(el, box) {
 }
 
 /**
+ * Sends an element that has just been taken OUT of a box to the front of the
+ * page, the counterpart of seedSeatedLayerRank().
+ * @param el the element, already free
+ * @note An element keeps its rank while it is seated, and that rank is a place
+ * in a flat page-wide order seeded in DOCUMENT order - so a nav link sits at 13
+ * of 164 not because anyone put it there but because the navbar is the first
+ * thing in the markup. Inside its box that is invisible: the box paints as a
+ * unit and its contents only ever compete with each other. Pull one out onto
+ * the open page and it is suddenly being compared with all 164, and it lost to
+ * nearly every one of them - a ta dragged a link out of the navbar, dropped it
+ * over the hero, and watched it vanish behind the hero.
+ * @note The front, not merely above what it was dropped on: this is the element
+ * the ta is holding, and the only thing they can be sure of is that they want
+ * to see it where they let go of it.
+ * @note Only for a REMOVAL a ta actually asked for. The lift at the start of
+ * every box drag (startBoxDrag()) goes through unseatFromBox() too, and so does
+ * an undo (restoreSeat()); re-ranking there would send an element to the front
+ * of the page for nothing more than a reorder inside its own box, and would
+ * make undo a thing that changes the stack instead of restoring it.
+ */
+function seedUnseatedLayerRank(el) {
+  var id = elId(el);
+  if (id) moveLayerExtreme(id, true);
+}
+
+/**
  * Seats an element inside a box: the whole point of this section.
  * @param el the element to seat
  * @param box the box to seat it in
@@ -9680,8 +9740,17 @@ function freezeSeatedSize(el, w) {
 function unseatFromBox(el, left, top) {
   var box = boxOf(el);
   if (!box) return false;
+  /* read while el is still IN the box, because that is the only place its real
+     size exists. placeFreeElement() hangs it off <body>, and an element that
+     has left its container has left everything the container was passing down
+     to it: the navbar sets white-space: nowrap, so the instant "Apply Now" was
+     lifted out it stopped being one line and shrank to the width of its longest
+     word, and it was THAT - 44px wide and two lines tall - that got frozen on.
+     Dropping it back in the navbar restored nowrap and put the words back on
+     one line, but the frozen 44px stayed, so the link laid out one 77px line
+     inside a 44px box and printed straight over the link beside it. */
+  var r = el.getBoundingClientRect();
   if (left === undefined || top === undefined) {
-    var r = el.getBoundingClientRect();
     left = Math.round(r.left + window.scrollX);
     top = Math.round(r.top + window.scrollY);
   }
@@ -9690,7 +9759,7 @@ function unseatFromBox(el, left, top) {
      measure a free element measure the WRAP (captureSeat(), the snap guides).
      Left at 0x0 it reports a lifted element as a point at the top-left corner
      of where it really is. */
-  freezeFreeElement(el);
+  freezeFreeElement(el, r.width, r.height);
   recordBoxMembers();
   applyBoxFlow();
   return true;
@@ -9926,7 +9995,10 @@ function captureSeat(el) {
   if (box) {
     return {
       box: elId(box),
-      index: [].slice.call(box.children).indexOf(el),
+      /* the wrap when there is one, since that is the child the box has;
+         indexing el itself there answered -1, which restoreSeat() reads as
+         "no such gap" and appends to the end instead */
+      index: [].slice.call(box.children).indexOf(seatNodeOf(el)),
       left: 0, top: 0
     };
   }
@@ -10006,13 +10078,10 @@ function finishBoxDrop(el, before) {
        drag start unseated it, see startBoxDrag()), so the only thing left is
        the history entry */
     if (before.box) {
-      /* nothing to repaint: the drop changed which container el belongs to,
-         and with the navbar's stamp unconditional (see THE FIXED BAR BEATS
-         EVERYTHING) that no longer changes which z band it is in. It used to
-         be load-bearing twice over - once for the band, once because a full
-         pass sent everything seated in a box that outranked it behind that
-         box's surface and out of sight - and both are settled at their source
-         now, the second by seedSeatedLayerRank(). */
+      /* it has just stopped being part of a container and started being a
+         thing on the page, which is a change of who it is stacked against -
+         see seedUnseatedLayerRank() */
+      seedUnseatedLayerRank(el);
       EDIT_UNDO.push({ type: "seat", id: elId(el), before: before, after: captureSeat(el) });
       EDIT_REDO.length = 0;
       return true;
@@ -11855,9 +11924,16 @@ function placeFreeElement(el, x, y) {
  * finishing step detachFromFlow() does on an existing element's first resize,
  * so a later double-click has a sane "as first created" size to reset to.
  * @param el the element, already filled with its real content
+ * @param w width in px, if it has to be one measured earlier
+ * @param h height in px, likewise
+ * @note The size is worth measuring beforehand whenever el has just been moved
+ * to a new parent, because a rect read afterwards is not el's size - it is the
+ * size el collapsed to once it lost the styles its old parent was giving it.
+ * See unseatFromBox(), which is where that bites.
  */
-function freezeFreeElement(el) {
-  var r = el.getBoundingClientRect();
+function freezeFreeElement(el, w, h) {
+  var r = (w === undefined || h === undefined) ? el.getBoundingClientRect()
+                                               : { width: w, height: h };
   el.dataset.natW = r.width;
   el.dataset.natH = r.height;
   el.style.width = r.width + "px";
@@ -15541,6 +15617,9 @@ function renderCtxMenuRoot() {
       if (!el) return hideCtxMenu();
       var before = captureSeat(el);
       if (unseatFromBox(el)) {
+        /* same as dragging it out and dropping it, so it lands in front of the
+           page the same way - see seedUnseatedLayerRank() */
+        seedUnseatedLayerRank(el);
         EDIT_UNDO.push({ type: "seat", id: elId(el), before: before, after: captureSeat(el) });
         EDIT_REDO.length = 0;
         positionRing();

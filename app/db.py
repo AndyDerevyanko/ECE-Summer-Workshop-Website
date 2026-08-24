@@ -131,7 +131,14 @@ def _learn_reel_overlay():
             "id": "learn.reel.tile.%d" % (i - 1),
             "children": [
                 {"id": icon_id, "kind": "icon", "left": 20, "top": 22, "icon": _LEARN_REEL_ICONS[i - 1]},
-                {"id": title_id, "kind": "text", "left": 58, "top": 24, "w": 240, "h": 46},
+                # 58 = the body's own 20px inset, plus the 30px icon and the
+                # 8px gap after it. 242 is what's left of the 320px tile at
+                # that inset, so the title's right edge lands on 300 with the
+                # body's; it read 240 and stopped 2px short, which is invisible
+                # on the live site (the text is left-aligned and never reaches
+                # the edge) and plainly visible in the editor, where both boxes
+                # draw a dashed outline and the two fail to line up.
+                {"id": title_id, "kind": "text", "left": 58, "top": 24, "w": 242, "h": 46},
                 {"id": body_id, "kind": "text", "left": 20, "top": 80, "w": 280, "h": 130},
             ],
         })
@@ -1206,6 +1213,7 @@ def init_db():
     _migrate_drop_variable_page_scope(conn)
     _migrate_apply_tooltip(conn)
     _migrate_navbar_responsive_bands(conn)
+    _migrate_learn_reel_title_width(conn)
     conn.close()
 
 
@@ -1516,6 +1524,57 @@ def _migrate_learn_reel(conn):
         data.setdefault("text_styles", {}).update(_LEARN_REEL_TEXT_STYLES)
         data.setdefault("colors", {}).update(_LEARN_REEL_COLORS)
         return data, True
+
+    row = conn.execute("SELECT data FROM content WHERE id = 1").fetchone()
+    if row:
+        data, changed = patch(json.loads(row["data"]))
+        if changed:
+            conn.execute("UPDATE content SET data = ? WHERE id = 1", (json.dumps(data),))
+
+    for prow in conn.execute("SELECT id, data FROM profiles").fetchall():
+        data, changed = patch(json.loads(prow["data"]))
+        if changed:
+            conn.execute("UPDATE profiles SET data = ? WHERE id = ?", (json.dumps(data), prow["id"]))
+
+    conn.commit()
+
+
+def _migrate_learn_reel_title_width(conn):
+    """one-time patch (same meta-flag trick as _migrate_learn_reel()) widening
+    the "What You'll Learn" cards' title box by the 2px it was short.
+
+    A tile is 320 wide and everything in it is inset 20: the icon and the body
+    both start at 20, and the body's 280 takes it to 300. The title starts at
+    58 - past the 30px icon and the 8px gap - so it needs 242 to finish on 300
+    too, and it shipped with 240. Nobody could see it on the live site, where
+    the title is left-aligned text that never reaches its right edge; in the
+    editor every tracked element draws a dashed outline, so the title's box and
+    the body's box sit one above the other visibly failing to line up.
+
+    Only touches a box still exactly 240 wide, which is the shipped figure and
+    nothing a ta is likely to have landed on by hand - one they have resized
+    themselves is theirs and is left alone.
+    @param conn an open db connection
+    """
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO meta (key, value) VALUES ('learn_reel_title_width', '1')"
+    )
+    conn.commit()
+    if cur.rowcount == 0:
+        return
+
+    def patch(data):
+        changed = False
+        for ce in data.get("custom_elements", []):
+            if ce.get("id") != "learn.reel":
+                continue
+            for tile in ce.get("tiles", []):
+                for child in tile.get("children", []):
+                    cid = child.get("id") or ""
+                    if cid.startswith("learn.card") and cid.endswith(".title")                             and child.get("w") == 240:
+                        child["w"] = 242
+                        changed = True
+        return data, changed
 
     row = conn.execute("SELECT data FROM content WHERE id = 1").fetchone()
     if row:

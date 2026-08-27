@@ -1791,6 +1791,23 @@ function isThemeToggleLabel(el) {
 }
 
 /**
+ * True for a theme toggle's own ".tic-icon" span, the other half of the same
+ * case as isThemeToggleLabel() above.
+ * @param el the element
+ * @return true if el is a theme toggle's icon
+ * @note It's tracked so its size and colour can be edited on their own, which
+ * is a different thing from being independent of the button: left out of
+ * isGluedChild() it was counter-translated to stay put whenever the button
+ * moved, so dragging a toggle out of the navbar slid the button away and left
+ * its sun sitting in the bar. Its own move offset still applies on top, same
+ * as the label's.
+ */
+function isThemeToggleIcon(el) {
+  return !!(el && el.classList && el.classList.contains("tic-icon") &&
+    isThemeToggleEl(el.parentElement));
+}
+
+/**
  * True for a light/dark toggle button itself: the nav's own #themeBtn, or a
  * placed "theme" element - both tagged data-theme-toggle.
  * @param el the element
@@ -1845,7 +1862,7 @@ function isLoginOwnText(el) {
  * other tracked descendant follows: they move and reflow as one piece.
  */
 function isGluedChild(el) {
-  return isThemeToggleLabel(el) || isLoginOwnText(el);
+  return isThemeToggleLabel(el) || isThemeToggleIcon(el) || isLoginOwnText(el);
 }
 
 /**
@@ -3596,6 +3613,15 @@ function byLayerRank(rank) {
  * inside it: "send this card to the back" can only honestly mean "send
  * everything painted in this card to the back", together and in the order
  * they're in. That's also what a ta means by it - a card is its contents.
+ * @note A theme toggle and a login element count as leaves here
+ * (hasTrackedDescendants() calls them that on purpose) and still have pieces
+ * holding ranks of their own, so those come along too, with the leaf's own id
+ * under them. Dragging a toggle out of the navbar sends it to the
+ * front of the page (seedUnseatedLayerRank()), and with its icon and label
+ * left behind at their old ranks the button outranked its own two pieces,
+ * which the next stacking pass reads as a ta having deliberately sent them
+ * behind it (see surfaceRankedOver()) - so the button arrived on the page
+ * empty, with both pieces painted under its own background.
  * @note Plus the container's OWN id when it holds a rank (see ranksAsBlock()),
  * because that id is what moves the panel the contents are sitting on. Left
  * out, the menu moved everything in a dragged card except the card, which is
@@ -3609,13 +3635,14 @@ function byLayerRank(rank) {
 function layerSubtreeIds(el) {
   if (!el) return [];
   var own = elId(el);
-  if (!hasTrackedDescendants(el)) return own ? [own] : [];
+  var leaf = !hasTrackedDescendants(el);
   var inside = layerMembers().filter(function (m) {
-    return el.contains(m.el) && !hasTrackedDescendants(m.el);
+    return m.el !== el && el.contains(m.el) && !hasTrackedDescendants(m.el);
   });
+  if (leaf && !inside.length) return own ? [own] : [];
   inside.sort(byLayerRank(layerRanks()));
   var ids = [], seen = {};
-  if (own && ranksAsBlock(el)) { seen[own] = true; ids.push(own); }
+  if (own && (leaf || ranksAsBlock(el))) { seen[own] = true; ids.push(own); }
   inside.forEach(function (m) { if (!seen[m.id]) { seen[m.id] = true; ids.push(m.id); } });
   return ids;
 }

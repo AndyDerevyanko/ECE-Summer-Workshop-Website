@@ -816,8 +816,8 @@ body.edit-mode .reel-tile { cursor: grab; }
 /* the clip row is the single biggest item in #learn, so it's what gives for
    that section to fit one screen: it takes whatever --fit-avail (see
    .section-fit) has left after everything above it, up to its natural 460px.
-   384px is the rest of the section's fixed flow height - heading block 82
-   (48 + its 34 margin), reel anchor 260, this row's own 34px margin-top -
+   410px is the rest of the section's fixed flow height - heading block 82
+   (48 + its 34 margin), reel anchor 286, this row's own 34px margin-top -
    plus 8px of slack, so sub-pixel rounding can't tip a section that fits
    exactly into one that scrolls by a hair. Spelling the budget out beats a
    guessed vh fraction: one number to fix if something above it changes
@@ -828,7 +828,7 @@ body.edit-mode .reel-tile { cursor: grab; }
    rather than letterboxed. The var() fallback keeps the row sane if it's ever
    used outside a .section-fit, where the property doesn't exist. */
 .vid-row .media.video {
-  height: min(460px, calc(var(--fit-avail, 100vh) - 384px));
+  height: min(460px, calc(var(--fit-avail, 100vh) - 410px));
 }
 .vid-row .media.video:first-child { margin: 0; justify-self: start; }
 .vid-row .media.video:last-child  { margin: 0; justify-self: end; }

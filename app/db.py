@@ -138,8 +138,16 @@ def _learn_reel_overlay():
                 # on the live site (the text is left-aligned and never reaches
                 # the edge) and plainly visible in the editor, where both boxes
                 # draw a dashed outline and the two fail to line up.
-                {"id": title_id, "kind": "text", "left": 58, "top": 24, "w": 242, "h": 46},
-                {"id": body_id, "kind": "text", "left": 20, "top": 80, "w": 280, "h": 130},
+                # 56 holds the two lines the longest title runs to (card 2's
+                # "Transistors, Diodes, Capacitors & Inductors"); it shipped
+                # at 46, one line's worth, so that title hung 8px out of its
+                # own box and stopped 2px short of the body underneath it.
+                {"id": title_id, "kind": "text", "left": 58, "top": 24, "w": 242, "h": 56},
+                # and 156 holds the six lines card 1's body runs to. At the
+                # shipped 130 (five lines) that card's last line printed 5px
+                # PAST the tile's bottom border - the text ran into the edge
+                # of the card, which is the one thing the inset is for.
+                {"id": body_id, "kind": "text", "left": 20, "top": 80, "w": 280, "h": 156},
             ],
         })
         text[title_id] = card["title"]
@@ -154,7 +162,11 @@ def _learn_reel_overlay():
         "id": "learn.reel", "kind": "reel", "orientation": "horizontal",
         "page": "index",
         "anchor": "#learnReelAnchor", "left": 80, "top": 1888,
-        "tileW": 320, "tileH": 230,
+        # 256 = the body's 80 + 156, plus the same 20px inset everything else
+        # in the tile sits on. The cards are only as tall as their longest
+        # one has to be; #learnReelAnchor's min-height in the template and
+        # .vid-row's height budget in css/style.css both count this in.
+        "tileW": 320, "tileH": 256,
         # explicit panel size, unlike a freshly-placed reel (which freezes
         # at its own just-rendered pre-clone size, see addCustomElement()):
         # this entry is built once at page load already past the point
@@ -163,7 +175,7 @@ def _learn_reel_overlay():
         # without an explicit width here the panel would size itself to fit
         # all 24 cloned tiles unclipped instead of acting as a proper
         # scrolling/drifting viewport - see initReel().
-        "w": 1160, "h": 230,
+        "w": 1160, "h": 256,
         "tiles": tiles,
     }
     return entry, text, font_sizes, text_styles, colors
@@ -1214,6 +1226,7 @@ def init_db():
     _migrate_apply_tooltip(conn)
     _migrate_navbar_responsive_bands(conn)
     _migrate_learn_reel_title_width(conn)
+    _migrate_learn_reel_card_height(conn)
     conn.close()
 
 
@@ -1574,6 +1587,65 @@ def _migrate_learn_reel_title_width(conn):
                     if cid.startswith("learn.card") and cid.endswith(".title")                             and child.get("w") == 240:
                         child["w"] = 242
                         changed = True
+        return data, changed
+
+    row = conn.execute("SELECT data FROM content WHERE id = 1").fetchone()
+    if row:
+        data, changed = patch(json.loads(row["data"]))
+        if changed:
+            conn.execute("UPDATE content SET data = ? WHERE id = 1", (json.dumps(data),))
+
+    for prow in conn.execute("SELECT id, data FROM profiles").fetchall():
+        data, changed = patch(json.loads(prow["data"]))
+        if changed:
+            conn.execute("UPDATE profiles SET data = ? WHERE id = ?", (json.dumps(data), prow["id"]))
+
+    conn.commit()
+
+
+def _migrate_learn_reel_card_height(conn):
+    """one-time patch (same meta-flag trick as _migrate_learn_reel()) making the
+    "What You'll Learn" cards tall enough to hold the text in them.
+
+    The tiles shipped 230 tall with a 130px body box, which is five lines, and
+    card 1's body runs to six: its last line printed 5px past the tile's own
+    bottom border, so the text ran straight into the edge of the card. Card 2's
+    title is two lines in a box sized for one and hung 8px out of it, leaving
+    2px between it and the body. The seed builds them at 256/156/56 now (see
+    _learn_reel_overlay()), and an already-saved blob needs the same figures
+    patched in or it keeps rendering the old cramped ones.
+
+    Only touches tiles still exactly 230 tall - the shipped figure - and the
+    same for each box inside them. A reel a ta has resized themselves is
+    theirs, so it is left alone whole rather than half-patched.
+    @param conn an open db connection
+    """
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO meta (key, value) VALUES ('learn_reel_card_height', '1')"
+    )
+    conn.commit()
+    if cur.rowcount == 0:
+        return
+
+    def patch(data):
+        changed = False
+        for ce in data.get("custom_elements", []):
+            if ce.get("id") != "learn.reel" or ce.get("tileH") != 230:
+                continue
+            ce["tileH"] = 256
+            # the panel's own height is the strip's, so it follows the tiles
+            if ce.get("h") == 230:
+                ce["h"] = 256
+            changed = True
+            for tile in ce.get("tiles", []):
+                for child in tile.get("children", []):
+                    cid = child.get("id") or ""
+                    if not cid.startswith("learn.card"):
+                        continue
+                    if cid.endswith(".title") and child.get("h") == 46:
+                        child["h"] = 56
+                    elif cid.endswith(".body") and child.get("h") == 130:
+                        child["h"] = 156
         return data, changed
 
     row = conn.execute("SELECT data FROM content WHERE id = 1").fetchone()

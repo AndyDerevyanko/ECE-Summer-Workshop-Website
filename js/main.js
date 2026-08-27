@@ -748,7 +748,9 @@ function isTileBoxEl(el) {
    the two top-level areas grow downwards to fit their tiles, while a day
    tile's attachment sub-area is pinned on both axes, so one day with eight
    files scrolls rather than stretching the card. "lock" = keep the
-   container's size and squeeze the tiles; "expand" = size it to its content. */
+   container's size and let whatever doesn't fit scroll; "expand" = size it
+   to its content. A locked axis never squeezes the tiles themselves - see
+   .tile-flow's grid-auto-rows in css/style.css for why that took saying. */
 var AREA_FLOW_DEFAULTS = {
   "seed.dashboard.extras.area": { x: "lock", y: "expand" },
   "seed.dashboard.days.area": { x: "lock", y: "expand" },

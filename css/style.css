@@ -1760,6 +1760,17 @@ body.edit-mode .login-field-ph { pointer-events: auto; }
   gap: var(--tile-gap, 10px);
   align-content: start;
   grid-template-columns: repeat(auto-fill, minmax(min(var(--tile-w, 100%), 100%), 1fr));
+  /* rows keep their tiles' real height instead of being squeezed into the
+     container. Default `auto` rows are `minmax(auto, max-content)`, and a
+     locked axis gives the container a definite height, so the maximize step
+     only grows a row as far as the free space in it - a 68px tall days area
+     squashed its 220px cards down to 74 and .day-card's overflow:hidden ate
+     the rest, leaving 6px of scroll on a container that looked broken rather
+     than full. max-content is the base size outright, so it isn't up for
+     negotiation and the overflow goes where a locked axis promises it goes:
+     into the scrollbar. No effect on an expanding axis, where the container
+     is sized by these same rows anyway. */
+  grid-auto-rows: max-content;
 }
 .tile-flow.tile-w-set {
   grid-template-columns: repeat(auto-fill, min(var(--tile-w, 100%), 100%));

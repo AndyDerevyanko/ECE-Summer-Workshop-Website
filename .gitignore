@@ -1,4 +1,7 @@
+# agent notes. the per-folder and per-file ones are local scratch, not docs
+# anyone else has to keep in sync
 CLAUDE.md
+CLAUDE.*.md
 AGENTS.md
 
 # backend

@@ -260,11 +260,11 @@ var DEFAULT_DAYS_OPEN_BLURB_HTML = buildDaysChipHtml("day-blurb", "Description")
    it is per-day, it's the shared template's own copy - which is why it's
    editable as one field for every locked tile at once. */
 var DEFAULT_DAYS_LOCKED_BLURB_HTML = "This module will be available soon";
-/* the open tile's attachment sub-area's own empty-state line, the third copy
 /* the open tile's attachment sub-area's empty-state line, third copy of the
    same placeholder. It exists because the sub-area always renders now, and a
    container with nothing in it and no line to say so is a box a ta can't tell
    apart from empty space. */
+var DEFAULT_DAYS_ATTACH_EMPTY_HTML = "<strong>No attachments yet.</strong>";
 
 /**
  * Builds one LOCKED day tile's markup.
